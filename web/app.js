@@ -13,7 +13,7 @@ import {
   todayKst,
   validate as validateCond,
 } from "./conditions.js";
-import { buysSection, chartSection, csvButton } from "./charts.js";
+import { buysSection, chartSection, clearCharts, csvButton } from "./charts.js";
 import { h, icon, swatch } from "./dom.js";
 import { fx, money, pct, period, price, qty, signedMoney } from "./format.js";
 
@@ -465,6 +465,7 @@ function signClass(value) {
 }
 
 function renderFailure(message, retry = true) {
+  clearCharts();
   $("empty").hidden = true;
   const output = $("output");
   output.hidden = false;

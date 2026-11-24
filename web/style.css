@@ -189,7 +189,6 @@ a { color: var(--c1); }
 .legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
 .legend li { display: inline-flex; align-items: center; gap: 6px; }
 .legend .lg-label { color: var(--muted); }
-.ref-swatch { display: inline-block; width: 22px; height: 0; border-top: 2px solid var(--ref); }
 .tbl tr.gap td { text-align: center; color: var(--muted); font-size: 13px; background: var(--sunken); }
 .link-btn { border: 0; background: none; color: var(--c1); font-weight: 600; font-size: 14px; cursor: pointer; padding: 6px 10px; border-radius: 8px; }
 .link-btn:hover { background: var(--sunken); }

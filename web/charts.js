@@ -5,6 +5,7 @@ import {
   buysCsv,
   csvFileName,
   dashOf,
+  dateTick,
   investedLines,
   lastValue,
   logSafe,
@@ -112,7 +113,7 @@ function tabModel(data, slotOf) {
       ],
       legend: [
         { slot: slotOf(symbol), label: `${symbol} 주가`, value: price(lastValue(series.price), cur) },
-        { ref: true, label: "평단가", value: price(lastValue(series.avg_cost), cur) },
+        { ref: true, slot: 0, label: "평단가", value: price(lastValue(series.avg_cost), cur) },
       ],
       hint: "주가가 평단가 위인 구간(초록)은 이익, 아래(빨강)는 손실입니다.",
     };
@@ -130,7 +131,12 @@ function tabModel(data, slotOf) {
     ],
     legend: [
       ...symbols.map((s) => ({ slot: slotOf(s), label: s, value: money(lastValue(chart.series[s].value), invest) })),
-      ...invested.map((line) => ({ ref: true, label: line.symbol ? `투자금 ${line.symbol}` : "투자금", value: money(lastValue(line.values), invest) })),
+      ...invested.map((line) => ({
+        ref: true,
+        slot: line.symbol ? slotOf(line.symbol) : 0, // 종목마다 나뉘면 회색 선을 선 모양으로 가른다
+        label: line.symbol ? `투자금 ${line.symbol}` : "투자금",
+        value: money(lastValue(line.values), invest),
+      })),
     ],
     log: view.log,
   };
@@ -143,15 +149,37 @@ function legendItems(items) {
     h(
       "li",
       {},
-      item.ref ? h("span", { class: "ref-swatch", "aria-hidden": "true" }) : swatch(item.slot, 22),
+      swatch(item.slot, 22, item.ref ? { color: "var(--ref)" } : {}),
       h("span", { class: "lg-label", text: item.label }),
       h("strong", { text: item.value }),
     ),
   );
 }
 
+const MISSING = "그래프 도구(Chart.js)를 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요. 위의 숫자와 아래 매수 내역은 그대로 볼 수 있습니다.";
+
+/** 결과를 지울 때(전체 실패 등) 그래프를 치운다. */
+export function clearCharts() {
+  current?.chart?.destroy();
+  current = null;
+}
+
+/**
+ * Chart.js가 아직 없으면 안내를 두고 기다린다. index.html의 script는 async라
+ * cdnjs가 늦거나 막혀도 화면은 먼저 뜬다. 실패하면 onerror가 data-failed를 단다.
+ */
+function waitForChartJs(wrap) {
+  const script = document.getElementById("chartjs");
+  const failed = !script || script.dataset.failed;
+  wrap.replaceChildren(h("p", { class: "chart-missing", text: failed ? MISSING : "그래프 도구를 불러오는 중입니다…" }));
+  if (!failed) {
+    script.addEventListener("load", draw, { once: true });
+    script.addEventListener("error", draw, { once: true });
+  }
+}
+
 function draw() {
-  if (!current) return;
+  if (!current?.wrap.isConnected) return; // 결과가 바뀌었거나 지워졌다
   current.chart?.destroy();
   current.chart = null;
   const { data, slotOf, wrap, legend, hint } = current;
@@ -161,20 +189,26 @@ function draw() {
   hint.hidden = !model.hint;
   const ChartJs = globalThis.Chart;
   if (!ChartJs) {
-    wrap.replaceChildren(
-      h("p", { class: "chart-missing", text: "그래프 도구(Chart.js)를 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요. 위의 숫자와 아래 매수 내역은 그대로 볼 수 있습니다." }),
-    );
+    waitForChartJs(wrap);
     return;
   }
-  const canvas = h("canvas", {
-    role: "img",
-    "aria-label": `${TABS.find((t) => t.key === view.tab).label} 그래프. ${model.legend.map((i) => `${i.label} 마지막 ${i.value}`).join(", ")}`,
-  });
+  try {
+    current.chart = newChart(ChartJs, wrap, data, model);
+  } catch (error) {
+    console.error(error);
+    wrap.replaceChildren(h("p", { class: "chart-missing", text: "그래프를 그리지 못했습니다. 새로고침한 뒤 다시 계산해 주세요." }));
+  }
+}
+
+function newChart(ChartJs, wrap, data, model) {
+  const values = model.legend.map((i) => `${i.label} 마지막 ${i.value}`).join(", ");
+  const canvas = h("canvas", { role: "img", "aria-label": `${TABS.find((t) => t.key === view.tab).label} 그래프. ${values}` });
   wrap.replaceChildren(canvas);
   const axis = cssVar("--axis");
   const grid = cssVar("--grid");
   ChartJs.defaults.font.family = getComputedStyle(document.body).fontFamily;
-  current.chart = new ChartJs(canvas, {
+  const tickText = dateTick(data.chart.dates);
+  return new ChartJs(canvas, {
     type: "line",
     data: { labels: data.chart.dates, datasets: model.datasets },
     plugins: [crosshair],
@@ -193,8 +227,10 @@ function draw() {
             maxRotation: 0,
             autoSkip: true,
             maxTicksLimit: 8,
-            callback(value) {
-              return String(this.getLabelForValue(value)).slice(0, 7);
+            callback(value, index, ticks) {
+              const text = tickText(String(this.getLabelForValue(value)));
+              const before = index > 0 ? tickText(String(this.getLabelForValue(ticks[index - 1].value))) : null;
+              return text === before ? "" : text; // 같은 달이 두 번 찍히지 않게
             },
           },
         },
@@ -227,6 +263,14 @@ function draw() {
   });
 }
 
+/** 다시 그려도 누르던 버튼에 포커스를 둔다 (data-focus 이름으로 다시 찾는다). */
+function keepFocus(container, render) {
+  const active = document.activeElement;
+  const key = container.contains(active) ? active.dataset.focus : undefined;
+  render();
+  if (key) container.querySelector(`[data-focus="${CSS.escape(key)}"]`)?.focus();
+}
+
 function segButtons(items, isOn, onPick, label) {
   const group = h("div", { class: "seg inline-seg", role: "group", "aria-label": label });
   for (const item of items) {
@@ -234,7 +278,13 @@ function segButtons(items, isOn, onPick, label) {
     group.append(
       h(
         "button",
-        { type: "button", class: on ? "on" : null, "aria-pressed": String(on), onclick: () => onPick(item) },
+        {
+          type: "button",
+          class: on ? "on" : null,
+          "aria-pressed": String(on),
+          "data-focus": `${label}:${String(item.key)}`,
+          onclick: () => onPick(item),
+        },
         item.slot === undefined ? null : swatch(item.slot, 16),
         item.label,
       ),
@@ -246,7 +296,7 @@ function segButtons(items, isOn, onPick, label) {
 function chartTools(data, slotOf) {
   const tools = h("div", { class: "chart-tools" });
   const rebuild = () => {
-    tools.replaceChildren(...chartToolsChildren(data, slotOf, rebuild));
+    keepFocus(tools, () => tools.replaceChildren(...chartToolsChildren(data, slotOf, rebuild)));
     draw();
   };
   tools.replaceChildren(...chartToolsChildren(data, slotOf, rebuild));
@@ -293,7 +343,7 @@ function chartToolsChildren(data, slotOf, rebuild) {
 
 /** 그래프 상자. 요소를 문서에 붙인 뒤(같은 작업 안) 그린다. */
 export function chartSection(data, slotOf) {
-  current?.chart?.destroy();
+  clearCharts();
   const wrap = h("div", { class: "chart-wrap" });
   const legend = h("ul", { class: "legend", "aria-label": "범례와 마지막 값" });
   const hint = h("p", { class: "hint", hidden: true });
@@ -386,47 +436,48 @@ function buysTable(data, result) {
 export function buysSection(data, slotOf) {
   view.expanded = false;
   const section = h("section", { class: "box", "aria-labelledby": "buys-h" });
+  const toggle = (result) =>
+    h("button", {
+      type: "button",
+      class: "link-btn",
+      "aria-expanded": String(view.expanded),
+      "data-focus": "buys-toggle",
+      text: view.expanded ? "접기" : `전체 보기 (${result.buys.length.toLocaleString("ko-KR")}회)`,
+      onclick: () => {
+        view.expanded = !view.expanded;
+        keepFocus(section, render);
+      },
+    });
   const render = () => {
     const symbols = data.results.map((r) => r.symbol);
     if (!symbols.includes(view.buySymbol)) view.buySymbol = symbols[0];
     const result = data.results.find((r) => r.symbol === view.buySymbol);
-    const more = result.buys.length > 8;
+    const more = previewRows(result.buys).hidden > 0;
+    const picker =
+      data.results.length > 1
+        ? segButtons(
+            symbols.map((s) => ({ key: s, label: s, slot: slotOf(s) })),
+            (o) => o.key === view.buySymbol,
+            (o) => {
+              view.buySymbol = o.key;
+              view.expanded = false;
+              keepFocus(section, render);
+            },
+            "매수 내역 종목",
+          )
+        : null;
+    // 펼치기·접기는 머리에 둬서 2,500줄을 펼쳐도 버튼과 포커스가 제자리에 있다
     section.replaceChildren(
       h(
         "div",
         { class: "box-head" },
         h("h3", { id: "buys-h", text: "매수 내역" }),
-        data.results.length > 1
-          ? segButtons(
-              symbols.map((s) => ({ key: s, label: s, slot: slotOf(s) })),
-              (o) => o.key === view.buySymbol,
-              (o) => {
-                view.buySymbol = o.key;
-                view.expanded = false;
-                render();
-              },
-              "매수 내역 종목",
-            )
-          : null,
+        picker,
+        more ? toggle(result) : null,
         csvButton(data, "CSV 내려받기"),
       ),
       h("div", { class: "scroll" }, buysTable(data, result)),
-      more
-        ? h(
-            "div",
-            { class: "box-foot" },
-            h("button", {
-              type: "button",
-              class: "link-btn",
-              "aria-expanded": String(view.expanded),
-              text: view.expanded ? "접기" : `전체 보기 (${result.buys.length.toLocaleString("ko-KR")}회)`,
-              onclick: () => {
-                view.expanded = !view.expanded;
-                render();
-              },
-            }),
-          )
-        : null,
+      more && !view.expanded ? h("div", { class: "box-foot" }, toggle(result)) : null,
     );
   };
   render();

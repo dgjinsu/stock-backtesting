@@ -1,15 +1,26 @@
 // 그래프 데이터, 매수 내역 미리보기, CSV를 만드는 순수 함수 (F-07, F-08). DOM 없음.
 
-import { DASHES } from "./dom.js";
+/** 종목 선 모양. 색(--c1~--c8)과 함께 종목에 붙는다 (상세 설계 5절). */
+export const DASHES = ["", "7 4", "2 3", "10 3 2 3", "12 4", "4 4", "1 4", "8 3 1 3"];
 
 const HEAD_ROWS = 6;
 const TAIL_ROWS = 2;
-const BOM = "﻿";
+const DAY_MS = 86_400_000;
+const BOM = "\uFEFF"; // 엑셀이 UTF-8로 읽게 하는 표시
 
 /** 시안의 선 모양("7 4")을 Chart.js borderDash([7, 4])로. 0번은 실선. */
 export function dashOf(slot) {
   const text = DASHES[slot] ?? "";
   return text ? text.split(" ").map(Number) : [];
+}
+
+/**
+ * x축 눈금 글자. 기간이 1년 안쪽이면 날짜 전부(같은 달이 여러 번 찍히지 않게), 길면 연-월.
+ * dates는 그래프 날짜축 (오름차순).
+ */
+export function dateTick(dates) {
+  const span = dates.length ? (Date.parse(dates.at(-1)) - Date.parse(dates[0])) / DAY_MS : 0;
+  return span > 370 ? (iso) => iso.slice(0, 7) : (iso) => iso;
 }
 
 /** 마지막 null 아닌 값. 범례에 마지막 값을 적을 때 쓴다. */
@@ -73,11 +84,13 @@ function csvCell(value) {
  * 숫자는 API가 보낸 값 그대로 (반올림은 서버가 계산 규칙 자리수로 이미 했다).
  */
 export function buysCsv(results, investCurrency) {
-  // "회차"는 BUY_COLUMNS에 없다 (화면에서는 줄 번호로 보인다)
-  const lines = [["종목", "회차", ...BUY_COLUMNS.map((c) => c.csv(investCurrency))].join(",")];
+  // "통화"(종목 통화: 종가·평단가의 단위)와 "회차"는 BUY_COLUMNS에 없다 (화면은 줄 번호로 보인다)
+  const head = ["종목", "통화", "회차", ...BUY_COLUMNS.map((c) => c.csv(investCurrency))];
+  const lines = [head.join(",")];
   for (const result of results) {
     result.buys.forEach((row, i) => {
-      lines.push([result.symbol, i + 1, ...BUY_COLUMNS.map((c) => row[c.key])].map(csvCell).join(","));
+      const cells = [result.symbol, result.currency, i + 1, ...BUY_COLUMNS.map((c) => row[c.key])];
+      lines.push(cells.map(csvCell).join(","));
     });
   }
   return `${BOM}${lines.join("\r\n")}\r\n`;

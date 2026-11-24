@@ -4,9 +4,11 @@ import { test } from "node:test";
 
 import {
   BUY_COLUMNS,
+  DASHES,
   buysCsv,
   csvFileName,
   dashOf,
+  dateTick,
   investedLines,
   lastValue,
   logSafe,
@@ -14,7 +16,6 @@ import {
   sampledNote,
 } from "../../web/chartdata.js";
 
-const BOM = "﻿";
 
 function buy(n, extra = {}) {
   return {
@@ -34,6 +35,17 @@ const RESULTS = [
   { symbol: "QQQ", name: "Invesco QQQ Trust", currency: "USD", buys: [buy(1), buy(2)] },
   { symbol: "005930.KS", name: "Samsung, \"Electronics\"", currency: "KRW", buys: [buy(1, { fx: 1, price: 76_325 })] },
 ];
+
+test("DASHES: 종목 8개의 선 모양, 첫째는 실선", () => {
+  assert.equal(DASHES.length, 8);
+  assert.equal(DASHES[0], "");
+});
+
+test("dateTick: 1년 안쪽이면 날짜 전부, 길면 연-월", () => {
+  assert.equal(dateTick(["2026-03-02", "2026-11-24"])("2026-05-04"), "2026-05-04");
+  assert.equal(dateTick(["2021-11-26", "2026-11-24"])("2024-05-17"), "2024-05");
+  assert.equal(dateTick([])("2024-05-17"), "2024-05-17");
+});
 
 test("dashOf: 시안의 선 모양 문자열을 Chart.js borderDash로", () => {
   assert.deepEqual(dashOf(0), []);
@@ -86,15 +98,18 @@ test("previewRows: 8회 이하는 모두 보인다", () => {
   assert.equal(view.hidden, 0);
 });
 
-test("buysCsv: BOM으로 시작하고 모든 종목의 매수를 한 줄씩", () => {
-  const csv = buysCsv(RESULTS, "KRW");
-  assert.ok(csv.startsWith(BOM));
-  const lines = csv.slice(1).trimEnd().split("\r\n");
+test("buysCsv: UTF-8로 바꾸면 BOM(EF BB BF)으로 시작한다", () => {
+  const bytes = new TextEncoder().encode(buysCsv(RESULTS, "KRW"));
+  assert.deepEqual([...bytes.slice(0, 3)], [0xef, 0xbb, 0xbf]);
+});
+
+test("buysCsv: 모든 종목의 매수를 한 줄씩, 종목 통화를 같이", () => {
+  const lines = buysCsv(RESULTS, "KRW").slice(1).trimEnd().split("\r\n");
   assert.equal(lines.length, 1 + 3);
-  assert.equal(lines[0], "종목,회차,날짜,종가,환율,산 수량,누적 수량,누적 평단가,원화 평단가,누적 투자금(KRW)");
+  assert.equal(lines[0], "종목,통화,회차,날짜,종가,환율,산 수량,누적 수량,누적 평단가,원화 평단가,누적 투자금(KRW)");
   assert.equal(BUY_COLUMNS.length, 8);
-  assert.equal(lines[1], "QQQ,1,2026-01-01,11,1300.5,1.5,1.5,10.25,13330,20000");
-  assert.equal(lines[3], "005930.KS,1,2026-01-01,76325,1,1.5,1.5,10.25,13330,20000");
+  assert.equal(lines[1], "QQQ,USD,1,2026-01-01,11,1300.5,1.5,1.5,10.25,13330,20000");
+  assert.equal(lines[3], "005930.KS,KRW,1,2026-01-01,76325,1,1.5,1.5,10.25,13330,20000");
 });
 
 test("buysCsv: 투자 통화에 맞춘 열 이름", () => {
@@ -106,13 +121,13 @@ test("buysCsv: 투자 통화에 맞춘 열 이름", () => {
 test("buysCsv: 쉼표·따옴표·줄바꿈이 든 값은 따옴표로 감싼다", () => {
   const tricky = [{ symbol: 'A,"B"', currency: "USD", buys: [buy(1, { date: "2026\n01" })] }];
   const line = buysCsv(tricky, "KRW").slice(1).split("\r\n").slice(1).join("\r\n");
-  assert.ok(line.startsWith('"A,""B""",1,"2026\n01",'));
+  assert.ok(line.startsWith('"A,""B""",USD,1,"2026\n01",'));
 });
 
 test("buysCsv: 값이 없으면 빈 칸", () => {
   const rows = [{ symbol: "X", currency: "USD", buys: [buy(1, { avg_cost_asset: null })] }];
   const line = buysCsv(rows, "KRW").slice(1).split("\r\n")[1];
-  assert.equal(line.split(",")[7], "");
+  assert.equal(line.split(",")[8], "");
 });
 
 test("csvFileName: 종목과 기간을 넣는다", () => {
