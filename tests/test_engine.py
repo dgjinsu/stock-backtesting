@@ -808,6 +808,6 @@ def test_series_without_exchange_tz_defaults_to_empty() -> None:
     ids=["QLD", "QQQ", "005930.KS"],
 )
 def test_load_series_reads_exchange_tz_from_fixture_meta(symbol: str, tz: str) -> None:
-    """helpers.load_series가 meta.exchangeTimezoneName을 읽는다. 빠지면 QLD·QQQ가 다른 거래소로 판정돼
-    v2.strategies.switch(231,394,092원, 쉰 매수일 15번)가 어긋난다."""
+    """helpers.load_series가 meta.exchangeTimezoneName을 읽는다. 빠지면 QLD·QQQ가 다른 거래소로 판정된다.
+    v2.strategies.switch는 QLD 매수일 중 그날·전날 판정이 갈리는 날이 없어 값으로는 못 잡으니 여기서 본다."""
     assert load_series(symbol).exchange_tz == tz
