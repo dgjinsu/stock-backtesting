@@ -139,6 +139,181 @@ def simulate(asset, fx, start, end, freq, anchor, amount, fractional=True, fee=0
     }
 
 
+# ---------- v2 (계산 규칙 9절) ----------
+def daily_rows(asset, fx, buys, end, buy_qty):
+    """첫 매수일부터 end까지 거래일마다 (날짜, 평가금, 투자금). buy_qty(d, p, r) → (투자금, 산 수량, 남는 현금)."""
+    bset = set(buys)
+    shares = cash = invested = 0.0
+    rows = []
+    for d, p in zip(asset["dates"], asset["close"]):
+        if d < buys[0] or d > end:
+            continue
+        r = asof(fx, d) if fx else 1.0
+        if d in bset:
+            add, q, cash_delta = buy_qty(d, p, r)
+            invested += add
+            shares += q
+            cash += cash_delta
+        rows.append((d, (shares * p + cash) * r, invested))
+    return rows
+
+
+def moving_average(series, day, n):
+    """day까지(그날 포함) n거래일 종가 평균. 모자라면 None. 9-6절."""
+    i = bisect_right(series["dates"], day)
+    return sum(series["close"][i - n:i]) / n if i >= n else None
+
+
+def strategy(asset, fx, ref, start, end, anchor, amount, rule, ma_days=200):
+    """9-6절 같은 예산 전략. rule: none | ma_dip | ma_hot | switch | lump_sum. 수수료 0, 소수점 매수."""
+    buys = buy_days(asset["dates"], start, end, "monthly", anchor)
+    state = {"cash": 0.0, "cost": 0.0, "shares": 0.0, "days": 0}
+    flows = []
+
+    def buy_qty(d, p, r):
+        if rule == "lump_sum":
+            if d != buys[0]:
+                return 0.0, 0.0, 0.0
+            total = amount * len(buys)
+            flows.append((d, -total))
+            state["cost"] += total / r
+            state["shares"] += total / r / p
+            return total, total / r / p, 0.0
+        flows.append((d, -amount))
+        unit = amount / r
+        cash = state["cash"] + unit
+        mult = 1.0
+        if rule in ("ma_dip", "ma_hot"):
+            avg = moving_average(asset, d, ma_days)
+            if avg is not None:
+                hit = p < avg if rule == "ma_dip" else p > avg * 1.2
+                state["days"] += hit
+                mult = (2.0 if hit else 0.5) if rule == "ma_dip" else (0.5 if hit else 1.0)
+        spend = min(cash, mult * unit)
+        if rule == "switch":
+            avg = moving_average(ref, d, ma_days)
+            if avg is not None:
+                on = asof(ref, d) > avg
+                state["days"] += not on
+                spend = cash if on else 0.0
+        state["cash"] = cash - spend
+        state["cost"] += spend
+        state["shares"] += spend / p
+        return amount, spend / p, unit - spend
+
+    rows = daily_rows(asset, fx, buys, end, buy_qty)
+    pe = asof(asset, end)
+    re_ = asof(fx, end) if fx else 1.0
+    value = (state["shares"] * pe + state["cash"]) * re_
+    flows.append((end, value))
+    invested = amount * len(buys)
+    return {
+        "value": round(value, 0),
+        "return_pct": round((value / invested - 1) * 100, 2),
+        "xirr_pct": round(xirr(flows) * 100, 2),
+        "avg_cost_asset": round(state["cost"] / state["shares"], 4),
+        "worst_return_pct": round(min(v / inv - 1 for _, v, inv in rows) * 100, 2),
+        "leftover_cash_invest": round(state["cash"] * re_, 0),
+        "rule_days": state["days"],
+    }
+
+
+def v2_metrics(asset, fx, start, end, anchor, amount):
+    """9-1 ~ 9-5절. 기본 적립(소수점 매수, 수수료 0)."""
+    buys = buy_days(asset["dates"], start, end, "monthly", anchor)
+    rows = daily_rows(asset, fx, buys, end, lambda d, p, r: (amount, amount / r / p, 0.0))
+    # 9-1 흔들림
+    peak, mdd, mdd_day = 0.0, 0.0, None
+    for d, v, _ in rows:
+        peak = max(peak, v)
+        if v / peak - 1 < mdd:
+            mdd, mdd_day = v / peak - 1, d
+    under = [v < inv for _, v, inv in rows]
+    longest, i = {"days": 0, "start": None, "recovered": None}, 0
+    while i < len(rows):
+        j = i
+        while j < len(rows) and under[j]:
+            j += 1
+        if j - i > longest["days"]:
+            back = rows[j][0].isoformat() if j < len(rows) else None
+            longest = {"days": j - i, "start": rows[i][0].isoformat(), "recovered": back}
+        i = j + 1
+    # 9-2 연도별
+    years = {}
+    for year in sorted({d.year for d, _, _ in rows}):
+        last = [row for row in rows if row[0].year == year][-1]
+        closes = {y: [c for d, c in zip(asset["dates"], asset["close"]) if d.year == y and d <= end] for y in (year - 1, year)}
+        change = round((closes[year][-1] / closes[year - 1][-1] - 1) * 100, 2) if closes[year - 1] else None
+        years[str(year)] = {"return_pct": round((last[1] / last[2] - 1) * 100, 2), "price_change_pct": change}
+    # 9-3 월별 (투자 통화)
+    month_end = {}
+    for d, c in zip(asset["dates"], asset["close"]):
+        if d <= end:
+            month_end[(d.year, d.month)] = (d, c * (asof(fx, d) if fx else 1.0))
+    keys = sorted(month_end)
+    monthly = [(f"{b[0]}-{b[1]:02d}", month_end[b][1] / month_end[a][1] - 1)
+               for a, b in zip(keys, keys[1:]) if month_end[b][0] >= start]
+    best, worst = max(monthly, key=lambda m: m[1]), min(monthly, key=lambda m: m[1])
+    # 9-4 수익 분해, 9-5 양도세
+    basic = simulate(asset, fx, start, end, "monthly", anchor, amount)
+    shares = sum(amount / (asof(fx, d) if fx else 1.0) / asof(asset, d) for d in buys)
+    cost = sum(amount / (asof(fx, d) if fx else 1.0) for d in buys)
+    pe = asof(asset, end)
+    re_ = asof(fx, end) if fx else 1.0
+    value = shares * pe * re_
+    profit = value - amount * len(buys)
+    tax = max(0.0, profit - 2_500_000) * 0.22 if asset["currency"] != "KRW" else 0.0
+    return {
+        "max_drawdown_pct": round(mdd * 100, 2),
+        "max_drawdown_date": mdd_day.isoformat(),
+        "underwater_days": sum(under),
+        "trading_days": len(rows),
+        "underwater_pct": round(sum(under) / len(rows) * 100, 2),
+        "longest_underwater": longest,
+        "last_underwater": max(d for (d, _, _), u in zip(rows, under) if u).isoformat(),
+        "years": years,
+        "months": {
+            "count": len(monthly),
+            "best": {"month": best[0], "return_pct": round(best[1] * 100, 2)},
+            "worst": {"month": worst[0], "return_pct": round(worst[1] * 100, 2)},
+        },
+        "profit": round(profit, 0),
+        "price_effect": round((shares * pe - cost) * re_, 0),
+        "fx_effect": round(cost * re_ - amount * len(buys), 0),
+        "avg_buy_fx": round(amount * len(buys) / cost, 2),
+        "tax": round(tax, 0),
+        "profit_after_tax": round(profit - tax, 0),
+        "buys": basic["buys"],
+        "buys_below_eval_price": sum(1 for d in buys if asof(asset, d) < pe),
+        "buys_below_avg_cost": sum(1 for d in buys if asof(asset, d) < cost / shares),
+    }
+
+
+def v2_case(start, end):
+    """9-8절 v2 기준값: QLD, 매월 1일 200만원, 원화, 수수료 0, 소수점 매수."""
+    qld, qqq, fx = load("QLD"), load("QQQ"), load("USDKRW=X")
+    amount = 2_000_000
+    anchors = list(range(1, 29)) + [31]
+    starts, y, m = {}, start.year, start.month
+    while True:
+        first = dt.date(y, m, 1)
+        if first >= start:
+            six_before = dt.date(end.year if end.month > 6 else end.year - 1, (end.month - 7) % 12 + 1, end.day)
+            if first > six_before:
+                break
+            starts[f"{y}-{m:02d}"] = simulate(qld, fx, first, end, "monthly", 1, amount)["return_pct"]
+        y, m = (y + 1, 1) if m == 12 else (y, m + 1)
+    return {
+        "symbol": "QLD", "invest_currency": "KRW", "freq": "monthly", "anchor": 1, "amount": amount,
+        "ma_days": 200, "switch_ref": "QQQ",
+        "metrics": v2_metrics(qld, fx, start, end, 1, amount),
+        "strategies": {rule: strategy(qld, fx, qqq, start, end, 1, amount, rule)
+                       for rule in ("none", "ma_dip", "ma_hot", "switch", "lump_sum")},
+        "anchor_sweep": {str(a): simulate(qld, fx, start, end, "monthly", a, amount)["avg_cost_asset"] for a in anchors},
+        "start_sweep": starts,
+    }
+
+
 CASES = [
     # (이름, 종목들, 투자통화, 주기, anchor, 금액, 소수점 매수, 수수료)
     ("월1일_200만원_5년", ["QQQ", "QLD", "TQQQ", "SOXL"], "KRW", "monthly", 1, 2_000_000, True, 0.0),
@@ -172,6 +347,7 @@ def main():
                 fx = fx_cache.setdefault(pair, load(pair))
             case["results"][s] = simulate(a, fx, START, END, freq, anchor, amount, frac, fee)
         out["cases"].append(case)
+    out["v2"] = v2_case(START, END)
     text = json.dumps(out, ensure_ascii=False, indent=2)
     if "--write" in sys.argv:
         with open(OUT, "w", encoding="utf-8") as f:
