@@ -43,6 +43,16 @@ def test_long_lines_allows_one_unbreakable_html_attribute(tmp_path: Path) -> Non
     assert check.long_lines([page], limit=100, root=tmp_path) == ["index.html:3 (108자)"]
 
 
+def test_long_lines_catches_other_long_attributes_and_non_html(tmp_path: Path) -> None:
+    """예외는 HTML의 href·src·integrity·d뿐이다. style 같은 속성이나 JS의 긴 줄은 잡는다."""
+    page = tmp_path / "index.html"
+    page.write_text(f'  <p\n    style="{"c" * 100}"\n  ></p>\n', encoding="utf-8")
+    script = tmp_path / "app.js"
+    script.write_text(f'    href="{"u" * 100}"\n', encoding="utf-8")
+    found = check.long_lines([page, script], limit=100, root=tmp_path)
+    assert found == ["index.html:2 (112자)", "app.js:1 (111자)"]
+
+
 def test_web_files_have_no_long_lines() -> None:
     """코드 컨벤션 1절: 한 줄은 100자 안쪽 (web/, tests/web/)."""
     assert check.long_lines(check.web_files(), limit=100, root=ROOT) == []

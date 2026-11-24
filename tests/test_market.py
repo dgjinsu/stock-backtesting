@@ -262,6 +262,25 @@ def test_search_invalid_query_returns_nothing(tmp_path: Path) -> None:
     assert _run(tmp_path, scenario) == ([], [], 1)
 
 
+@pytest.mark.parametrize(
+    ("status", "description"),
+    [(400, "Missing query"), (404, "Not Found"), (429, "Too Many Requests")],
+    ids=["other-400", "404", "429"],
+)
+def test_search_other_client_errors_raise_market_error(
+    tmp_path: Path, status: int, description: str
+) -> None:
+    """400이라도 Invalid Search Query가 아니면, 그리고 다른 4xx는 실패다 (API는 503)."""
+
+    async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> list[SearchHit]:
+        yahoo.search_status = status
+        yahoo.search_error = description
+        return await market.search("qld")
+
+    with pytest.raises(MarketError, match="검색"):
+        _run(tmp_path, scenario)
+
+
 def test_search_failure_raises_market_error(tmp_path: Path) -> None:
     async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> list[SearchHit]:
         yahoo.fail = True

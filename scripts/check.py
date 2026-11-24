@@ -40,8 +40,8 @@ def web_files() -> list[Path]:
     return sorted(path for pattern in patterns for path in ROOT.glob(pattern))
 
 
-# 속성 하나만 있는 줄 (주소, SRI 해시, SVG path처럼 나눌 수 없는 값)
-_ONE_ATTRIBUTE = re.compile(r'^\s*[\w:-]+="[^"]*"\s*/?>?\s*$')
+# HTML에서 나눌 수 없는 값(주소, SRI 해시, SVG path) 속성 하나만 있는 줄
+_ONE_ATTRIBUTE = re.compile(r'^\s*(href|src|integrity|d)="[^"]*"\s*/?>?\s*$')
 
 
 def long_lines(paths: list[Path], limit: int, root: Path) -> list[str]:
@@ -53,7 +53,8 @@ def long_lines(paths: list[Path], limit: int, root: Path) -> list[str]:
     for path in paths:
         lines = path.read_text(encoding="utf-8").splitlines()
         for number, line in enumerate(lines, start=1):
-            if len(line) > limit and not _ONE_ATTRIBUTE.match(line):
+            unbreakable = path.suffix == ".html" and _ONE_ATTRIBUTE.match(line)
+            if len(line) > limit and not unbreakable:
                 found.append(f"{path.relative_to(root).as_posix()}:{number} ({len(line)}자)")
     return found
 

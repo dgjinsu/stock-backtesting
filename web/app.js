@@ -36,6 +36,8 @@ const state = {
   loading: false,
   serverErrors: {},
   badSymbols: new Map(), // code → 이유
+  staleSymbols: new Map(), // code → 저장본 기준일 (data_through)
+  sending: new Set(), // 계산 중인 요청에 담은 종목
 };
 
 // ---------- 작은 도우미 ----------
@@ -107,16 +109,28 @@ function showErrors(clientErrors) {
 
 // ---------- 조건 패널 그리기 ----------
 
+/** 종목 줄 상태 (F-01): 받는 중 / 저장본으로 계산(기준일) / 찾을 수 없음. 기본이면 null. */
+function symbolStatus(code) {
+  const why = state.badSymbols.get(code);
+  if (why) return { cls: "bad", text: why.includes("찾을 수 없") ? "찾을 수 없음" : "계산 못 함" };
+  if (state.loading && state.sending.has(code)) return { cls: "busy", text: "받는 중" };
+  const stale = state.staleSymbols.get(code);
+  if (stale) return { cls: "stale", text: `저장본 · ${stale}` };
+  return null;
+}
+
 function renderSymbols() {
   const list = $("sym-list");
   list.replaceChildren(
-    ...state.symbols.map((s) =>
-      h(
+    ...state.symbols.map((s) => {
+      const status = symbolStatus(s.code);
+      return h(
         "li",
-        { class: state.badSymbols.has(s.code) ? "sym bad" : "sym" },
+        { class: status ? `sym ${status.cls}` : "sym" },
         swatch(s.slot),
         h("strong", { text: s.code }),
         h("span", { class: "nm", text: s.name || "" }),
+        status ? h("span", { class: "st", text: status.text }) : null,
         h(
           "button",
           {
@@ -127,8 +141,8 @@ function renderSymbols() {
           },
           icon(["M6 6l12 12M18 6L6 18"], 14),
         ),
-      ),
-    ),
+      );
+    }),
   );
   $("sym-count").textContent = `${state.symbols.length} / ${MAX_SYMBOLS}`;
 }
@@ -226,6 +240,7 @@ function addSymbol(code, name = "") {
 function removeSymbol(code) {
   state.symbols = state.symbols.filter((s) => s.code !== code);
   state.badSymbols.delete(code);
+  state.staleSymbols.delete(code);
   changed();
 }
 
@@ -369,6 +384,7 @@ function wireSearch() {
 
 function setLoading(on) {
   state.loading = on;
+  renderSymbols(); // 줄마다 "받는 중"을 켜고 끈다
   $("run").disabled = on || Object.keys(validate()).length > 0;
   $("run").querySelector(".spinner").hidden = !on;
   $("run-label").textContent = on ? "계산 중…" : "계산하기";
@@ -404,6 +420,7 @@ async function run() {
   // 계산 중에도 조건을 바꿀 수 있으니, 주소와 색은 보낸 때의 조건으로 만든다
   const sent = cond();
   const slots = new Map(state.symbols.map((s) => [s.code, s.slot]));
+  state.sending = new Set(sent.codes);
   setLoading(true);
   let reply;
   try {
@@ -444,6 +461,11 @@ async function run() {
   const listed = new Set(state.symbols.map((s) => s.code));
   state.badSymbols = new Map(
     json.errors.filter((e) => listed.has(e.symbol)).map((e) => [e.symbol, e.message]),
+  );
+  state.staleSymbols = new Map(
+    json.results
+      .filter((r) => r.stale && listed.has(r.symbol))
+      .map((r) => [r.symbol, r.data_through]),
   );
   for (const result of json.results) {
     const entry = state.symbols.find((s) => s.code === result.symbol);

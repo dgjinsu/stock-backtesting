@@ -440,6 +440,21 @@ a {
 .sym.bad {
   box-shadow: inset 0 0 0 2px var(--neg);
 }
+.sym.stale {
+  box-shadow: inset 0 0 0 2px var(--warn);
+}
+.sym .st {
+  flex: none;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.sym.bad .st {
+  color: var(--neg);
+}
+.sym.stale .st {
+  color: var(--warn);
+}
 .sym strong {
   font-size: 14px;
 }

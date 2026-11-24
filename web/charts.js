@@ -183,7 +183,8 @@ export function clearCharts() {
 
 /**
  * Chart.js가 아직 없으면 안내를 두고 기다린다. index.html의 script는 async라
- * cdnjs가 늦거나 막혀도 화면은 먼저 뜬다. 실패하면 onerror가 data-failed를 단다.
+ * cdnjs가 늦거나 막혀도 화면은 먼저 뜬다. 실패하면 onerror가, 받았는데 Chart가 없으면
+ * onload(index.html)와 afterChartJs가 data-failed를 단다.
  */
 function waitForChartJs(wrap) {
   const script = document.getElementById("chartjs");

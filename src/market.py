@@ -31,6 +31,17 @@ DAY_SHIFT = timedelta(hours=3)  # 서머타임으로 1시간 어긋나도 날짜
 _FETCH_ERRORS = (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError, IndexError)
 
 
+def _invalid_query(response: httpx.Response) -> bool:
+    """검색어를 Yahoo가 받지 않은 400인지 (본문 finance.error.description). 다른 400은 실패다."""
+    if response.status_code != httpx.codes.BAD_REQUEST:
+        return False
+    try:
+        error = response.json()["finance"]["error"]
+    except (ValueError, KeyError, TypeError):
+        return False
+    return isinstance(error, dict) and error.get("description") == "Invalid Search Query"
+
+
 class MarketError(Exception):
     """주가를 받거나 검색하지 못했다. 메시지는 사용자에게 보여 줄 한국어다."""
 
@@ -276,9 +287,9 @@ class Market:
                     headers=HEADERS,
                     timeout=10.0,
                 )
-            if response.status_code == httpx.codes.BAD_REQUEST:
+            if _invalid_query(response):
                 # 한글처럼 Yahoo가 못 다루는 검색어는 400 "Invalid Search Query"다. 결과 없음으로 본다.
-                logger.info("검색어 '%s'를 Yahoo가 받지 않음 (400)", text)
+                logger.info("검색어 '%s'를 Yahoo가 받지 않음 (400 Invalid Search Query)", text)
                 self._search_cache[key] = (now + self._search_ttl_s, [])
                 return []
             response.raise_for_status()

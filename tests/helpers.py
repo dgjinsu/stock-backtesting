@@ -76,6 +76,7 @@ class FakeYahoo:
         self.extra: dict[str, Any] = {}
         self.search_payload: Any = {"quotes": []}
         self.search_status = 200  # Yahoo는 한글 같은 검색어에 400을 준다
+        self.search_error = "Invalid Search Query"  # 200이 아닐 때 본문의 description
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(request.url.path)
@@ -87,7 +88,7 @@ class FakeYahoo:
                 return httpx.Response(500, json={"error": "down"})
             if request.url.path.startswith("/v1/finance/search"):
                 if self.search_status != 200:
-                    error = {"code": "Bad Request", "description": "Invalid Search Query"}
+                    error = {"code": "Bad Request", "description": self.search_error}
                     body = {"finance": {"result": None, "error": error}}
                     return httpx.Response(self.search_status, json=body)
                 return httpx.Response(200, json=self.search_payload)
