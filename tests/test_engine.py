@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from src.engine import EngineError, Params, Series, buy_days, build_chart, simulate, xirr
+from src.engine import EngineError, Params, Series, build_chart, buy_days, simulate, xirr
 from tests.helpers import CASE_IDS, load_expected, load_series
 
 EXPECTED = load_expected()
@@ -46,7 +46,11 @@ def _params(case: dict[str, Any], **changes: Any) -> Params:
 
 def _run(symbol: str, params: Params) -> Any:
     asset = load_series(symbol)
-    fx = None if asset.currency == params.currency else load_series(f"{asset.currency}{params.currency}=X")
+    fx = (
+        None
+        if asset.currency == params.currency
+        else load_series(f"{asset.currency}{params.currency}=X")
+    )
     return simulate(asset, fx, params)
 
 
@@ -135,13 +139,17 @@ def test_simulate_rejects_non_positive_amount() -> None:
     days = _weekdays(date(2024, 1, 2), date(2024, 3, 29))
     asset = Series("X", "KRW", days, [100.0] * len(days))
     with pytest.raises(ValueError, match="금액"):
-        simulate(asset, None, Params(date(2024, 1, 1), date(2024, 3, 29), "daily", None, 0.0, "KRW"))
+        simulate(
+            asset, None, Params(date(2024, 1, 1), date(2024, 3, 29), "daily", None, 0.0, "KRW")
+        )
 
 
 def test_simulate_whole_shares_keeps_cash_until_one_share_is_affordable() -> None:
     days = _weekdays(date(2024, 1, 1), date(2024, 3, 29), frozenset({date(2024, 1, 1)}))
     asset = Series("BIG", "KRW", days, [250.0] * len(days))
-    params = Params(date(2024, 1, 1), date(2024, 3, 29), "monthly", 1, 100.0, "KRW", fractional=False)
+    params = Params(
+        date(2024, 1, 1), date(2024, 3, 29), "monthly", 1, 100.0, "KRW", fractional=False
+    )
     result = simulate(asset, None, params)
     assert [row.qty for row in result.buys] == [0, 0, 1]
     assert result.buys[0].avg_cost_asset is None
@@ -249,5 +257,10 @@ def test_build_chart_downsampling_keeps_first_last_and_extremes() -> None:
     result = _run("QLD", _params(EXPECTED["cases"][4]))  # 매일 매수, 거래일 1,254개
     chart = build_chart({"QLD": result}, max_points=100)
     assert len(chart.dates) <= 100
-    for must in (result.daily[0].date, result.daily[-1].date, result.summary.best.date, result.summary.worst.date):
+    for must in (
+        result.daily[0].date,
+        result.daily[-1].date,
+        result.summary.best.date,
+        result.summary.worst.date,
+    ):
         assert must in chart.dates

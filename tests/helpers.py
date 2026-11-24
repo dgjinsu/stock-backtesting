@@ -41,7 +41,9 @@ def load_series(symbol: str) -> Series:
     offset = result["meta"].get("gmtoffset", 0)
     dates: list[date] = []
     close: list[float] = []
-    for ts, price in zip(result["timestamp"], result["indicators"]["quote"][0]["close"], strict=True):
+    for ts, price in zip(
+        result["timestamp"], result["indicators"]["quote"][0]["close"], strict=True
+    ):
         if price is None:
             continue
         day = (datetime.fromtimestamp(ts, UTC) + timedelta(seconds=offset + 3 * 3600)).date()
