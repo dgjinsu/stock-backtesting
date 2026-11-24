@@ -30,6 +30,10 @@ jobs:
           cache: pip
           cache-dependency-path: requirements*.txt
 
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+
       - name: 개발 도구 설치
         run: python -m pip install -r requirements-dev.txt
 
