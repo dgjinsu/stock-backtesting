@@ -18,6 +18,17 @@ EXPECTED: dict[str, Any] = json.loads(
 )
 EXPECTED_CASES: dict[str, Any] = {case["name"]: case for case in EXPECTED["cases"]}
 
+# 테스트 이름에 쓸 ASCII id. 사례를 더하면 여기에도 더한다 (빠지면 수집 단계에서 KeyError)
+CASE_IDS = {
+    "월1일_200만원_5년": "monthly1-krw2m",
+    "월1일_200만원_5년_정수주": "monthly1-krw2m-whole-shares",
+    "월15일_200만원_5년_수수료0.25%": "monthly15-krw2m-fee0.25",
+    "매주월요일_50만원_5년": "weekly-mon-krw500k",
+    "매일_10만원_5년": "daily-krw100k",
+    "월1일_1500달러_5년": "monthly1-usd1500",
+    "월1일_200만원_5년_삼성전자": "monthly1-krw2m-005930",
+}
+
 
 @pytest.fixture(scope="module")
 def reference_output() -> dict[str, Any]:
@@ -41,7 +52,7 @@ def test_reference_case_names_match_expected(reference_output: dict[str, Any]) -
     assert [case["name"] for case in reference_output["cases"]] == list(EXPECTED_CASES)
 
 
-@pytest.mark.parametrize("name", list(EXPECTED_CASES))
+@pytest.mark.parametrize("name", list(EXPECTED_CASES), ids=[CASE_IDS[n] for n in EXPECTED_CASES])
 def test_reference_case_matches_expected(reference_output: dict[str, Any], name: str) -> None:
     actual = {case["name"]: case for case in reference_output["cases"]}
     assert actual[name] == EXPECTED_CASES[name]

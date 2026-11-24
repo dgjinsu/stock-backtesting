@@ -17,5 +17,5 @@ argument-hint: "[draft]"
    gh pr create --base main --title "<type>(<scope>): <요약>" --body-file <파일> --label "<이슈와 같은 라벨>" --milestone "<v1|v2>"
    ```
    인자에 `draft`가 있으면 `--draft`를 붙인다.
-8. **현황판**: `.claude/skills/dev-board/SKILL.md`의 "PR을 열었을 때"대로 기록한다.
-9. **리뷰**: 바로 `/dev-review <PR 번호>`를 실행한다.
+8. **현황판**: `.claude/skills/dev-board/SKILL.md`의 "PR을 열었을 때"대로 기록한다. 훅이 7단계 뒤에 리뷰를 부르라고 알려 와도 이 기록을 먼저 끝낸다.
+9. **리뷰**: `/dev-review <PR 번호>`를 한 번 실행한다. 훅 알림과 같은 리뷰이니 두 번 돌리지 않는다.

@@ -35,8 +35,10 @@ def build_output(event: dict[str, Any]) -> dict[str, Any] | None:
     number = match.group(1)
     context = (
         f"새 PR #{number}: {match.group(0)}\n"
-        f"docs/7_개발워크플로우.md 8절대로 지금 `/dev-review {number}`를 실행해 "
-        "code-reviewer 에이전트로 리뷰하고, 결과를 PR 댓글과 개발 현황판에 남긴다."
+        f"docs/7_개발워크플로우.md 8절대로 `/dev-review {number}`를 한 번 실행해 "
+        "code-reviewer 에이전트로 리뷰하고, 결과를 PR 댓글과 개발 현황판에 남긴다. "
+        "`/dev-pr` 중이면 현황판에 PR을 기록한 뒤(8단계) 실행한다. "
+        "이 PR을 이미 리뷰했으면 다시 하지 않는다."
     )
     return {"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": context}}
 

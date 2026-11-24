@@ -45,7 +45,7 @@ Git Bash에서는 `.venv/Scripts/python`으로 쓴다. 서버 실행 명령은 1
 ## 꼭 지킬 것
 
 - `src/engine.py`는 표준 라이브러리만 쓰고, 네트워크·파일·현재 시각을 읽지 않는다.
-- Yahoo 호출과 캐시 파일은 `src/market.py`에서만 다룬다. 테스트는 네트워크를 쓰지 않는다 (fixture, `httpx.MockTransport`).
+- Yahoo 호출과 캐시 파일은 `src/market.py`에서만 다룬다. 테스트는 네트워크를 쓰지 않는다 (fixture, `httpx.MockTransport`). 실제 Yahoo 확인은 `@pytest.mark.live`로 표시해 기본 실행에서 뺀다.
 - 계산 결과가 기준값과 다르면 기준값이 아니라 엔진을 고친다. 기준값은 계산 규칙 문서를 바꿀 때만 `python tests/reference_calc.py --write`로 다시 만들고, 이유를 PR에 적는다.
 - v1 이슈에 v2 기능(F-11~F-23)을 넣지 않는다. 시안 "v1" 페이지에 없는 것은 v2다.
 - main에 직접 커밋하거나 푸시하지 않는다. force push는 자기 PR 브랜치에 `--force-with-lease`로만 한다.
