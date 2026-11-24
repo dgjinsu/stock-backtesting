@@ -1,0 +1,36 @@
+name: 버그
+description: 계산이 틀리거나 화면·API가 명세와 다르게 동작한다
+title: "[버그] "
+labels: ["type:fix"]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: 무엇이 틀렸나
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: 재현 방법
+      description: 조건(종목·기간·주기·금액)이나 결과 화면 주소
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 기대한 결과
+      description: 근거가 되는 문서 절이나 기준값을 함께 적는다
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: 실제 결과
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: 환경
+      placeholder: "브라우저, 로컬/배포, 커밋"

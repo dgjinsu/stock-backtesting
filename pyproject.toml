@@ -1,0 +1,42 @@
+# 도구 설정만 둔다. 의존성 버전은 requirements.txt(실행)와 requirements-dev.txt(개발)에 고정한다.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+# 설계 때 기준값을 만든 스크립트라 그대로 둔다 (docs/8_코드컨벤션.md 2절)
+extend-exclude = ["tests/reference_calc.py"]
+
+[tool.ruff.lint]
+select = [
+  "E",   # pycodestyle 오류
+  "W",   # pycodestyle 경고
+  "F",   # pyflakes
+  "I",   # import 정렬
+  "N",   # 이름 규칙
+  "UP",  # 새 문법으로
+  "B",   # 흔한 버그
+  "C4",  # comprehension
+  "SIM", # 단순하게
+  "DTZ", # 시간대 없는 datetime
+  "PT",  # pytest 스타일
+  "RUF", # ruff 규칙
+]
+ignore = [
+  "E501",   # 줄 길이는 포매터가 맡는다. 긴 한국어 문자열·주석은 허용
+  "RUF001", # 화면 문구에 − (U+2212) 같은 기호를 일부러 쓴다
+  "RUF002",
+  "RUF003",
+]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src", "scripts"]
+strict = true
+warn_unreachable = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# live 표시한 테스트(실제 Yahoo 호출)는 기본에서 빼고 `pytest -m live`로만 돌린다 (상세 설계 6절)
+addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not live"]
+markers = ["live: 실제 Yahoo를 부르는 확인. 기본 실행과 CI에서 빠진다"]
+xfail_strict = true

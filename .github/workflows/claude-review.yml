@@ -1,0 +1,56 @@
+# PR마다 Claude Code가 리뷰 댓글을 단다. 기준은 .claude/agents/code-reviewer.md (세션 리뷰와 같다).
+# 켜는 법: docs/7_개발워크플로우.md 11절 (Claude GitHub 앱 설치 + CLAUDE_CODE_OAUTH_TOKEN 시크릿).
+# 시크릿이 없으면 리뷰를 건너뛰고 초록으로 끝난다.
+name: Claude 리뷰
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: claude-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: read
+      id-token: write
+    env:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+    steps:
+      - name: 시크릿이 없으면 건너뜀
+        if: env.CLAUDE_CODE_OAUTH_TOKEN == ''
+        run: |
+          echo "::notice::CLAUDE_CODE_OAUTH_TOKEN 시크릿이 없어 Claude 리뷰를 건너뜁니다. docs/7_개발워크플로우.md 11절을 보세요."
+
+      - uses: actions/checkout@v6
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
+        with:
+          fetch-depth: 1
+
+      - name: Claude 리뷰
+        if: env.CLAUDE_CODE_OAUTH_TOKEN != ''
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number }}
+
+            이 PR을 GitHub Actions 리뷰로 리뷰한다. 기준과 출력 형식은 .claude/agents/code-reviewer.md를 그대로 따른다.
+            CLAUDE.md, docs/7_개발워크플로우.md 8절, docs/8_코드컨벤션.md도 읽는다.
+
+            - `gh pr view`와 `gh pr diff`로 변경을 보고, 본문의 `Closes #n` 이슈를 `gh issue view`로 읽어 완료 기준을 확인한다.
+            - 바뀐 파일은 diff만 보지 말고 파일 전체를 읽는다.
+            - 특정 줄에 묶이는 필수·권장 지적은 mcp__github_inline_comment__create_inline_comment로 그 줄에 단다.
+            - 마지막에 code-reviewer.md 형식의 요약을 `gh pr comment`로 한 번만 단다. 머리말은 "## Claude 리뷰 (GitHub Actions)".
+            - 코드를 고치거나 커밋하지 않는다.
+          claude_args: |
+            --model claude-opus-5-5
+            --allowedTools "mcp__github_inline_comment__create_inline_comment,Bash(gh pr comment:*),Bash(gh pr view:*),Bash(gh pr diff:*),Bash(gh issue view:*)"
