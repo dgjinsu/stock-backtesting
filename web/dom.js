@@ -29,7 +29,14 @@ export function swatch(slot, width = 20, { color = `var(--c${slot + 1})` } = {})
   svg.setAttribute("aria-hidden", "true");
   svg.classList.add("swatch");
   const line = document.createElementNS(SVG, "line");
-  for (const [k, v] of Object.entries({ x1: 1, y1: 3, x2: width - 1, y2: 3, "stroke-width": 3, "stroke-linecap": "round" })) {
+  for (const [k, v] of Object.entries({
+    x1: 1,
+    y1: 3,
+    x2: width - 1,
+    y2: 3,
+    "stroke-width": 3,
+    "stroke-linecap": "round",
+  })) {
     line.setAttribute(k, String(v));
   }
   line.style.stroke = color;
@@ -41,7 +48,16 @@ export function swatch(slot, width = 20, { color = `var(--c${slot + 1})` } = {})
 /** 선으로 그린 아이콘. paths는 24×24 기준 SVG path 목록. */
 export function icon(paths, size = 16) {
   const svg = document.createElementNS(SVG, "svg");
-  for (const [k, v] of Object.entries({ width: size, height: size, viewBox: "0 0 24 24", fill: "none", "stroke-width": 2, "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true" })) {
+  for (const [k, v] of Object.entries({
+    width: size,
+    height: size,
+    viewBox: "0 0 24 24",
+    fill: "none",
+    "stroke-width": 2,
+    "stroke-linecap": "round",
+    "stroke-linejoin": "round",
+    "aria-hidden": "true",
+  })) {
     svg.setAttribute(k, String(v));
   }
   for (const d of paths) {

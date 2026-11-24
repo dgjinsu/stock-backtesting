@@ -87,7 +87,8 @@ export function validate(cond, today) {
   if (cond.codes.length === 0) errors.symbols = "종목을 하나 이상 넣어 주세요";
   if (!cond.start) errors.start = "시작일을 넣어 주세요";
   if (!cond.end) errors.end = "끝날짜를 넣어 주세요";
-  if (cond.start && cond.end && cond.start >= cond.end) errors.start = "시작일은 끝날짜보다 앞이어야 합니다";
+  if (cond.start && cond.end && cond.start >= cond.end)
+    errors.start = "시작일은 끝날짜보다 앞이어야 합니다";
   if (cond.end && cond.end > today) errors.end = `끝날짜는 오늘(${today})보다 늦을 수 없습니다`;
   if (!(cond.amount > 0)) errors.amount = "금액은 0보다 커야 합니다";
   if (!(cond.fee >= 0 && cond.fee <= 10)) errors.fee = "수수료는 0~10%입니다";
@@ -108,10 +109,33 @@ export function estimateBuys(cond) {
   let count = 0;
   const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
   while (cursor <= end) {
-    const last = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0)).getUTCDate();
-    const day = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), Math.min(cond.monthDay, last)));
+    const last = new Date(
+      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0),
+    ).getUTCDate();
+    const day = new Date(
+      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), Math.min(cond.monthDay, last)),
+    );
     if (day >= start && day <= end) count += 1;
     cursor.setUTCMonth(cursor.getUTCMonth() + 1);
   }
   return count;
+}
+
+/**
+ * 종목 줄 상태 (F-01). 기본이면 null.
+ * 계산 중이고 보낸 종목이면 "받는 중"이 앞선다 (앞 계산에서 실패했어도 다시 받는 중이다).
+ * 그다음 실패("찾을 수 없음"/"계산 못 함"), 저장본("저장본 MM-DD", 전체 날짜는 title).
+ */
+export function symbolStatus(code, { loading, sending, bad, stale }) {
+  if (loading && sending.has(code)) return { cls: "busy", text: "받는 중" };
+  const why = bad.get(code);
+  if (why) return { cls: "bad", text: why.includes("찾을 수 없") ? "찾을 수 없음" : "계산 못 함" };
+  const day = stale.get(code);
+  if (day)
+    return {
+      cls: "stale",
+      text: `저장본 ${day.slice(5)}`,
+      title: `${day}까지 저장된 데이터로 계산`,
+    };
+  return null;
 }

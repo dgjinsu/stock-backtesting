@@ -69,7 +69,11 @@ export const BUY_COLUMNS = [
   { key: "qty", title: () => "산 수량", csv: () => "산 수량" },
   { key: "cum_qty", title: () => "누적 수량", csv: () => "누적 수량" },
   { key: "avg_cost_asset", title: () => "누적 평단가", csv: () => "누적 평단가" },
-  { key: "avg_cost_invest", title: (cur) => `${investName(cur)} 평단가`, csv: (cur) => `${investName(cur)} 평단가` },
+  {
+    key: "avg_cost_invest",
+    title: (cur) => `${investName(cur)} 평단가`,
+    csv: (cur) => `${investName(cur)} 평단가`,
+  },
   { key: "invested", title: () => "누적 투자금", csv: (cur) => `누적 투자금(${cur})` },
 ];
 
@@ -105,5 +109,8 @@ export function csvFileName(params) {
 export function sampledNote(chart) {
   if (!(chart.total_days > chart.dates.length)) return null;
   const n = (v) => v.toLocaleString("ko-KR");
-  return `기간이 길어 그래프는 ${n(chart.total_days)}일 중 ${n(chart.dates.length)}점만 골라 그렸습니다. 첫날·마지막 날·최고·최저 수익률 날은 빠지지 않았고, 계산은 모든 날로 했습니다.`;
+  return (
+    `기간이 길어 그래프는 ${n(chart.total_days)}일 중 ${n(chart.dates.length)}점만 골라 그렸습니다. ` +
+    "첫날·마지막 날·최고·최저 수익률 날은 빠지지 않았고, 계산은 모든 날로 했습니다."
+  );
 }

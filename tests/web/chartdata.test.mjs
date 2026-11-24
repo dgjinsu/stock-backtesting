@@ -16,7 +16,6 @@ import {
   sampledNote,
 } from "../../web/chartdata.js";
 
-
 function buy(n, extra = {}) {
   return {
     date: `2026-01-${String(n).padStart(2, "0")}`,
@@ -33,7 +32,12 @@ function buy(n, extra = {}) {
 
 const RESULTS = [
   { symbol: "QQQ", name: "Invesco QQQ Trust", currency: "USD", buys: [buy(1), buy(2)] },
-  { symbol: "005930.KS", name: "Samsung, \"Electronics\"", currency: "KRW", buys: [buy(1, { fx: 1, price: 76_325 })] },
+  {
+    symbol: "005930.KS",
+    name: 'Samsung, "Electronics"',
+    currency: "KRW",
+    buys: [buy(1, { fx: 1, price: 76_325 })],
+  },
 ];
 
 test("DASHES: 종목 8개의 선 모양, 첫째는 실선", () => {
@@ -85,8 +89,14 @@ test("investedLines: 상장일이 달라 투자금이 다르면 종목마다", (
 test("previewRows: 9회 이상이면 앞 6회와 마지막 2회, 가운데 숨긴 수", () => {
   const rows = Array.from({ length: 60 }, (_, i) => i + 1);
   const view = previewRows(rows);
-  assert.deepEqual(view.head.map((r) => r.no), [1, 2, 3, 4, 5, 6]);
-  assert.deepEqual(view.tail.map((r) => r.no), [59, 60]);
+  assert.deepEqual(
+    view.head.map((r) => r.no),
+    [1, 2, 3, 4, 5, 6],
+  );
+  assert.deepEqual(
+    view.tail.map((r) => r.no),
+    [59, 60],
+  );
   assert.equal(view.hidden, 52);
   assert.equal(view.head[0].row, 1);
 });
@@ -106,7 +116,10 @@ test("buysCsv: UTF-8로 바꾸면 BOM(EF BB BF)으로 시작한다", () => {
 test("buysCsv: 모든 종목의 매수를 한 줄씩, 종목 통화를 같이", () => {
   const lines = buysCsv(RESULTS, "KRW").slice(1).trimEnd().split("\r\n");
   assert.equal(lines.length, 1 + 3);
-  assert.equal(lines[0], "종목,통화,회차,날짜,종가,환율,산 수량,누적 수량,누적 평단가,원화 평단가,누적 투자금(KRW)");
+  assert.equal(
+    lines[0],
+    "종목,통화,회차,날짜,종가,환율,산 수량,누적 수량,누적 평단가,원화 평단가,누적 투자금(KRW)",
+  );
   assert.equal(BUY_COLUMNS.length, 8);
   assert.equal(lines[1], "QQQ,USD,1,2026-01-01,11,1300.5,1.5,1.5,10.25,13330,20000");
   assert.equal(lines[3], "005930.KS,KRW,1,2026-01-01,76325,1,1.5,1.5,10.25,13330,20000");

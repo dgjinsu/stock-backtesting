@@ -248,6 +248,53 @@ def test_search_blank_query_returns_nothing_without_network(tmp_path: Path) -> N
     assert _run(tmp_path, scenario) == ([], 0)
 
 
+def test_search_invalid_query_returns_nothing(tmp_path: Path) -> None:
+    """Yahoo는 한글 검색어에 400 "Invalid Search Query"를 준다 (2026-11-25 확인). 결과 없음으로 본다."""
+
+    async def scenario(
+        market: Market, yahoo: FakeYahoo, clock: Clock
+    ) -> tuple[list[SearchHit], list[SearchHit], int]:
+        yahoo.search_status = 400
+        first = await market.search("삼성전자")
+        second = await market.search("삼성전자")
+        return first, second, len(yahoo.calls)
+
+    assert _run(tmp_path, scenario) == ([], [], 1)
+
+
+@pytest.mark.parametrize(
+    ("status", "description"),
+    [(400, "Missing query"), (404, "Not Found"), (429, "Too Many Requests")],
+    ids=["other-400", "404", "429"],
+)
+def test_search_other_client_errors_raise_market_error(
+    tmp_path: Path, status: int, description: str
+) -> None:
+    """400이라도 Invalid Search Query가 아니면, 그리고 다른 4xx는 실패다 (API는 503)."""
+
+    async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> list[SearchHit]:
+        yahoo.search_status = status
+        yahoo.search_error = description
+        return await market.search("qld")
+
+    with pytest.raises(MarketError, match="검색"):
+        _run(tmp_path, scenario)
+
+
+def test_search_400_without_json_body_raises_market_error(tmp_path: Path) -> None:
+    """400인데 본문이 JSON이 아니면(프록시 HTML 등) 검색어 탓인지 알 수 없으니 실패다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="<html>bad gateway</html>")
+
+    async def go() -> list[SearchHit]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await Market(tmp_path, client).search("qld")
+
+    with pytest.raises(MarketError, match="검색"):
+        asyncio.run(go())
+
+
 def test_search_failure_raises_market_error(tmp_path: Path) -> None:
     async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> list[SearchHit]:
         yahoo.fail = True

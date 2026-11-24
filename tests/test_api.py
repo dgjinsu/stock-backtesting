@@ -235,6 +235,14 @@ def test_search_returns_hits(api: Api) -> None:
     ]
 
 
+def test_search_korean_name_returns_empty_list(api: Api) -> None:
+    """F-01: 한글 이름은 결과 없음 (화면이 "코드나 영문 이름으로 찾아 주세요"라고 안내한다)."""
+    api.yahoo.search_status = 400
+    response = api.client.get("/api/search", params={"q": "삼성전자"})
+    assert response.status_code == 200
+    assert response.json() == []
+
+
 def test_search_failure_returns_503_with_message(api: Api) -> None:
     client, yahoo = api.client, api.yahoo
     yahoo.fail = True

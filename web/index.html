@@ -1,144 +1,266 @@
 <!doctype html>
 <html lang="ko">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>적립식 백테스트</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap">
-  <link rel="stylesheet" href="style.css">
-  <script>
-    // 다크 모드를 그리기 전에 정해 깜빡임을 막는다 (저장한 값 → 운영체제 설정)
-    (() => {
-      let saved = null;
-      try { saved = localStorage.getItem("theme"); } catch { saved = null; }
-      const dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-      document.documentElement.classList.toggle("dark", dark);
-    })();
-  </script>
-  <!-- Chart.js 4.5.1 (버전 고정 + SRI). async라 늦거나 막혀도 화면은 먼저 뜨고, 그래프 자리에만 안내가 나온다 -->
-  <script id="chartjs" src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"
-    integrity="sha512-WoViKhKD4qI2WruSZqv9+kvM4WfFhUMQCLN4QlDTt5aU56fLQy2gYoxWIqlEnXqJy/+Ac5q/hk1oWfqnMDhwMA=="
-    crossorigin="anonymous" referrerpolicy="no-referrer" async onerror="this.dataset.failed = '1'"></script>
-  <script type="module" src="app.js"></script>
-</head>
-<body>
-  <header class="topbar">
-    <div class="topbar-in">
-      <div class="brand">
-        <svg width="32" height="32" viewBox="0 0 36 36" aria-hidden="true"><rect width="36" height="36" rx="10" class="brand-bg"></rect><path d="M9 25V21M15 25V17M21 25V14M27 25V10" stroke-width="3" stroke-linecap="round" class="brand-fg"></path></svg>
-        <h1>적립식 백테스트</h1>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>적립식 백테스트</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap"
+    />
+    <link rel="stylesheet" href="style.css" />
+    <script>
+      // 다크 모드를 그리기 전에 정해 깜빡임을 막는다 (저장한 값 → 운영체제 설정)
+      (() => {
+        let saved = null;
+        try {
+          saved = localStorage.getItem("theme");
+        } catch {
+          saved = null;
+        }
+        const dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
+        document.documentElement.classList.toggle("dark", dark);
+      })();
+    </script>
+    <!-- Chart.js 4.5.1 (버전 고정 + SRI). async라 늦거나 막혀도 화면은 먼저 뜨고, 그래프 자리에만 안내가 나온다 -->
+    <script
+      id="chartjs"
+      src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js"
+      integrity="sha512-WoViKhKD4qI2WruSZqv9+kvM4WfFhUMQCLN4QlDTt5aU56fLQy2gYoxWIqlEnXqJy/+Ac5q/hk1oWfqnMDhwMA=="
+      crossorigin="anonymous"
+      referrerpolicy="no-referrer"
+      async
+      onload="if (!window.Chart) this.dataset.failed = '1'"
+      onerror="this.dataset.failed = '1'"
+    ></script>
+    <script type="module" src="app.js"></script>
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="topbar-in">
+        <div class="brand">
+          <svg width="32" height="32" viewBox="0 0 36 36" aria-hidden="true">
+            <rect width="36" height="36" rx="10" class="brand-bg"></rect>
+            <path
+              d="M9 25V21M15 25V17M21 25V14M27 25V10"
+              stroke-width="3"
+              stroke-linecap="round"
+              class="brand-fg"
+            ></path>
+          </svg>
+          <h1>적립식 백테스트</h1>
+        </div>
+        <span class="pill" id="data-status"
+          ><span class="dot" aria-hidden="true"></span
+          ><span id="data-status-text">Yahoo Finance</span></span
+        >
+        <button type="button" class="icon-btn" id="theme-toggle" aria-label="다크 모드로 바꾸기">
+          <svg
+            class="when-light"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"></path>
+          </svg>
+          <svg
+            class="when-dark"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            aria-hidden="true"
+          >
+            <circle cx="12" cy="12" r="4.5"></circle>
+            <path
+              d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"
+            ></path>
+          </svg>
+        </button>
       </div>
-      <span class="pill" id="data-status"><span class="dot" aria-hidden="true"></span><span id="data-status-text">Yahoo Finance</span></span>
-      <button type="button" class="icon-btn" id="theme-toggle" aria-label="다크 모드로 바꾸기">
-        <svg class="when-light" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"></path></svg>
-        <svg class="when-dark" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4.5"></circle><path d="M12 2.5v2M12 19.5v2M4.6 4.6l1.4 1.4M18 18l1.4 1.4M2.5 12h2M19.5 12h2M4.6 19.4L6 18M18 6l1.4-1.4"></path></svg>
-      </button>
-    </div>
-  </header>
+    </header>
 
-  <div class="layout">
-    <aside class="panel" aria-labelledby="cond-h">
-      <form id="form" novalidate>
-        <h2 id="cond-h">조건</h2>
+    <div class="layout">
+      <aside class="panel" aria-labelledby="cond-h">
+        <form id="form" novalidate>
+          <h2 id="cond-h">조건</h2>
 
-        <div class="group">
-          <div class="group-head"><span class="group-title">종목</span><span class="muted" id="sym-count">0 / 8</span></div>
-          <ul class="sym-list" id="sym-list" aria-label="넣은 종목"></ul>
-          <div class="search">
-            <label for="sym-search" class="sr">종목 검색</label>
-            <svg class="search-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle><path d="M20 20l-4-4"></path></svg>
-            <input id="sym-search" type="search" class="field" autocomplete="off" spellcheck="false"
-              placeholder="코드나 영문 이름 (예: SPY)"
-              role="combobox" aria-expanded="false" aria-controls="sym-results" aria-autocomplete="list" aria-describedby="sym-hint sym-error">
-            <ul class="listbox" id="sym-results" role="listbox" aria-label="검색 결과" hidden></ul>
-          </div>
-          <p class="hint" id="sym-hint">한국 종목은 005930.KS(코스피), 035720.KQ(코스닥)처럼 넣습니다</p>
-          <p class="field-error" id="sym-error" hidden></p>
-          <p class="sr" id="sym-live" aria-live="polite"></p>
-        </div>
-
-        <div class="group">
-          <span class="group-title">기간</span>
-          <div class="two">
-            <label class="stack">시작일<input type="date" id="start" class="field" aria-describedby="start-error"></label>
-            <label class="stack">끝날짜<input type="date" id="end" class="field" aria-describedby="end-error"></label>
-          </div>
-          <p class="field-error" id="start-error" hidden></p>
-          <p class="field-error" id="end-error" hidden></p>
-          <div class="seg" role="group" aria-label="빠른 기간 선택" id="period">
-            <button type="button" data-years="1">1년</button>
-            <button type="button" data-years="3">3년</button>
-            <button type="button" data-years="5">5년</button>
-            <button type="button" data-years="10">10년</button>
-            <button type="button" data-years="all">전체</button>
-          </div>
-        </div>
-
-        <div class="group">
-          <span class="group-title" id="freq-label">주기</span>
-          <div class="seg" role="group" aria-labelledby="freq-label" id="freq">
-            <button type="button" data-freq="daily">매일</button>
-            <button type="button" data-freq="weekly">매주</button>
-            <button type="button" data-freq="monthly">매월</button>
-          </div>
-          <label class="inline" id="monthly-row">매월<select class="field" id="month-day" aria-describedby="anchor-error"></select>에 사기</label>
-          <label class="inline" id="weekly-row" hidden>매주<select class="field" id="week-day" aria-describedby="anchor-error">
-            <option value="0">월요일</option><option value="1">화요일</option><option value="2">수요일</option><option value="3">목요일</option><option value="4">금요일</option>
-          </select>에 사기</label>
-          <span class="muted" id="daily-row" hidden>모든 거래일에 삽니다</span>
-          <p class="field-error" id="anchor-error" hidden></p>
-          <p class="hint">휴장일이면 다음 거래일. 달(주)을 넘기면 그 달(주) 마지막 거래일</p>
-        </div>
-
-        <div class="group">
-          <label for="amount" class="group-title">금액 <span class="chip">종목마다 매번</span></label>
-          <div class="amount-row">
-            <div class="with-unit">
-              <input id="amount" inputmode="numeric" class="field num" autocomplete="off" aria-describedby="amount-error amount-preview">
-              <span class="unit" id="amount-unit" aria-hidden="true">원</span>
+          <div class="group">
+            <div class="group-head">
+              <span class="group-title">종목</span><span class="muted" id="sym-count">0 / 8</span>
             </div>
-            <label for="currency" class="sr">투자 통화</label>
-            <select id="currency" class="field currency"><option value="KRW">원화</option><option value="USD">달러</option></select>
+            <ul class="sym-list" id="sym-list" aria-label="넣은 종목"></ul>
+            <div class="search">
+              <label for="sym-search" class="sr">종목 검색</label>
+              <svg
+                class="search-icon"
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke-width="2"
+                stroke-linecap="round"
+                aria-hidden="true"
+              >
+                <circle cx="11" cy="11" r="7"></circle>
+                <path d="M20 20l-4-4"></path>
+              </svg>
+              <input
+                id="sym-search"
+                type="search"
+                class="field"
+                autocomplete="off"
+                spellcheck="false"
+                placeholder="코드나 영문 이름 (예: SPY)"
+                role="combobox"
+                aria-expanded="false"
+                aria-controls="sym-results"
+                aria-autocomplete="list"
+                aria-describedby="sym-hint sym-error"
+              />
+              <ul
+                class="listbox"
+                id="sym-results"
+                role="listbox"
+                aria-label="검색 결과"
+                hidden
+              ></ul>
+            </div>
+            <p class="hint" id="sym-hint">
+              한국 종목은 005930.KS(코스피), 035720.KQ(코스닥)처럼 넣습니다
+            </p>
+            <p class="field-error" id="sym-error" hidden></p>
+            <p class="sr" id="sym-live" aria-live="polite"></p>
           </div>
-          <p class="field-error" id="amount-error" hidden></p>
-          <p class="hint" id="amount-preview"></p>
-        </div>
 
-        <details class="advanced" id="advanced">
-          <summary>고급 설정 <span class="muted" id="advanced-summary"></span></summary>
-          <div class="advanced-in">
-            <div class="stack-gap">
-              <span class="small muted" id="mode-label">매수 방식</span>
-              <div class="seg" role="group" aria-labelledby="mode-label" id="mode">
-                <button type="button" data-fractional="true">소수점 매수</button>
-                <button type="button" data-fractional="false">정수 주만</button>
+          <div class="group">
+            <span class="group-title">기간</span>
+            <div class="two">
+              <label class="stack"
+                >시작일<input type="date" id="start" class="field" aria-describedby="start-error"
+              /></label>
+              <label class="stack"
+                >끝날짜<input type="date" id="end" class="field" aria-describedby="end-error"
+              /></label>
+            </div>
+            <p class="field-error" id="start-error" hidden></p>
+            <p class="field-error" id="end-error" hidden></p>
+            <div class="seg" role="group" aria-label="빠른 기간 선택" id="period">
+              <button type="button" data-years="1">1년</button>
+              <button type="button" data-years="3">3년</button>
+              <button type="button" data-years="5">5년</button>
+              <button type="button" data-years="10">10년</button>
+              <button type="button" data-years="all">전체</button>
+            </div>
+          </div>
+
+          <div class="group">
+            <span class="group-title" id="freq-label">주기</span>
+            <div class="seg" role="group" aria-labelledby="freq-label" id="freq">
+              <button type="button" data-freq="daily">매일</button>
+              <button type="button" data-freq="weekly">매주</button>
+              <button type="button" data-freq="monthly">매월</button>
+            </div>
+            <label class="inline" id="monthly-row"
+              >매월<select class="field" id="month-day" aria-describedby="anchor-error"></select
+              >에 사기</label
+            >
+            <label class="inline" id="weekly-row" hidden
+              >매주<select class="field" id="week-day" aria-describedby="anchor-error">
+                <option value="0">월요일</option>
+                <option value="1">화요일</option>
+                <option value="2">수요일</option>
+                <option value="3">목요일</option>
+                <option value="4">금요일</option></select
+              >에 사기</label
+            >
+            <span class="muted" id="daily-row" hidden>모든 거래일에 삽니다</span>
+            <p class="field-error" id="anchor-error" hidden></p>
+            <p class="hint">휴장일이면 다음 거래일. 달(주)을 넘기면 그 달(주) 마지막 거래일</p>
+          </div>
+
+          <div class="group">
+            <label for="amount" class="group-title"
+              >금액 <span class="chip">종목마다 매번</span></label
+            >
+            <div class="amount-row">
+              <div class="with-unit">
+                <input
+                  id="amount"
+                  inputmode="numeric"
+                  class="field num"
+                  autocomplete="off"
+                  aria-describedby="amount-error amount-preview"
+                />
+                <span class="unit" id="amount-unit" aria-hidden="true">원</span>
               </div>
-              <span class="hint">정수 주만 사면 남는 돈은 다음 매수에 보탭니다</span>
+              <label for="currency" class="sr">투자 통화</label>
+              <select id="currency" class="field currency">
+                <option value="KRW">원화</option>
+                <option value="USD">달러</option>
+              </select>
             </div>
-            <div class="fee-row">
-              <label for="fee" class="small muted">수수료 <span class="hint block">환전 비용도 여기에</span></label>
-              <div class="with-unit fee"><input id="fee" inputmode="decimal" class="field num" autocomplete="off" aria-describedby="fee-error"><span class="unit" aria-hidden="true">%</span></div>
-            </div>
-            <p class="field-error" id="fee-error" hidden></p>
+            <p class="field-error" id="amount-error" hidden></p>
+            <p class="hint" id="amount-preview"></p>
           </div>
-        </details>
 
-        <div class="run">
-          <button type="submit" class="primary" id="run"><span class="spinner" aria-hidden="true" hidden></span><span id="run-label">계산하기</span></button>
-          <p class="status" id="status" role="status" aria-live="polite"></p>
-        </div>
-      </form>
-    </aside>
+          <details class="advanced" id="advanced">
+            <summary>고급 설정 <span class="muted" id="advanced-summary"></span></summary>
+            <div class="advanced-in">
+              <div class="stack-gap">
+                <span class="small muted" id="mode-label">매수 방식</span>
+                <div class="seg" role="group" aria-labelledby="mode-label" id="mode">
+                  <button type="button" data-fractional="true">소수점 매수</button>
+                  <button type="button" data-fractional="false">정수 주만</button>
+                </div>
+                <span class="hint">정수 주만 사면 남는 돈은 다음 매수에 보탭니다</span>
+              </div>
+              <div class="fee-row">
+                <label for="fee" class="small muted"
+                  >수수료 <span class="hint block">환전 비용도 여기에</span></label
+                >
+                <div class="with-unit fee">
+                  <input
+                    id="fee"
+                    inputmode="decimal"
+                    class="field num"
+                    autocomplete="off"
+                    aria-describedby="fee-error"
+                  /><span class="unit" aria-hidden="true">%</span>
+                </div>
+              </div>
+              <p class="field-error" id="fee-error" hidden></p>
+            </div>
+          </details>
 
-    <main class="results" id="results">
-      <section class="empty" id="empty">
-        <p class="empty-title">조건을 정하고 계산하기를 누르세요</p>
-        <p class="muted">예시로 QQQ·QLD를 5년 동안 매월 1일 200만원씩 산 경우가 채워져 있습니다.</p>
-      </section>
-      <div id="output" hidden></div>
-    </main>
-  </div>
-</body>
+          <div class="run">
+            <button type="submit" class="primary" id="run">
+              <span class="spinner" aria-hidden="true" hidden></span
+              ><span id="run-label">계산하기</span>
+            </button>
+            <p class="status" id="status" role="status" aria-live="polite"></p>
+          </div>
+        </form>
+      </aside>
+
+      <main class="results" id="results">
+        <section class="empty" id="empty">
+          <p class="empty-title">조건을 정하고 계산하기를 누르세요</p>
+          <p class="muted">
+            예시로 QQQ·QLD를 5년 동안 매월 1일 200만원씩 산 경우가 채워져 있습니다.
+          </p>
+        </section>
+        <div id="output" hidden></div>
+      </main>
+    </div>
+  </body>
 </html>

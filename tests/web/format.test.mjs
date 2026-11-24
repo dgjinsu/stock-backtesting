@@ -2,7 +2,17 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { MINUS, fx, krwShort, money, pct, period, price, qty, signedMoney } from "../../web/format.js";
+import {
+  MINUS,
+  fx,
+  krwShort,
+  money,
+  pct,
+  period,
+  price,
+  qty,
+  signedMoney,
+} from "../../web/format.js";
 
 test("pct: 부호와 소수 자리를 붙인다", () => {
   assert.equal(pct(88.19), "+88.19%");
