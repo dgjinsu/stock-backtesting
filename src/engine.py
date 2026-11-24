@@ -609,3 +609,164 @@ def analyze(
         tax=tax,
         profit_after_tax=s.profit - tax,
     )
+
+
+# ---------- v2 전략 (계산 규칙 9-6) ----------
+
+Rule = Literal["none", "ma_dip", "ma_hot", "switch", "lump_sum"]
+RULES: tuple[Rule, ...] = ("none", "ma_dip", "ma_hot", "switch", "lump_sum")
+RULE_MULTIPLIER: dict[str, tuple[float, float]] = {
+    "ma_dip": (2.0, 0.5),  # 종가 < 이평선이면 2, 아니면 0.5
+    "ma_hot": (0.5, 1.0),  # 종가 > 이평선 × 1.2면 0.5, 아니면 1
+}
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyResult:
+    """같은 예산 전략 하나의 결과 (9-6절). 금액은 투자 통화, daily는 그래프용 날마다 평가."""
+
+    rule: Rule
+    value: float
+    invested: float
+    return_pct: float
+    xirr_pct: float | None
+    avg_cost_asset: float | None
+    worst_return_pct: float
+    leftover_cash_invest: float
+    rule_days: int  # 규칙이 걸린 매수일 수 (이평선 아래·과열·쉰 날)
+    daily: list[DailyRow]
+
+
+def _moving_average(series: Series, day: date, n: int) -> float | None:
+    """day까지(그날 포함) n거래일 종가 평균. 시작일 이전 주가도 쓴다. 모자라면 None."""
+    i = bisect_right(series.dates, day)
+    return sum(series.close[i - n : i]) / n if i >= n else None
+
+
+def simulate_rule(
+    asset: Series, fx: Series | None, ref: Series | None, p: Params, rule: Rule, ma_days: int = 200
+) -> StrategyResult:
+    """같은 예산 전략. 계산 규칙 9-6절.
+
+    매수일마다 넣는 돈(A)은 기본 적립과 같고, 살 돈만 규칙대로 정한다. 넣고 안 쓴 돈은 현금(종목 통화)으로
+    쌓였다가 다음 매수일에 쓰인다. 소수점 매수로 계산한다 (9-6 공식). 일시금은 첫 매수일에 A × 매수 횟수.
+    ref는 레버리지 전환의 기준 종목(종가와 이평선을 본다).
+    """
+    _check_params(p)
+    if rule not in RULES:
+        raise ValueError(f"알 수 없는 전략입니다: {rule}")
+    if ma_days < 1:
+        raise ValueError(f"이평선 기간은 1 이상이어야 합니다: {ma_days}")
+    if rule == "switch" and ref is None:
+        raise ValueError("레버리지 전환에는 기준 종목이 필요합니다")
+    if (fx is None) != (asset.currency == p.currency):
+        raise ValueError(
+            f"{asset.symbol}: 종목 통화 {asset.currency}와 투자 통화 {p.currency}에 맞는 환율이 필요합니다"
+        )
+    picked = buy_days(asset.dates, p.start, p.end, p.freq, p.anchor)
+    if not picked:
+        raise EngineError(f"{asset.symbol}: 기간 안에 매수일이 없습니다")
+    buy_set = set(picked)
+    keep = 1 - p.fee
+    shares = cash = cost = invested = 0.0
+    rule_days = 0
+    flows: list[tuple[date, float]] = []
+    daily: list[DailyRow] = []
+    for i in range(_asof_index(asset.dates, picked[0]), _asof_index(asset.dates, p.end) + 1):
+        day, price = asset.dates[i], asset.close[i]
+        fx_rate = _rate_on(fx, day)
+        if day in buy_set:
+            if rule == "lump_sum":
+                put = p.amount * len(picked) if day == picked[0] else 0.0
+                spend = put * keep / fx_rate
+            else:
+                put = p.amount
+                unit = put * keep / fx_rate
+                cash += unit
+                spend = min(cash, unit)  # 기본 적립, 이평선이 모자라면 배수 1
+                if rule in RULE_MULTIPLIER:
+                    avg = _moving_average(asset, day, ma_days)
+                    if avg is not None:
+                        hit = price < avg if rule == "ma_dip" else price > avg * 1.2
+                        rule_days += hit
+                        spend = min(cash, RULE_MULTIPLIER[rule][0 if hit else 1] * unit)
+                elif rule == "switch" and ref is not None:
+                    avg = _moving_average(ref, day, ma_days)
+                    if avg is not None:
+                        on = ref.close[_asof_index(ref.dates, day)] > avg
+                        rule_days += not on
+                        spend = cash if on else 0.0
+                cash -= spend
+            if put:
+                invested += put
+                flows.append((day, -put))
+            shares += spend / price
+            cost += spend / keep
+        value = (shares * price + cash) * fx_rate
+        daily.append(
+            DailyRow(
+                date=day,
+                price=price,
+                fx=fx_rate,
+                value=value,
+                invested=invested,
+                return_pct=(value / invested - 1) * 100,
+                avg_cost_asset=cost / shares if shares > 0 else None,
+            )
+        )
+    eval_price = asset.close[_asof_index(asset.dates, p.end)]
+    eval_fx = _rate_on(fx, p.end)
+    value = (shares * eval_price + cash) * eval_fx
+    total = p.amount * len(picked)
+    flows.append((p.end, value))
+    annual_rate = xirr(flows)
+    # 마지막 거래일은 평가 환율로 다시 평가한다 (5절 끝, simulate와 같다)
+    daily[-1] = replace(daily[-1], fx=eval_fx, value=value, return_pct=(value / total - 1) * 100)
+    return StrategyResult(
+        rule=rule,
+        value=value,
+        invested=total,
+        return_pct=(value / total - 1) * 100,
+        xirr_pct=None if annual_rate is None else annual_rate * 100,
+        avg_cost_asset=cost / shares if shares > 0 else None,
+        worst_return_pct=min(row.return_pct for row in daily),
+        leftover_cash_invest=cash * eval_fx,
+        rule_days=rule_days,
+        daily=daily,
+    )
+
+
+# ---------- v2 바꿔 보기 (계산 규칙 9-7) ----------
+
+
+def anchor_sweep(asset: Series, fx: Series | None, p: Params) -> dict[int, float | None]:
+    """매월 기준일을 1~28일과 말일(31)로 바꿨을 때의 평단가(종목 통화). 9-7절.
+
+    주기와 상관없이 매월로 계산한다. 그 기준일로는 기간 안에 매수일이 없으면 None이다.
+    """
+    out: dict[int, float | None] = {}
+    for anchor in [*range(1, 29), 31]:
+        q = replace(p, freq="monthly", anchor=anchor)
+        if not buy_days(asset.dates, q.start, q.end, q.freq, q.anchor):
+            out[anchor] = None
+            continue
+        out[anchor] = simulate(asset, fx, q).summary.avg_cost_asset
+    return out
+
+
+def start_sweep(asset: Series, fx: Series | None, p: Params) -> dict[str, float]:
+    """시작일을 각 달 1일로 바꿔 끝날짜까지 계산한 수익률. 끝날짜가 든 달의 6개월 전 달까지. 9-7절.
+
+    상장 달보다 앞선 달은 뺀다 (상장 달은 남긴다). 그 달부터 매수일이 없으면 뺀다. 그 밖의 오류(환율 없음 등)는
+    그대로 올린다.
+    """
+    listed = asset.dates[0].year * 12 + asset.dates[0].month - 1
+    first_index = max(p.start.year * 12 + p.start.month - 1, listed)
+    last = p.end.year * 12 + p.end.month - 1 - 6
+    out: dict[str, float] = {}
+    for index in range(first_index, last + 1):
+        first = date(index // 12, index % 12 + 1, 1)
+        if first < p.start or not buy_days(asset.dates, first, p.end, p.freq, p.anchor):
+            continue
+        out[f"{first:%Y-%m}"] = simulate(asset, fx, replace(p, start=first)).summary.return_pct
+    return out
