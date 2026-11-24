@@ -346,6 +346,7 @@ def test_build_chart_downsampling_keeps_first_last_and_extremes() -> None:
 # ---------- v2 분석: 계산 규칙 9-1 ~ 9-5 ----------
 
 V2 = EXPECTED["v2"]
+CASE_IDS_LIST = [CASE_IDS[case["name"]] for case in EXPECTED["cases"]]
 
 
 def _v2_params(**changes: Any) -> Params:
@@ -569,7 +570,7 @@ def test_simulate_rule_moving_average_short_history_uses_multiplier_one() -> Non
     assert dip.value == pytest.approx(basic.summary.value, abs=1e-6)
 
 
-def test_simulate_rule_switch_requires_reference() -> None:
+def test_simulate_rule_switch_without_reference_raises_value_error() -> None:
     asset, fx = load_series("QLD"), load_series("USDKRW=X")
     with pytest.raises(ValueError, match="기준 종목"):
         simulate_rule(asset, fx, None, _v2_params(), "switch", ma_days=200)
@@ -589,3 +590,67 @@ def test_start_sweep_matches_v2_reference() -> None:
     assert list(got) == list(V2["start_sweep"])
     for month, ret in V2["start_sweep"].items():
         assert got[month] == pytest.approx(ret, abs=0.01)
+
+
+@pytest.mark.parametrize("case", EXPECTED["cases"][2:6], ids=CASE_IDS_LIST[2:6])
+def test_simulate_rule_none_matches_v1_cases_with_fee_and_other_frequencies(
+    case: dict[str, Any],
+) -> None:
+    """기본 적립 전략은 v1 기준값(수수료 0.25%, 매주, 매일, 달러 투자)과 같다 (9-6 공식의 f, 주기)."""
+    params = _params(case)
+    for symbol, want in case["results"].items():
+        asset = load_series(symbol)
+        fx = (
+            None
+            if asset.currency == params.currency
+            else load_series(f"{asset.currency}{params.currency}=X")
+        )
+        got = simulate_rule(asset, fx, None, params, "none")
+        assert got.value == pytest.approx(want["value"], abs=1)
+        assert got.return_pct == pytest.approx(want["return_pct"], abs=0.01)
+        assert got.avg_cost_asset == pytest.approx(want["avg_cost_asset"], abs=0.01)
+
+
+def test_simulate_rule_unknown_rule_raises_value_error() -> None:
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    with pytest.raises(ValueError, match="알 수 없는 전략"):
+        simulate_rule(asset, fx, None, _v2_params(), "dca_x", ma_days=200)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize("ma_days", [0, -5], ids=["zero", "negative"])
+def test_simulate_rule_non_positive_ma_days_raises_value_error(ma_days: int) -> None:
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    with pytest.raises(ValueError, match="이평선 기간"):
+        simulate_rule(asset, fx, None, _v2_params(), "ma_dip", ma_days=ma_days)
+
+
+def test_simulate_rule_missing_fx_raises_value_error() -> None:
+    asset = load_series("QLD")
+    with pytest.raises(ValueError, match="환율"):
+        simulate_rule(asset, None, None, _v2_params(), "none")
+
+
+def test_start_sweep_skips_months_before_listing() -> None:
+    """9-7: 상장 달보다 앞선 달은 빼고 상장 달은 남긴다."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    cut = next(i for i, d in enumerate(asset.dates) if d >= date(2023, 3, 1))
+    late = Series("LATE", asset.currency, asset.dates[cut:], asset.close[cut:])
+    got = start_sweep(late, fx, _v2_params(start=date(2022, 1, 1)))
+    assert min(got) == "2023-03"
+
+
+def test_start_sweep_missing_fx_raises_engine_error() -> None:
+    """환율이 모자라면 조용히 건너뛰지 않고 오류를 올린다."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    cut = next(i for i, d in enumerate(fx.dates) if d >= date(2024, 1, 1))
+    short_fx = Series(fx.symbol, fx.currency, fx.dates[cut:], fx.close[cut:])
+    with pytest.raises(EngineError, match="환율"):
+        start_sweep(asset, short_fx, _v2_params())
+
+
+def test_anchor_sweep_anchor_without_buy_day_is_none() -> None:
+    """기간이 짧아 그 기준일로는 매수일이 없으면 None (다른 기준일은 계산한다)."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    got = anchor_sweep(asset, fx, _v2_params(start=date(2026, 10, 5), end=date(2026, 10, 20)))
+    assert got[10] is not None
+    assert got[25] is None

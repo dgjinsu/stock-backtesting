@@ -655,6 +655,8 @@ def simulate_rule(
     _check_params(p)
     if rule not in RULES:
         raise ValueError(f"알 수 없는 전략입니다: {rule}")
+    if ma_days < 1:
+        raise ValueError(f"이평선 기간은 1 이상이어야 합니다: {ma_days}")
     if rule == "switch" and ref is None:
         raise ValueError("레버리지 전환에는 기준 종목이 필요합니다")
     if (fx is None) != (asset.currency == p.currency):
@@ -738,27 +740,33 @@ def simulate_rule(
 
 
 def anchor_sweep(asset: Series, fx: Series | None, p: Params) -> dict[int, float | None]:
-    """매월 기준일을 1~28일과 말일(31)로 바꿨을 때의 평단가(종목 통화). 9-7절."""
+    """매월 기준일을 1~28일과 말일(31)로 바꿨을 때의 평단가(종목 통화). 9-7절.
+
+    주기와 상관없이 매월로 계산한다. 그 기준일로는 기간 안에 매수일이 없으면 None이다.
+    """
     out: dict[int, float | None] = {}
     for anchor in [*range(1, 29), 31]:
-        result = simulate(asset, fx, replace(p, freq="monthly", anchor=anchor))
-        out[anchor] = result.summary.avg_cost_asset
+        q = replace(p, freq="monthly", anchor=anchor)
+        if not buy_days(asset.dates, q.start, q.end, q.freq, q.anchor):
+            out[anchor] = None
+            continue
+        out[anchor] = simulate(asset, fx, q).summary.avg_cost_asset
     return out
 
 
 def start_sweep(asset: Series, fx: Series | None, p: Params) -> dict[str, float]:
     """시작일을 각 달 1일로 바꿔 끝날짜까지 계산한 수익률. 끝날짜가 든 달의 6개월 전 달까지. 9-7절.
 
-    매수일이 없는 달(상장 전)은 건너뛴다.
+    상장 달보다 앞선 달은 뺀다 (상장 달은 남긴다). 그 달부터 매수일이 없으면 뺀다. 그 밖의 오류(환율 없음 등)는
+    그대로 올린다.
     """
+    listed = asset.dates[0].year * 12 + asset.dates[0].month - 1
+    first_index = max(p.start.year * 12 + p.start.month - 1, listed)
     last = p.end.year * 12 + p.end.month - 1 - 6
     out: dict[str, float] = {}
-    for index in range(p.start.year * 12 + p.start.month - 1, last + 1):
+    for index in range(first_index, last + 1):
         first = date(index // 12, index % 12 + 1, 1)
-        if first < p.start:
+        if first < p.start or not buy_days(asset.dates, first, p.end, p.freq, p.anchor):
             continue
-        try:
-            out[f"{first:%Y-%m}"] = simulate(asset, fx, replace(p, start=first)).summary.return_pct
-        except EngineError:
-            continue
+        out[f"{first:%Y-%m}"] = simulate(asset, fx, replace(p, start=first)).summary.return_pct
     return out
