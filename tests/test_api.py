@@ -131,7 +131,9 @@ def test_backtest_unknown_symbol_fails_alone(api: tuple[TestClient, FakeYahoo]) 
     assert list(body["chart"]["series"]) == ["QLD"]
 
 
-def test_backtest_all_symbols_failing_returns_only_errors(api: tuple[TestClient, FakeYahoo]) -> None:
+def test_backtest_all_symbols_failing_returns_only_errors(
+    api: tuple[TestClient, FakeYahoo],
+) -> None:
     client, _ = api
     response = _post(client, symbols=["XXXX"])
     assert response.status_code == 200
@@ -183,7 +185,9 @@ def test_backtest_bad_input_returns_422_with_korean_message(
     assert yahoo.calls == []
 
 
-def test_backtest_weekly_without_anchor_defaults_to_monday(api: tuple[TestClient, FakeYahoo]) -> None:
+def test_backtest_weekly_without_anchor_defaults_to_monday(
+    api: tuple[TestClient, FakeYahoo],
+) -> None:
     client, _ = api
     body = _post(client, symbols=["QLD"], freq="weekly", anchor=None, amount=500_000).json()
     assert _result(body, "QLD")["summary"]["first_buy"] == "2021-11-29"
@@ -195,7 +199,14 @@ def test_backtest_weekly_without_anchor_defaults_to_monday(api: tuple[TestClient
 def test_search_returns_hits(api: tuple[TestClient, FakeYahoo]) -> None:
     client, yahoo = api
     yahoo.search_payload = {
-        "quotes": [{"symbol": "QLD", "shortname": "ProShares Ultra QQQ", "exchDisp": "NYSEArca", "quoteType": "ETF"}]
+        "quotes": [
+            {
+                "symbol": "QLD",
+                "shortname": "ProShares Ultra QQQ",
+                "exchDisp": "NYSEArca",
+                "quoteType": "ETF",
+            }
+        ]
     }
     response = client.get("/api/search", params={"q": "qld"})
     assert response.status_code == 200

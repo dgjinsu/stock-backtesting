@@ -115,6 +115,11 @@ class Summary:
     peak_value: Extreme
     listed_after_start: bool
 
+    @property
+    def from_peak_pct(self) -> float:
+        """지금 평가금이 평가금 최고점보다 몇 % 낮은지 (0 이하). 기능 명세 F-06."""
+        return (self.value / self.peak_value.value - 1) * 100 if self.peak_value.value > 0 else 0.0
+
 
 @dataclass(frozen=True, slots=True)
 class SimResult:
