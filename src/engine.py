@@ -520,9 +520,11 @@ def _longest_run(rows: Sequence[DailyRow], flags: Sequence[bool]) -> Underwater 
 def _months(asset: Series, fx: Series | None, first_buy: date, end: date) -> list[MonthResult]:
     """9-3절: 월말 값 = 그 달 마지막 거래일 종가 × 그날 환율. 첫 매수 달부터 달력상 끝난 달까지.
 
-    첫 매수 달의 지난달부터만 본다 (종목 이력이 환율 이력보다 길 수 있다). 환율이 없는 날은 건너뛴다.
+    첫 매수 달 전의 마지막 거래일부터만 본다 (종목 이력이 환율 이력보다 길 수 있다). 그 앞 달에
+    거래가 없었으면 그보다 앞의 월말과 비교한다 (두 달치 변화). 환율이 없는 날은 건너뛴다.
     """
-    from_day = (first_buy.replace(day=1) - timedelta(days=1)).replace(day=1)
+    before = _asof_index(asset.dates, first_buy.replace(day=1) - timedelta(days=1))
+    from_day = asset.dates[max(before, 0)]
     month_end: dict[tuple[int, int], float] = {}
     for day, close in zip(asset.dates, asset.close, strict=True):
         if from_day <= day <= end and (fx is None or _asof_index(fx.dates, day) >= 0):
@@ -563,8 +565,8 @@ def analyze(
     엔진은 투자 통화를 모르므로 기본값을 두지 않는다. 0 이하면 ValueError.
     양도세는 원화로 계산해 투자 통화로 돌려준다. 종목 통화가 원화(한국 종목)면 0이다.
     """
-    if not tax_fx > 0:
-        raise ValueError(f"tax_fx는 0보다 커야 합니다: {tax_fx}")
+    if not (tax_fx > 0 and math.isfinite(tax_fx)):
+        raise ValueError(f"tax_fx는 0보다 큰 유한한 값이어야 합니다: {tax_fx}")
     rows, s = result.daily, result.summary
     # 9-1 흔들림
     peak, drawdown = 0.0, None

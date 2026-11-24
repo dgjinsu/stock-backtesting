@@ -434,7 +434,7 @@ def test_analyze_dollar_investment_tax_uses_given_won_rate() -> None:
     assert a.fx_effect == 0
 
 
-@pytest.mark.parametrize("tax_fx", [0.0, -1.0], ids=["zero", "negative"])
+@pytest.mark.parametrize("tax_fx", [0.0, -1.0, float("inf")], ids=["zero", "negative", "inf"])
 def test_analyze_non_positive_tax_fx_raises_value_error(tax_fx: float) -> None:
     asset = _rising()
     params = Params(date(2024, 1, 1), date(2024, 1, 10), "daily", None, 1000.0, "KRW")
@@ -459,6 +459,19 @@ def test_analyze_asset_history_longer_than_fx_history_skips_days_without_fx() ->
     params = _v2_params()
     a = analyze(simulate(asset, short_fx, params), asset, short_fx, params.end, tax_fx=1.0)
     assert len(a.months) == V2["metrics"]["months"]["count"]
+
+
+def test_analyze_first_month_without_trades_in_previous_month_spans_two_months() -> None:
+    """9-3: 첫 매수 달 바로 전 달에 거래가 없으면(거래정지) 그 앞 월말과 비교해 첫 달이 빠지지 않는다."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    keep = [i for i, d in enumerate(asset.dates) if (d.year, d.month) != (2023, 3)]
+    halted = Series(
+        "QLD", asset.currency, [asset.dates[i] for i in keep], [asset.close[i] for i in keep]
+    )
+    params = _v2_params(start=date(2023, 4, 1))
+    a = analyze(simulate(halted, fx, params), halted, fx, params.end, tax_fx=1.0)
+    assert a.months[0].month == "2023-04"
+    assert len(a.months) == 43  # 2023-04 ~ 2026-10
 
 
 def test_analyze_year_without_previous_year_data_has_no_price_change() -> None:
