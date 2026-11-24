@@ -11,10 +11,14 @@ from src.engine import (
     EngineError,
     Params,
     Series,
+    StrategyResult,
     analyze,
+    anchor_sweep,
     build_chart,
     buy_days,
     simulate,
+    simulate_rule,
+    start_sweep,
     xirr,
 )
 from tests.helpers import CASE_IDS, load_expected, load_series
@@ -520,3 +524,68 @@ def test_analyze_longest_underwater_tie_keeps_the_first() -> None:
     assert a.longest_underwater is not None
     assert (a.longest_underwater.days, a.longest_underwater.start) == (2, dates[1])
     assert a.longest_underwater.recovered == dates[3]
+
+
+# ---------- v2 전략과 바꿔 보기: 계산 규칙 9-6, 9-7 ----------
+
+RULES = ["none", "ma_dip", "ma_hot", "switch", "lump_sum"]
+
+
+def _strategy(rule: str) -> StrategyResult:
+    asset, fx, ref = load_series("QLD"), load_series("USDKRW=X"), load_series(V2["switch_ref"])
+    return simulate_rule(asset, fx, ref, _v2_params(), rule, ma_days=V2["ma_days"])
+
+
+@pytest.mark.parametrize("rule", RULES)
+def test_simulate_rule_matches_v2_reference(rule: str) -> None:
+    got, want = _strategy(rule), V2["strategies"][rule]
+    assert got.value == pytest.approx(want["value"], abs=1)
+    assert got.return_pct == pytest.approx(want["return_pct"], abs=0.01)
+    assert got.xirr_pct == pytest.approx(want["xirr_pct"], abs=0.01)
+    assert got.avg_cost_asset == pytest.approx(want["avg_cost_asset"], abs=0.01)
+    assert got.worst_return_pct == pytest.approx(want["worst_return_pct"], abs=0.01)
+    assert got.leftover_cash_invest == pytest.approx(want["leftover_cash_invest"], abs=1)
+    assert got.rule_days == want["rule_days"]
+
+
+def test_simulate_rule_none_equals_simulate() -> None:
+    """기본 적립 전략은 simulate와 같은 평가금과 날마다 값을 낸다."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    basic = simulate(asset, fx, _v2_params())
+    got = _strategy("none")
+    assert got.value == pytest.approx(basic.summary.value, abs=1e-6)
+    assert [r.date for r in got.daily] == [r.date for r in basic.daily]
+    assert got.daily[-1].value == pytest.approx(basic.daily[-1].value, abs=1e-6)
+
+
+def test_simulate_rule_moving_average_short_history_uses_multiplier_one() -> None:
+    """9-6: 상장 후 n거래일이 안 되면 배수 1 (기본 적립과 같다)."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    young = Series("YOUNG", asset.currency, asset.dates[-150:], asset.close[-150:])
+    params = _v2_params(start=young.dates[0])
+    dip = simulate_rule(young, fx, None, params, "ma_dip", ma_days=200)
+    basic = simulate(young, fx, params)
+    assert dip.rule_days == 0
+    assert dip.value == pytest.approx(basic.summary.value, abs=1e-6)
+
+
+def test_simulate_rule_switch_requires_reference() -> None:
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    with pytest.raises(ValueError, match="기준 종목"):
+        simulate_rule(asset, fx, None, _v2_params(), "switch", ma_days=200)
+
+
+def test_anchor_sweep_matches_v2_reference() -> None:
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    got = anchor_sweep(asset, fx, _v2_params())
+    assert list(got) == [int(a) for a in V2["anchor_sweep"]]
+    for anchor, avg in V2["anchor_sweep"].items():
+        assert got[int(anchor)] == pytest.approx(avg, abs=0.01)
+
+
+def test_start_sweep_matches_v2_reference() -> None:
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    got = start_sweep(asset, fx, _v2_params())
+    assert list(got) == list(V2["start_sweep"])
+    for month, ret in V2["start_sweep"].items():
+        assert got[month] == pytest.approx(ret, abs=0.01)
