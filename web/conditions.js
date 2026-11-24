@@ -13,13 +13,19 @@ export function todayKst(now = Date.now()) {
   return new Date(now + 9 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
+/** 달력에 있는 날짜인지 (YYYY-MM-DD). 2026-02-31, 2020-13-45는 아니다. */
+export function isDate(iso) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso ?? "")) return false;
+  const [y, m, d] = iso.split("-").map(Number);
+  const date = new Date(Date.UTC(y, m - 1, d));
+  return date.getUTCFullYear() === y && date.getUTCMonth() === m - 1 && date.getUTCDate() === d;
+}
+
 /** 끝날짜에서 years년 전의 다음 날. 5년이면 2026-11-24 → 2021-11-25. 2월 29일은 28일로 본다.
  * 날짜가 비었거나 잘못되면 null. */
 export function shiftYears(iso, years) {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? "");
-  if (!match) return null;
-  const [y, m, d] = match.slice(1).map(Number);
-  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
+  if (!isDate(iso)) return null;
+  const [y, m, d] = iso.split("-").map(Number);
   const lastDay = new Date(Date.UTC(y - years, m, 0)).getUTCDate();
   return new Date(Date.UTC(y - years, m - 1, Math.min(d, lastDay) + 1)).toISOString().slice(0, 10);
 }
@@ -50,7 +56,6 @@ export function toQuery(cond) {
 /** 주소 쿼리에서 조건을 읽는다. 잘못된 값은 버리고 읽은 항목만 돌려준다. */
 export function readQuery(search) {
   const params = new URLSearchParams(search);
-  const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(v ?? "");
   const codes = (params.get("s") ?? "")
     .split(",")
     .map((c) => c.trim().toUpperCase())

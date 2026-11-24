@@ -78,6 +78,9 @@ function validate() {
 
 function showErrors(clientErrors) {
   const errors = { ...state.serverErrors, ...clientErrors };
+  for (const id of ["month-day", "week-day", ...ERROR_BOXES.map((b) => b.input())]) {
+    $(id).removeAttribute("aria-invalid");
+  }
   for (const { box, fields, input } of ERROR_BOXES) {
     const error = fields.map((f) => errors[f]).find(Boolean);
     let message = error;
@@ -86,7 +89,6 @@ function showErrors(clientErrors) {
     }
     $(box).textContent = message ?? "";
     $(box).hidden = !message;
-    for (const id of new Set(["month-day", "week-day", input()])) $(id).removeAttribute("aria-invalid");
     if (error) $(input()).setAttribute("aria-invalid", "true");
   }
   // 칸이 없는 항목의 오류는 버튼 아래 한 줄로. 고치면 지운다.
@@ -219,7 +221,7 @@ function removeSymbol(code) {
   changed();
 }
 
-const search = { timer: 0, abort: null, options: [], active: -1 };
+const search = { timer: 0, blurTimer: 0, abort: null, options: [], active: -1 };
 
 /** 목록을 닫고, 기다리는 검색(0.3초 타이머)과 진행 중인 요청도 취소한다. */
 function closeList() {
@@ -347,7 +349,11 @@ function wireSearch() {
       closeList();
     }
   });
-  input.addEventListener("blur", () => setTimeout(closeList, 150));
+  // 목록을 누르는 동안(mousedown) 닫히지 않게 조금 늦게 닫는다. 그사이 돌아오면 닫지 않는다.
+  input.addEventListener("blur", () => {
+    search.blurTimer = setTimeout(closeList, 150);
+  });
+  input.addEventListener("focus", () => clearTimeout(search.blurTimer));
 }
 
 // ---------- 계산하기 ----------
@@ -418,7 +424,9 @@ async function run() {
     renderFailure(`서버가 계산하지 못했습니다 (HTTP ${response.status}). 잠시 뒤 다시 시도해 주세요.`);
     return;
   }
-  state.badSymbols = new Map(json.errors.map((e) => [e.symbol, e.message]));
+  // 계산 중에 뺀 종목의 오류는 남기지 않는다 (지울 줄이 없다)
+  const listed = new Set(state.symbols.map((s) => s.code));
+  state.badSymbols = new Map(json.errors.filter((e) => listed.has(e.symbol)).map((e) => [e.symbol, e.message]));
   for (const result of json.results) {
     const entry = state.symbols.find((s) => s.code === result.symbol);
     if (entry) entry.name = result.name;
@@ -435,7 +443,9 @@ async function run() {
     return;
   }
   const failed = json.errors.length ? `, ${json.errors.length}개 실패` : "";
-  $("status").textContent = `계산했습니다: ${json.results.length}개 종목${failed}`;
+  $("status").textContent = json.results.length
+    ? `계산했습니다: ${json.results.length}개 종목${failed}`
+    : `계산하지 못했습니다: ${json.errors.length}개 종목 모두 실패`;
 }
 
 // ---------- 결과 (F-06, F-10) ----------

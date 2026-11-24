@@ -6,6 +6,7 @@ import {
   MAX_SYMBOLS,
   anchorOf,
   estimateBuys,
+  isDate,
   readQuery,
   shiftYears,
   toQuery,
@@ -40,6 +41,7 @@ test("shiftYears: N년 전의 다음 날", () => {
 test("shiftYears: 날짜가 비었거나 잘못되면 null", () => {
   assert.equal(shiftYears("", 5), null);
   assert.equal(shiftYears("2026-13-01", 1), null);
+  assert.equal(shiftYears("2026-02-31", 1), null);
   assert.equal(shiftYears(undefined, 1), null);
 });
 
@@ -92,6 +94,18 @@ test("toQuery: 특수 문자가 든 종목 코드는 인코딩한다", () => {
 test("readQuery: 잘못된 값은 버린다", () => {
   const found = readQuery("?s=qqq,../etc,QQQ,SPY&from=2021-1-1&to=x&freq=yearly&day=40&amt=-5&cur=JPY&fee=20");
   assert.deepEqual(found, { codes: ["QQQ", "SPY"] });
+});
+
+test("isDate: 달력에 있는 날짜만", () => {
+  assert.equal(isDate("2024-02-29"), true);
+  assert.equal(isDate("2026-02-29"), false);
+  assert.equal(isDate("2020-13-45"), false);
+  assert.equal(isDate("2026-1-1"), false);
+  assert.equal(isDate(null), false);
+});
+
+test("readQuery: 달력에 없는 날짜는 버린다", () => {
+  assert.deepEqual(readQuery("?s=QQQ&from=2026-02-31&to=2020-13-45"), { codes: ["QQQ"] });
 });
 
 test("readQuery: 범위를 벗어난 요일·날짜는 버린다", () => {
