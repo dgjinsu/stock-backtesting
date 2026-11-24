@@ -11,43 +11,10 @@ import httpx
 import pytest
 
 from src.market import Market, MarketError, PriceHistory, SearchHit
-from tests.helpers import YAHOO, load_series
+from tests.helpers import FakeYahoo, load_series
 
 T0 = 1_795_500_000.0  # 2026-11-24 무렵의 유닉스초
 SIX_HOURS = 6 * 3600
-
-Handler = Callable[[httpx.Request], Awaitable[httpx.Response]]
-
-
-class FakeYahoo:
-    """저장한 fixture로 답하는 가짜 Yahoo. 부른 횟수와 동시에 처리 중인 요청 수를 센다."""
-
-    def __init__(self) -> None:
-        self.calls: list[str] = []
-        self.in_flight = 0
-        self.max_in_flight = 0
-        self.fail = False
-        self.search_payload: dict[str, Any] = {"quotes": []}
-
-    async def __call__(self, request: httpx.Request) -> httpx.Response:
-        self.calls.append(request.url.path)
-        self.in_flight += 1
-        self.max_in_flight = max(self.max_in_flight, self.in_flight)
-        try:
-            await asyncio.sleep(0.01)
-            if self.fail:
-                return httpx.Response(500, json={"error": "down"})
-            if request.url.path.startswith("/v1/finance/search"):
-                return httpx.Response(200, json=self.search_payload)
-            symbol = request.url.path.rsplit("/", 1)[-1]
-            fixture = YAHOO / f"{symbol}.json"
-            if not fixture.exists():
-                return httpx.Response(
-                    404, json={"chart": {"result": None, "error": {"code": "Not Found"}}}
-                )
-            return httpx.Response(200, content=fixture.read_bytes())
-        finally:
-            self.in_flight -= 1
 
 
 class Clock:
@@ -284,6 +251,101 @@ def test_search_blank_query_returns_nothing_without_network(tmp_path: Path) -> N
 def test_search_failure_raises_market_error(tmp_path: Path) -> None:
     async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> list[SearchHit]:
         yahoo.fail = True
+        return await market.search("qld")
+
+    with pytest.raises(MarketError, match="검색"):
+        _run(tmp_path, scenario)
+
+
+# ---------- 응답 모양이 다르거나 비었을 때 (상세 설계 1·2절) ----------
+
+BROKEN_CHARTS = [
+    [],
+    {"chart": "oops"},
+    {"chart": {"result": [{"meta": {}, "timestamp": [1], "indicators": {"quote": [None]}}]}},
+    {
+        "chart": {
+            "result": [
+                {"meta": {}, "timestamp": [1, 2], "indicators": {"quote": [{"close": [1.0]}]}}
+            ]
+        }
+    },
+]
+
+
+@pytest.mark.parametrize(
+    "payload", BROKEN_CHARTS, ids=["list", "chart-not-object", "quote-null", "length-mismatch"]
+)
+def test_get_series_broken_response_with_old_cache_returns_stale(
+    tmp_path: Path, payload: Any
+) -> None:
+    async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> PriceHistory:
+        await market.get_series("QLD")
+        clock.now += SIX_HOURS + 1
+        yahoo.chart_override = payload
+        return await market.get_series("QLD")
+
+    assert _run(tmp_path, scenario).stale is True
+
+
+@pytest.mark.parametrize(
+    "payload", BROKEN_CHARTS[:3], ids=["list", "chart-not-object", "quote-null"]
+)
+def test_get_series_broken_response_without_cache_raises_market_error(
+    tmp_path: Path, payload: Any
+) -> None:
+    async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> PriceHistory:
+        yahoo.chart_override = payload
+        return await market.get_series("QLD")
+
+    with pytest.raises(MarketError):
+        _run(tmp_path, scenario)
+
+
+def test_get_series_empty_result_with_200_is_not_found(tmp_path: Path) -> None:
+    async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> PriceHistory:
+        yahoo.chart_override = {"chart": {"result": [], "error": None}}
+        return await market.get_series("ZZZZ")
+
+    with pytest.raises(MarketError, match="'ZZZZ' 종목을 찾을 수 없습니다"):
+        _run(tmp_path, scenario)
+
+
+def test_get_series_all_null_closes_raises_market_error(tmp_path: Path) -> None:
+    async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> PriceHistory:
+        yahoo.chart_override = {
+            "chart": {
+                "result": [
+                    {
+                        "meta": {"currency": "USD", "gmtoffset": 0},
+                        "timestamp": [1_700_000_000, 1_700_086_400],
+                        "indicators": {"quote": [{"close": [None, None]}]},
+                    }
+                ]
+            }
+        }
+        return await market.get_series("NULLS")
+
+    with pytest.raises(MarketError, match="가격 데이터가 없습니다"):
+        _run(tmp_path, scenario)
+
+
+def test_get_series_not_found_later_with_cache_returns_stale(tmp_path: Path) -> None:
+    async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> PriceHistory:
+        await market.get_series("QLD")
+        clock.now += SIX_HOURS + 1
+        yahoo.missing.add("QLD")
+        return await market.get_series("QLD")
+
+    assert _run(tmp_path, scenario).stale is True
+
+
+@pytest.mark.parametrize(
+    "payload", [[], {"quotes": [None]}, {"quotes": "x"}], ids=["list", "null-quote", "quotes-text"]
+)
+def test_search_broken_response_raises_market_error(tmp_path: Path, payload: Any) -> None:
+    async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> list[SearchHit]:
+        yahoo.search_payload = payload
         return await market.search("qld")
 
     with pytest.raises(MarketError, match="검색"):

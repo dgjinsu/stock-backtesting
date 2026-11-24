@@ -1,10 +1,13 @@
-"""테스트 공통 도우미: 기준값, fixture 읽기, 사례 id."""
+"""테스트 공통 도우미: 기준값, fixture 읽기, 사례 id, 가짜 Yahoo."""
 
+import asyncio
 import json
 from datetime import UTC, date, datetime, timedelta
 from functools import cache
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from src.engine import Series
 
@@ -53,3 +56,42 @@ def load_series(symbol: str) -> Series:
         dates.append(day)
         close.append(price)
     return Series(symbol=symbol, currency=result["meta"]["currency"], dates=dates, close=close)
+
+
+class FakeYahoo:
+    """저장한 fixture로 답하는 가짜 Yahoo (httpx.MockTransport의 handler).
+
+    부른 경로와 동시에 처리 중인 요청 수를 센다. fail이면 500, fixture가 없거나 missing에
+    넣은 종목은 404, chart_override가 있으면 차트 요청에 그 JSON을 200으로 돌려준다.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+        self.in_flight = 0
+        self.max_in_flight = 0
+        self.fail = False
+        self.missing: set[str] = set()
+        self.chart_override: Any = None
+        self.search_payload: Any = {"quotes": []}
+
+    async def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.calls.append(request.url.path)
+        self.in_flight += 1
+        self.max_in_flight = max(self.max_in_flight, self.in_flight)
+        try:
+            await asyncio.sleep(0.01)
+            if self.fail:
+                return httpx.Response(500, json={"error": "down"})
+            if request.url.path.startswith("/v1/finance/search"):
+                return httpx.Response(200, json=self.search_payload)
+            if self.chart_override is not None:
+                return httpx.Response(200, json=self.chart_override)
+            symbol = request.url.path.rsplit("/", 1)[-1]
+            fixture = YAHOO / f"{symbol}.json"
+            if symbol in self.missing or not fixture.exists():
+                return httpx.Response(
+                    404, json={"chart": {"result": None, "error": {"code": "Not Found"}}}
+                )
+            return httpx.Response(200, content=fixture.read_bytes())
+        finally:
+            self.in_flight -= 1

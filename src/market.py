@@ -28,7 +28,7 @@ SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9.\-=^]{1,20}$")
 SEARCH_TYPES = {"EQUITY", "ETF", "INDEX", "MUTUALFUND", "CRYPTOCURRENCY"}
 DAY_SHIFT = timedelta(hours=3)  # 서머타임으로 1시간 어긋나도 날짜가 안 바뀌게 (계산 규칙 1절)
 # 받기 실패로 보는 예외: 네트워크·HTTP 상태(httpx), 깨진 JSON·예상과 다른 응답 모양
-_FETCH_ERRORS = (httpx.HTTPError, ValueError, KeyError, TypeError)
+_FETCH_ERRORS = (httpx.HTTPError, ValueError, KeyError, TypeError, AttributeError, IndexError)
 
 
 class MarketError(Exception):
@@ -64,7 +64,7 @@ class SearchHit:
     type: str
 
 
-def normalize_symbol(symbol: str) -> str:
+def _normalize_symbol(symbol: str) -> str:
     """종목 코드를 대문자로 바꾸고 형식을 검사한다. 파일 이름으로 써도 안전한 글자만 받는다."""
     cleaned = symbol.strip().upper()
     if not SYMBOL_PATTERN.fullmatch(cleaned):
@@ -76,7 +76,7 @@ def _local_date(timestamp: int, offset_s: int) -> date:
     return (datetime.fromtimestamp(timestamp, UTC) + timedelta(seconds=offset_s) + DAY_SHIFT).date()
 
 
-def parse_chart(symbol: str, payload: dict[str, Any], fetched_at: int) -> PriceHistory:
+def _parse_chart(symbol: str, payload: dict[str, Any], fetched_at: int) -> PriceHistory:
     """Yahoo chart 응답을 PriceHistory로 바꾼다. null 종가는 건너뛰고, 같은 날이 두 번이면 뒤의 값."""
     chart = payload.get("chart") or {}
     results = chart.get("result") or []
@@ -93,7 +93,7 @@ def parse_chart(symbol: str, payload: dict[str, Any], fetched_at: int) -> PriceH
     dates: list[date] = []
     close: list[float] = []
     adjclose: list[float] = []
-    for ts, price, adj in zip(timestamps, closes, adjusted, strict=False):
+    for ts, price, adj in zip(timestamps, closes, adjusted, strict=True):
         if price is None:
             continue
         day = _local_date(int(ts), offset)
@@ -159,7 +159,7 @@ class Market:
 
         받기에 실패하면 저장본을 stale=True로 돌려주고, 저장본도 없으면 MarketError.
         """
-        code = normalize_symbol(symbol)
+        code = _normalize_symbol(symbol)
         lock = self._locks.setdefault(code, asyncio.Lock())
         async with lock:
             cached = self._read_cache(code)
@@ -167,12 +167,16 @@ class Market:
                 return cached
             try:
                 fresh = await self._download(code)
-            except _FETCH_ERRORS as error:  # 네트워크·HTTP·응답 형식 문제는 받기 실패로 본다
+            except (*_FETCH_ERRORS, MarketError) as error:
+                # 네트워크·HTTP·응답 모양 문제, Yahoo가 갑자기 "없음"이라고 하는 경우(상장 폐지 등)
+                # 모두 저장본이 있으면 저장본으로 계산한다 (상세 설계 2절)
                 if cached is not None:
                     logger.warning(
                         "%s 받기 실패, 저장본(%s)을 씁니다: %s", code, cached.dates[-1], error
                     )
                     return replace(cached, stale=True)
+                if isinstance(error, MarketError):
+                    raise
                 raise MarketError(
                     f"'{code}' 주가를 받지 못했습니다. 잠시 뒤 다시 시도해 주세요."
                 ) from error
@@ -198,7 +202,7 @@ class Market:
         if response.status_code == 404:
             raise MarketError(f"'{code}' 종목을 찾을 수 없습니다.")
         response.raise_for_status()
-        return parse_chart(code, response.json(), int(now))
+        return _parse_chart(code, response.json(), int(now))
 
     def _cache_path(self, code: str) -> Path:
         return self._prices / f"{code}.json"
@@ -269,17 +273,17 @@ class Market:
                 )
             response.raise_for_status()
             quotes = response.json().get("quotes") or []
+            hits = [
+                SearchHit(
+                    symbol=str(q["symbol"]),
+                    name=str(q.get("longname") or q.get("shortname") or q["symbol"]),
+                    exchange=str(q.get("exchDisp") or q.get("exchange") or ""),
+                    type=str(q.get("quoteType")),
+                )
+                for q in quotes
+                if q.get("quoteType") in SEARCH_TYPES and q.get("symbol")
+            ]
         except _FETCH_ERRORS as error:
             raise MarketError("종목을 검색하지 못했습니다. 잠시 뒤 다시 시도해 주세요.") from error
-        hits = [
-            SearchHit(
-                symbol=str(q["symbol"]),
-                name=str(q.get("longname") or q.get("shortname") or q["symbol"]),
-                exchange=str(q.get("exchDisp") or q.get("exchange") or ""),
-                type=str(q.get("quoteType")),
-            )
-            for q in quotes
-            if q.get("quoteType") in SEARCH_TYPES and q.get("symbol")
-        ]
         self._search_cache[key] = (now + self._search_ttl_s, hits)
         return hits
