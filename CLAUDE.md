@@ -23,7 +23,7 @@ PC 웹 브라우저만 대상으로 하고, 지금은 v1(F-01~F-10)을 만든다
 ```powershell
 python -m venv .venv                                         # 처음 한 번
 .\.venv\Scripts\python -m pip install -r requirements-dev.txt
-.\.venv\Scripts\python scripts\check.py                      # 린트·포맷·타입·테스트 한 번에. PR 전에 반드시
+.\.venv\Scripts\python scripts\check.py                      # 린트·포맷·타입·테스트·웹 한 번에. PR 전에 반드시
 .\.venv\Scripts\python scripts\check.py --fix                # 린트 자동 수정과 포맷 적용 뒤 확인
 .\.venv\Scripts\python -m pytest tests\test_engine.py -q     # 일부 테스트만
 ```
