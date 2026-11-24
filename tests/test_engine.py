@@ -112,6 +112,18 @@ def test_simulate_qld_monthly_extremes_match_design_example() -> None:
     assert summary.peak_value.value == pytest.approx(342_707_723, abs=1)
 
 
+def test_simulate_last_daily_row_matches_summary_value() -> None:
+    result = _run("QLD", _params(EXPECTED["cases"][0]))
+    assert result.daily[-1].value == pytest.approx(result.summary.value)
+    assert result.daily[-1].fx == pytest.approx(result.summary.eval_fx)
+
+
+def test_simulate_few_days_period_has_no_xirr() -> None:
+    """며칠짜리 기간은 연환산 해가 +10,000%를 넘어 계산 불가다 (계산 규칙 5절)."""
+    params = _params(EXPECTED["cases"][4], start=date(2025, 11, 21), end=date(2025, 11, 24))
+    assert _run("QLD", params).summary.xirr_pct is None
+
+
 def test_simulate_same_currency_uses_fx_one() -> None:
     case = next(c for c in EXPECTED["cases"] if c["invest_currency"] == "USD")
     result = _run("QQQ", _params(case))
@@ -198,6 +210,17 @@ def test_buy_days_weekly_monday_holiday_uses_next_trading_day() -> None:
     assert buy_days(days, date(2024, 5, 27), date(2024, 5, 31), "weekly", 0) == [date(2024, 5, 28)]
 
 
+def test_buy_days_monthly_unfinished_month_does_not_buy_early() -> None:
+    # 데이터가 2/23(금)에 끝났다. 2월 25일 이후 거래일은 아직 안 왔으니 2월에는 사지 않는다
+    days = _weekdays(date(2024, 1, 1), date(2024, 2, 23), frozenset({date(2024, 1, 1)}))
+    assert buy_days(days, date(2024, 1, 1), date(2024, 2, 24), "monthly", 25) == [date(2024, 1, 25)]
+
+
+def test_buy_days_weekly_unfinished_week_does_not_buy_early() -> None:
+    days = _weekdays(date(2024, 3, 18), date(2024, 3, 25))  # 3/25(월)에서 끝
+    assert buy_days(days, date(2024, 3, 18), date(2024, 3, 26), "weekly", 4) == [date(2024, 3, 22)]
+
+
 def test_buy_days_daily_returns_every_trading_day_in_period() -> None:
     days = _weekdays(date(2024, 1, 1), date(2024, 1, 31))
     assert buy_days(days, date(2024, 1, 10), date(2024, 1, 12), "daily", None) == [
@@ -226,6 +249,10 @@ def test_xirr_ten_percent_after_one_year() -> None:
     rate = xirr(flows)
     assert rate is not None
     assert rate == pytest.approx(0.10, abs=1e-9)
+
+
+def test_xirr_above_ten_thousand_percent_returns_none() -> None:
+    assert xirr([(date(2024, 1, 1), -100.0), (date(2024, 1, 2), 105.0)]) is None
 
 
 def test_xirr_without_sign_change_returns_none() -> None:

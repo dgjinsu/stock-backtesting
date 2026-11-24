@@ -5,11 +5,12 @@
 값은 반올림하지 않은 채로 돌려준다. 반올림은 응답을 만들 때 한 번 한다.
 """
 
+import calendar
 import math
 from bisect import bisect_right
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from datetime import date
+from dataclasses import dataclass, replace
+from datetime import date, timedelta
 from typing import Literal
 
 Freq = Literal["daily", "weekly", "monthly"]
@@ -161,6 +162,7 @@ def buy_days(
     """매수일. 거래일 전체로 기간마다 고른 뒤 [start, end] 안의 것만 남긴다 (계산 규칙 2절).
 
     매주는 그 주(월~일), 매월은 그 달에서 기준 이후 첫 거래일, 없으면 그 기간의 마지막 거래일.
+    데이터가 아직 그 기간 끝까지 없으면(진행 중인 주·달) 기준 이후 거래일이 올 수 있으니 당겨 사지 않는다.
     """
     if freq == "daily":
         return [d for d in dates if start <= d <= end]
@@ -173,9 +175,18 @@ def buy_days(
     def position(d: date) -> int:
         return d.weekday() if freq == "weekly" else d.day
 
+    def period_end(d: date) -> date:
+        if freq == "weekly":
+            return d + timedelta(days=6 - d.weekday())
+        return date(d.year, d.month, calendar.monthrange(d.year, d.month)[1])
+
     picked: list[date] = []
     for days in groups.values():
-        choice = next((d for d in days if position(d) >= target), days[-1])
+        choice = next((d for d in days if position(d) >= target), None)
+        if choice is None:
+            if period_end(days[-1]) > dates[-1]:
+                continue  # 진행 중인 기간
+            choice = days[-1]
         if start <= choice <= end:
             picked.append(choice)
     return sorted(picked)
@@ -216,7 +227,9 @@ def xirr(flows: Sequence[tuple[date, float]]) -> float | None:
         if not math.isfinite(rate) or rate <= _XIRR_LOW:
             break
         if abs(step) < 1e-12:
-            return rate
+            if _XIRR_LOW < rate < _XIRR_HIGH:
+                return rate
+            break  # 구간 밖의 해는 받지 않는다. 이분법이 None을 낸다
 
     low, high = _XIRR_LOW, _XIRR_HIGH
     f_low = npv(low)
@@ -323,6 +336,8 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
     value = (shares * eval_price + cash) * eval_fx
     flows.append((p.end, value))
     rate_of_return = xirr(flows)
+    # 마지막 거래일은 요약과 같은 평가 환율(끝날 기준)로 다시 평가해 그래프 끝과 요약을 맞춘다
+    daily[-1] = replace(daily[-1], fx=eval_fx, value=value, return_pct=(value / invested - 1) * 100)
 
     best = max(daily, key=lambda r: r.return_pct)
     worst = min(daily, key=lambda r: r.return_pct)
