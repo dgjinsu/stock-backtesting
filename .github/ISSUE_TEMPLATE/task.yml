@@ -1,0 +1,49 @@
+name: 개발 작업
+description: 개발 계획의 한 단계(또는 그 일부)를 이슈로 만든다
+title: "[N단계] "
+body:
+  - type: input
+    id: step
+    attributes:
+      label: 단계
+      description: docs/5_개발계획.md의 단계 번호와 이름 (0~14)
+      placeholder: "3. 계산 엔진"
+    validations:
+      required: true
+  - type: textarea
+    id: background
+    attributes:
+      label: 배경
+      description: 왜 하는지, 지금 상태
+    validations:
+      required: true
+  - type: textarea
+    id: todo
+    attributes:
+      label: 할 일
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: done
+    attributes:
+      label: 완료 기준
+      description: 테스트나 눈으로 확인할 수 있게 쓴다. 숫자는 expected.json, 계산 규칙, 시안의 값 그대로
+      value: |
+        - [ ]
+    validations:
+      required: true
+  - type: textarea
+    id: refs
+    attributes:
+      label: 명세 근거
+      placeholder: "기능 명세 F-06, 계산 규칙 4절, 상세 설계 3절"
+  - type: textarea
+    id: test-plan
+    attributes:
+      label: 테스트 계획
+  - type: textarea
+    id: out-of-scope
+    attributes:
+      label: 범위 밖
