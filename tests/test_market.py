@@ -289,7 +289,7 @@ def test_get_series_broken_response_with_old_cache_returns_stale(
 
 
 @pytest.mark.parametrize(
-    "payload", BROKEN_CHARTS[:3], ids=["list", "chart-not-object", "quote-null"]
+    "payload", BROKEN_CHARTS, ids=["list", "chart-not-object", "quote-null", "length-mismatch"]
 )
 def test_get_series_broken_response_without_cache_raises_market_error(
     tmp_path: Path, payload: Any
@@ -298,7 +298,7 @@ def test_get_series_broken_response_without_cache_raises_market_error(
         yahoo.chart_override = payload
         return await market.get_series("QLD")
 
-    with pytest.raises(MarketError):
+    with pytest.raises(MarketError, match="주가를 받지 못했습니다"):
         _run(tmp_path, scenario)
 
 

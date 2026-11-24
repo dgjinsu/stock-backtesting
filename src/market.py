@@ -172,7 +172,12 @@ class Market:
                 # 모두 저장본이 있으면 저장본으로 계산한다 (상세 설계 2절)
                 if cached is not None:
                     logger.warning(
-                        "%s 받기 실패, 저장본(%s)을 씁니다: %s", code, cached.dates[-1], error
+                        "%s 받기 실패, 저장본(%s)을 씁니다: %s",
+                        code,
+                        cached.dates[-1],
+                        error,
+                        # 네트워크·HTTP·"없음"이 아닌 예외는 코드 버그일 수 있어 위치까지 남긴다
+                        exc_info=not isinstance(error, (httpx.HTTPError, MarketError)),
                     )
                     return replace(cached, stale=True)
                 if isinstance(error, MarketError):
