@@ -518,10 +518,14 @@ def _longest_run(rows: Sequence[DailyRow], flags: Sequence[bool]) -> Underwater 
 
 
 def _months(asset: Series, fx: Series | None, first_buy: date, end: date) -> list[MonthResult]:
-    """9-3절: 월말 값 = 그 달 마지막 거래일 종가 × 그날 환율. 첫 매수 달부터 달력상 끝난 달까지."""
+    """9-3절: 월말 값 = 그 달 마지막 거래일 종가 × 그날 환율. 첫 매수 달부터 달력상 끝난 달까지.
+
+    첫 매수 달의 지난달부터만 본다 (종목 이력이 환율 이력보다 길 수 있다). 환율이 없는 날은 건너뛴다.
+    """
+    from_day = (first_buy.replace(day=1) - timedelta(days=1)).replace(day=1)
     month_end: dict[tuple[int, int], float] = {}
     for day, close in zip(asset.dates, asset.close, strict=True):
-        if day <= end:
+        if from_day <= day <= end and (fx is None or _asof_index(fx.dates, day) >= 0):
             month_end[(day.year, day.month)] = close * _rate_on(fx, day)
     last = (end.year, end.month)
     if (end + timedelta(days=1)).month == end.month:  # 끝날짜가 말일이 아니면 그 달은 진행 중이다
@@ -550,14 +554,17 @@ def _years(result: SimResult, asset: Series, end: date) -> list[YearResult]:
 
 
 def analyze(
-    result: SimResult, asset: Series, fx: Series | None, end: date, tax_fx: float = 1.0
+    result: SimResult, asset: Series, fx: Series | None, end: date, *, tax_fx: float
 ) -> Analysis:
     """v2 지표. 계산 규칙 9-1 ~ 9-5절.
 
     result는 simulate(asset, fx, params)의 결과이고 end는 params.end다.
     tax_fx는 투자 통화 1단위의 원화 값이다 (원화 투자면 1, 달러 투자면 평가일 원/달러 환율).
+    엔진은 투자 통화를 모르므로 기본값을 두지 않는다. 0 이하면 ValueError.
     양도세는 원화로 계산해 투자 통화로 돌려준다. 종목 통화가 원화(한국 종목)면 0이다.
     """
+    if not tax_fx > 0:
+        raise ValueError(f"tax_fx는 0보다 커야 합니다: {tax_fx}")
     rows, s = result.daily, result.summary
     # 9-1 흔들림
     peak, drawdown = 0.0, None
@@ -568,13 +575,16 @@ def analyze(
             drawdown = Extreme(row.date, change)
     flags = [_is_underwater(row) for row in rows]
     under = [row.date for row, flag in zip(rows, flags, strict=True) if flag]
-    # 9-4 수익 분해 (투자 통화와 종목 통화가 같으면 환율 효과 0)
-    cost_asset = (s.avg_cost_asset or 0.0) * s.shares  # 매수원가(종목), 4절
+    # 9-4 수익 분해. 달러 원가 = 넣은 돈을 매수일 환율로 바꾼 종목 통화 금액의 합 (결정 d26).
+    # 소수점 매수면 매수원가(종목)와 같고, 정수 주의 남은 현금도 같은 날 같은 환율로 바꾼 돈이라 포함한다.
+    amount = s.invested / s.buys
+    dollar_cost = sum(amount / b.fx for b in result.buys)
     asset_value = s.shares * s.eval_price + s.leftover_cash
-    price_effect = (asset_value - cost_asset) * s.eval_fx
-    fx_effect = cost_asset * s.eval_fx - s.invested if fx is not None else 0.0
-    if fx is None:
-        price_effect = s.profit
+    if fx is None:  # 투자 통화와 종목 통화가 같으면 환율 효과 0
+        price_effect, fx_effect = s.profit, 0.0
+    else:
+        price_effect = (asset_value - dollar_cost) * s.eval_fx
+        fx_effect = dollar_cost * s.eval_fx - s.invested
     # 9-5 양도세
     taxable = result.currency != "KRW"
     tax = max(0.0, s.profit * tax_fx - TAX_FREE_KRW) * TAX_RATE / tax_fx if taxable else 0.0
@@ -593,7 +603,7 @@ def analyze(
         months=_months(asset, fx, s.first_buy, end),
         price_effect=price_effect,
         fx_effect=fx_effect,
-        avg_buy_fx=s.invested / cost_asset if fx is not None and cost_asset > 0 else None,
+        avg_buy_fx=s.invested / dollar_cost if fx is not None else None,
         tax=tax,
         profit_after_tax=s.profit - tax,
     )

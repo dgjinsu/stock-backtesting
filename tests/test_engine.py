@@ -357,7 +357,7 @@ def _analyze(symbol: str, params: Params) -> Analysis:
         if asset.currency == params.currency
         else load_series(f"{asset.currency}{params.currency}=X")
     )
-    return analyze(simulate(asset, fx, params), asset, fx, params.end)
+    return analyze(simulate(asset, fx, params), asset, fx, params.end, tax_fx=1.0)
 
 
 def test_analyze_drawdown_and_underwater_match_v2_reference() -> None:
@@ -418,15 +418,59 @@ def test_analyze_korean_stock_has_no_fx_effect_and_no_tax() -> None:
     assert a.price_effect == pytest.approx(a.profit_after_tax, abs=1e-6)
 
 
-def test_analyze_dollar_investment_converts_tax_with_given_rate() -> None:
-    """9-5: 달러 투자면 손익을 원화로 바꿔 세금을 계산하고 다시 달러로 보여 준다."""
-    params = _v2_params(amount=1500.0, currency="USD")
-    asset = load_series("QLD")
+def test_analyze_dollar_investment_tax_uses_given_won_rate() -> None:
+    """9-5: 달러 투자면 손익을 원화로 바꿔 세금을 계산하고 다시 달러로. 손익 $10,000, 1달러 1,000원이면
+    (1,000만원 − 250만원) × 22% = 165만원 = $1,650."""
+    dates = [date(2024, 1, 1), date(2024, 1, 2)]
+    asset = Series(
+        "USX", "USD", dates, [100.0, 1100.0]
+    )  # 10주 + 1000/1100주 → 평가 12,000, 투자 2,000
+    params = Params(dates[0], dates[1], "daily", None, 1000.0, "USD")
     result = simulate(asset, None, params)
-    a = analyze(result, asset, None, params.end, tax_fx=1344.16)
-    profit_krw = result.summary.profit * 1344.16
-    assert a.tax == pytest.approx(max(0.0, profit_krw - 2_500_000) * 0.22 / 1344.16, abs=0.01)
+    assert result.summary.profit == pytest.approx(10_000)
+    a = analyze(result, asset, None, params.end, tax_fx=1000.0)
+    assert a.tax == pytest.approx(1650.0)
+    assert a.profit_after_tax == pytest.approx(8350.0)
     assert a.fx_effect == 0
+
+
+@pytest.mark.parametrize("tax_fx", [0.0, -1.0], ids=["zero", "negative"])
+def test_analyze_non_positive_tax_fx_raises_value_error(tax_fx: float) -> None:
+    asset = _rising()
+    params = Params(date(2024, 1, 1), date(2024, 1, 10), "daily", None, 1000.0, "KRW")
+    with pytest.raises(ValueError, match="tax_fx"):
+        analyze(simulate(asset, None, params), asset, None, params.end, tax_fx=tax_fx)
+
+
+def test_analyze_whole_shares_fx_effect_is_same_across_symbols() -> None:
+    """9-4 셋째 줄: 같은 날 같은 원화를 바꾸면 환율 효과는 종목이 달라도 같다 (정수 주의 남은 현금 포함).
+    소수점 매수의 환율 효과(−746,367원)·평균 매수 환율(1,352.57원)과 같다."""
+    m = V2["metrics"]
+    for symbol in ("QQQ", "QLD", "SOXL"):
+        a = _analyze(symbol, _v2_params(fractional=False))
+        assert a.fx_effect == pytest.approx(m["fx_effect"], abs=1)
+        assert a.avg_buy_fx == pytest.approx(m["avg_buy_fx"], abs=0.01)
+
+
+def test_analyze_asset_history_longer_than_fx_history_skips_days_without_fx() -> None:
+    """종목 이력이 환율 이력보다 길어도 월별 수익률을 계산한다 (첫 매수 달의 지난달부터만 본다)."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    short_fx = Series(fx.symbol, fx.currency, fx.dates[60:], fx.close[60:])
+    params = _v2_params()
+    a = analyze(simulate(asset, short_fx, params), asset, short_fx, params.end, tax_fx=1.0)
+    assert len(a.months) == V2["metrics"]["months"]["count"]
+
+
+def test_analyze_year_without_previous_year_data_has_no_price_change() -> None:
+    """9-2: 전해 데이터가 없으면(그해 상장) 주가 등락은 None."""
+    asset = load_series("QLD")
+    cut = next(i for i, d in enumerate(asset.dates) if d >= date(2022, 6, 15))
+    late = Series("LATE", asset.currency, asset.dates[cut:], asset.close[cut:])
+    params = Params(date(2022, 1, 1), date(2023, 12, 31), "monthly", 1, 1000.0, "USD")
+    a = analyze(simulate(late, None, params), late, None, params.end, tax_fx=1300.0)
+    years = {y.year: y for y in a.years}
+    assert years[2022].price_change_pct is None
+    assert years[2023].price_change_pct is not None
 
 
 def _rising(days: int = 70) -> Series:
@@ -434,11 +478,11 @@ def _rising(days: int = 70) -> Series:
     return Series("UP", "KRW", dates, [100.0 + i for i in range(days)])
 
 
-def test_analyze_without_drawdown_or_underwater_days() -> None:
+def test_analyze_rising_prices_have_no_drawdown_or_underwater_days() -> None:
     """결정 d25: 낙폭이 없으면 None, 원금 아래였던 날이 없으면 0일·None."""
     asset = _rising()
     params = Params(date(2024, 1, 1), date(2024, 3, 10), "daily", None, 1000.0, "KRW")
-    a = analyze(simulate(asset, None, params), asset, None, params.end)
+    a = analyze(simulate(asset, None, params), asset, None, params.end, tax_fx=1.0)
     assert a.max_drawdown is None
     assert a.underwater_days == 0
     assert a.longest_underwater is None
@@ -446,10 +490,11 @@ def test_analyze_without_drawdown_or_underwater_days() -> None:
 
 
 def test_analyze_period_without_ended_month_has_no_months() -> None:
-    """결정 d25: 끝난 달이 없으면 월별은 빈 목록 (끝날짜 3-10은 3월 말일이 아니다)."""
+    """결정 d25: 끝난 달이 없으면 월별은 빈 목록 (끝날짜 3-9는 3월 말일이 아니다)."""
     asset = _rising()
     params = Params(date(2024, 3, 1), date(2024, 3, 9), "daily", None, 1000.0, "KRW")
-    assert analyze(simulate(asset, None, params), asset, None, params.end).months == []
+    a = analyze(simulate(asset, None, params), asset, None, params.end, tax_fx=1.0)
+    assert a.months == []
 
 
 def test_analyze_longest_underwater_tie_keeps_the_first() -> None:
@@ -458,7 +503,7 @@ def test_analyze_longest_underwater_tie_keeps_the_first() -> None:
     dates = [date(2024, 1, 1) + timedelta(days=i) for i in range(len(prices))]
     asset = Series("ZIG", "KRW", dates, prices)
     params = Params(dates[0], dates[-1], "daily", None, 100.0, "KRW")
-    a = analyze(simulate(asset, None, params), asset, None, params.end)
+    a = analyze(simulate(asset, None, params), asset, None, params.end, tax_fx=1.0)
     assert a.longest_underwater is not None
     assert (a.longest_underwater.days, a.longest_underwater.start) == (2, dates[1])
     assert a.longest_underwater.recovered == dates[3]
