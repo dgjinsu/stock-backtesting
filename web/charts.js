@@ -173,9 +173,16 @@ function waitForChartJs(wrap) {
   const failed = !script || script.dataset.failed;
   wrap.replaceChildren(h("p", { class: "chart-missing", text: failed ? MISSING : "그래프 도구를 불러오는 중입니다…" }));
   if (!failed) {
-    script.addEventListener("load", draw, { once: true });
+    script.addEventListener("load", afterChartJs, { once: true });
     script.addEventListener("error", draw, { once: true });
   }
+}
+
+/** 받았는데도 Chart가 없으면(스크립트 실행 오류) 실패로 보고 안내한다. */
+function afterChartJs() {
+  const script = document.getElementById("chartjs");
+  if (!globalThis.Chart && script) script.dataset.failed = "1";
+  draw();
 }
 
 function draw() {
@@ -227,10 +234,8 @@ function newChart(ChartJs, wrap, data, model) {
             maxRotation: 0,
             autoSkip: true,
             maxTicksLimit: 8,
-            callback(value, index, ticks) {
-              const text = tickText(String(this.getLabelForValue(value)));
-              const before = index > 0 ? tickText(String(this.getLabelForValue(ticks[index - 1].value))) : null;
-              return text === before ? "" : text; // 같은 달이 두 번 찍히지 않게
+            callback(value) {
+              return tickText(String(this.getLabelForValue(value)));
             },
           },
         },
