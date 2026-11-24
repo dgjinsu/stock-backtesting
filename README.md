@@ -31,7 +31,7 @@ python -m venv .venv
 .\.venv\Scripts\python scripts\check.py
 ```
 
-`scripts/check.py`는 린트(ruff), 포맷, 타입(mypy, `src/`가 생긴 뒤부터), 테스트(pytest)를 차례로 돌린다. GitHub Actions도 PR마다 같은 스크립트를 돌린다.
+`scripts/check.py`는 린트(ruff), 포맷, 타입(mypy), 테스트(pytest), 웹(JS 문법과 `node --test`, Node.js 22.7 이상)을 차례로 돌린다. GitHub Actions도 PR마다 같은 스크립트를 돌린다.
 
 ## 개발을 시작할 때
 

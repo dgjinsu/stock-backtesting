@@ -4,8 +4,8 @@
     python scripts/check.py --fix    # 린트 자동 수정과 포맷을 먼저 적용한 뒤 확인
 
 하나가 실패해도 나머지를 끝까지 돌리고, 하나라도 실패하면 종료 코드 1을 낸다.
-웹 단계(JS 문법, tests/web/*.test.mjs)는 Node.js 22 이상이 필요하다. 로컬에 node가 없으면
-건너뛰고, CI(환경변수 CI가 있을 때)에서는 실패로 친다.
+웹 단계(JS 문법, tests/web/*.test.mjs)는 Node.js 22.7 이상이 필요하다 (package.json 없이
+ES 모듈을 알아본다). 로컬에 node가 없으면 건너뛰고, CI(환경변수 CI가 있을 때)에서는 실패로 친다.
 """
 
 import io
@@ -69,7 +69,7 @@ def main() -> int:
     if web is None:
         if os.environ.get("CI"):
             failed.append("웹 (CI에 node가 없음)")
-        print("\n== 웹: node가 없어 건너뜀 (Node.js 22 이상을 깔면 돈다)", flush=True)
+        print("\n== 웹: node가 없어 건너뜀 (Node.js 22.7 이상을 깔면 돈다)", flush=True)
     else:
         steps.extend(web)
 

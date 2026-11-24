@@ -37,6 +37,12 @@ test("shiftYears: N년 전의 다음 날", () => {
   assert.equal(shiftYears("2026-12-31", 1), "2026-01-01");
 });
 
+test("shiftYears: 날짜가 비었거나 잘못되면 null", () => {
+  assert.equal(shiftYears("", 5), null);
+  assert.equal(shiftYears("2026-13-01", 1), null);
+  assert.equal(shiftYears(undefined, 1), null);
+});
+
 test("shiftYears: 2월 29일은 평년의 2월 28일로 본다", () => {
   assert.equal(shiftYears("2024-02-29", 1), "2023-03-01");
   assert.equal(shiftYears("2024-02-29", 4), "2020-03-01");
@@ -49,7 +55,7 @@ test("anchorOf: 주기마다 API의 anchor 값", () => {
 });
 
 test("toQuery: 예시 조건의 주소", () => {
-  assert.equal(toQuery(BASE), "s=QQQ%2CQLD&from=2021-11-25&to=2026-11-24&freq=monthly&day=1&amt=2000000&cur=KRW");
+  assert.equal(toQuery(BASE), "s=QQQ,QLD&from=2021-11-25&to=2026-11-24&freq=monthly&day=1&amt=2000000&cur=KRW");
 });
 
 test("toQuery: 매일은 day를 빼고, 정수 주와 수수료는 있을 때만 넣는다", () => {
@@ -73,6 +79,14 @@ test("readQuery: toQuery로 만든 주소를 그대로 되읽는다", () => {
     fractional: false,
     fee: 0.1,
   });
+});
+
+test("readQuery: 쉼표가 %2C로 바뀐 옛 주소도 읽는다", () => {
+  assert.deepEqual(readQuery("?s=QQQ%2CQLD").codes, ["QQQ", "QLD"]);
+});
+
+test("toQuery: 특수 문자가 든 종목 코드는 인코딩한다", () => {
+  assert.equal(new URLSearchParams(toQuery({ ...BASE, codes: ["^GSPC", "BRK-B"] })).get("s"), "^GSPC,BRK-B");
 });
 
 test("readQuery: 잘못된 값은 버린다", () => {

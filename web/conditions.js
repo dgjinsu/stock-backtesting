@@ -13,9 +13,13 @@ export function todayKst(now = Date.now()) {
   return new Date(now + 9 * 3600 * 1000).toISOString().slice(0, 10);
 }
 
-/** 끝날짜에서 years년 전의 다음 날. 5년이면 2026-11-24 → 2021-11-25. 2월 29일은 28일로 본다. */
+/** 끝날짜에서 years년 전의 다음 날. 5년이면 2026-11-24 → 2021-11-25. 2월 29일은 28일로 본다.
+ * 날짜가 비었거나 잘못되면 null. */
 export function shiftYears(iso, years) {
-  const [y, m, d] = iso.split("-").map(Number);
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(iso ?? "");
+  if (!match) return null;
+  const [y, m, d] = match.slice(1).map(Number);
+  if (m < 1 || m > 12 || d < 1 || d > 31) return null;
   const lastDay = new Date(Date.UTC(y - years, m, 0)).getUTCDate();
   return new Date(Date.UTC(y - years, m - 1, Math.min(d, lastDay) + 1)).toISOString().slice(0, 10);
 }
@@ -27,7 +31,8 @@ export function anchorOf(cond) {
   return null;
 }
 
-/** 조건을 주소 쿼리로 (F-09). 기본값인 항목(정수 주가 아님, 수수료 0)은 뺀다. */
+/** 조건을 주소 쿼리로 (F-09). 기본값인 항목(정수 주가 아님, 수수료 0)은 뺀다.
+ * 종목 사이 쉼표는 읽기 쉽게 그대로 둔다 (s=QQQ,QLD). 쿼리 키는 상세 설계 5절 표. */
 export function toQuery(cond) {
   const params = new URLSearchParams();
   params.set("s", cond.codes.join(","));
@@ -39,7 +44,7 @@ export function toQuery(cond) {
   params.set("cur", cond.currency);
   if (!cond.fractional) params.set("frac", "0");
   if (cond.fee) params.set("fee", String(cond.fee));
-  return params.toString();
+  return params.toString().replaceAll("%2C", ",");
 }
 
 /** 주소 쿼리에서 조건을 읽는다. 잘못된 값은 버리고 읽은 항목만 돌려준다. */

@@ -33,7 +33,6 @@ const state = {
   fractional: true,
   fee: 0,
   loading: false,
-  result: null,
   serverErrors: {},
   badSymbols: new Map(), // code → 이유
 };
@@ -45,10 +44,11 @@ function cond() {
   return { ...state, codes: state.symbols.map((s) => s.code) };
 }
 
-function freqText() {
-  if (state.freq === "daily") return "매일";
-  if (state.freq === "weekly") return `매주 ${WEEKDAYS[state.weekDay]}`;
-  return state.monthDay === 31 ? "매월 말일" : `매월 ${state.monthDay}일`;
+/** 주기 글자. 결과 머리 줄은 요청 당시 조건(params)으로 만든다. */
+function freqText(freq, anchor) {
+  if (freq === "daily") return "매일";
+  if (freq === "weekly") return `매주 ${WEEKDAYS[anchor]}`;
+  return anchor === 31 ? "매월 말일" : `매월 ${anchor}일`;
 }
 
 function investLabel(currency) {
@@ -57,8 +57,20 @@ function investLabel(currency) {
 
 // ---------- 입력 검사 (F-02, F-04, F-10) ----------
 
-const FIELD_ERROR_IDS = { symbols: "sym-error", start: "start-error", end: "end-error", amount: "amount-error", fee: "fee-error" };
-const FIELD_INPUT_IDS = { symbols: "sym-search", start: "start", end: "end", amount: "amount", fee: "fee" };
+/** 오류 칸마다 받는 항목 이름(화면 검사와 서버 422)과 표시할 입력 칸. */
+const ERROR_BOXES = [
+  { box: "sym-error", fields: ["symbols"], input: () => "sym-search" },
+  { box: "start-error", fields: ["start"], input: () => "start" },
+  { box: "end-error", fields: ["end"], input: () => "end" },
+  {
+    box: "anchor-error",
+    fields: ["anchor", "freq"],
+    input: () => (state.freq === "weekly" ? "week-day" : "month-day"),
+  },
+  { box: "amount-error", fields: ["amount", "currency"], input: () => "amount" },
+  { box: "fee-error", fields: ["fee", "fee_pct", "fractional"], input: () => "fee" },
+];
+const BOXED_FIELDS = new Set(ERROR_BOXES.flatMap((b) => b.fields));
 
 function validate() {
   return validateCond(cond(), todayKst());
@@ -66,20 +78,27 @@ function validate() {
 
 function showErrors(clientErrors) {
   const errors = { ...state.serverErrors, ...clientErrors };
-  for (const [field, id] of Object.entries(FIELD_ERROR_IDS)) {
-    const box = $(id);
-    let message = errors[field];
-    if (field === "symbols" && !message && state.badSymbols.size) {
+  for (const { box, fields, input } of ERROR_BOXES) {
+    const error = fields.map((f) => errors[f]).find(Boolean);
+    let message = error;
+    if (box === "sym-error" && !message && state.badSymbols.size) {
       message = [...state.badSymbols].map(([code, why]) => `${code}: ${why}`).join(" · ");
     }
-    box.textContent = message ?? "";
-    box.hidden = !message;
-    const input = $(FIELD_INPUT_IDS[field]);
-    if (errors[field]) input.setAttribute("aria-invalid", "true");
-    else input.removeAttribute("aria-invalid");
+    $(box).textContent = message ?? "";
+    $(box).hidden = !message;
+    for (const id of new Set(["month-day", "week-day", input()])) $(id).removeAttribute("aria-invalid");
+    if (error) $(input()).setAttribute("aria-invalid", "true");
   }
-  const others = Object.entries(errors).filter(([field]) => !(field in FIELD_ERROR_IDS));
-  if (others.length) $("status").textContent = others.map(([, m]) => m).join(" · ");
+  // 칸이 없는 항목의 오류는 버튼 아래 한 줄로. 고치면 지운다.
+  const others = Object.entries(errors).filter(([field]) => !BOXED_FIELDS.has(field));
+  const status = $("status");
+  if (others.length) {
+    status.textContent = others.map(([, m]) => m).join(" · ");
+    status.dataset.kind = "errors";
+  } else if (status.dataset.kind === "errors") {
+    status.textContent = "";
+    delete status.dataset.kind;
+  }
   $("run").disabled = state.loading || Object.keys(clientErrors).length > 0;
 }
 
@@ -138,7 +157,9 @@ function renderForm() {
   $("start").max = todayKst();
   setOn("period", (b) => {
     const key = b.dataset.years;
-    return key === "all" ? state.start === ALL_START : state.start === shiftYears(state.end, Number(key));
+    if (key === "all") return state.start === ALL_START;
+    const start = shiftYears(state.end, Number(key));
+    return start !== null && state.start === start;
   });
   setOn("freq", (b) => b.dataset.freq === state.freq);
   $("monthly-row").hidden = state.freq !== "monthly";
@@ -150,10 +171,17 @@ function renderForm() {
   $("amount-unit").textContent = state.currency === "KRW" ? "원" : "$";
   $("currency").value = state.currency;
   setOn("mode", (b) => (b.dataset.fractional === "true") === state.fractional);
-  if (document.activeElement !== $("fee")) $("fee").value = String(state.fee);
-  $("advanced-summary").textContent = `· ${state.fractional ? "소수점" : "정수 주"} · 수수료 ${state.fee}%`;
+  if (document.activeElement !== $("fee") && Number.isFinite(state.fee)) {
+    $("fee").value = String(state.fee);
+  }
+  renderAdvancedSummary();
   renderSymbols();
   renderPreview();
+}
+
+function renderAdvancedSummary() {
+  const fee = Number.isFinite(state.fee) ? `${state.fee}%` : "확인 필요";
+  $("advanced-summary").textContent = `· ${state.fractional ? "소수점" : "정수 주"} · 수수료 ${fee}`;
 }
 
 function changed() {
@@ -193,7 +221,11 @@ function removeSymbol(code) {
 
 const search = { timer: 0, abort: null, options: [], active: -1 };
 
+/** 목록을 닫고, 기다리는 검색(0.3초 타이머)과 진행 중인 요청도 취소한다. */
 function closeList() {
+  clearTimeout(search.timer);
+  search.abort?.abort();
+  search.abort = null;
   const list = $("sym-results");
   list.hidden = true;
   list.replaceChildren();
@@ -206,6 +238,7 @@ function closeList() {
 function showNote(text) {
   const list = $("sym-results");
   list.replaceChildren(h("li", { class: "note", role: "presentation", text }));
+  $("sym-live").textContent = text; // 목록 안 안내는 읽히지 않아 따로 알린다
   list.hidden = false;
   $("sym-search").setAttribute("aria-expanded", "true");
   search.options = [];
@@ -214,11 +247,23 @@ function showNote(text) {
 
 function renderHits(query, hits) {
   const list = $("sym-results");
+  $("sym-search").removeAttribute("aria-activedescendant");
   const typed = query.trim().toUpperCase();
   const added = new Set(state.symbols.map((s) => s.code));
-  search.options = hits.map((hit) => ({ code: hit.symbol, name: hit.name, disabled: added.has(hit.symbol), meta: `${hit.exchange} · ${hit.type}` }));
+  search.options = hits.map((hit) => ({
+    code: hit.symbol,
+    name: hit.name,
+    disabled: added.has(hit.symbol),
+    meta: `${hit.exchange} · ${hit.type}`,
+  }));
   if (SYMBOL_PATTERN.test(typed) && !search.options.some((o) => o.code === typed)) {
-    search.options.push({ code: typed, name: "입력한 코드 그대로 넣기", disabled: added.has(typed), meta: "검색 결과에 없어도 넣을 수 있습니다" });
+    search.options.push({
+      code: typed,
+      name: "입력한 코드 그대로 넣기",
+      raw: true,
+      disabled: added.has(typed),
+      meta: "검색 결과에 없어도 넣을 수 있습니다",
+    });
   }
   if (!search.options.length) {
     showNote("결과가 없습니다. 코드나 영문 이름으로 찾아 주세요");
@@ -235,7 +280,7 @@ function renderHits(query, hits) {
           "aria-disabled": o.disabled ? "true" : null,
           onmousedown: (event) => {
             event.preventDefault();
-            if (!o.disabled) addSymbol(o.code, o.name === "입력한 코드 그대로 넣기" ? "" : o.name);
+            if (!o.disabled) addSymbol(o.code, o.raw ? "" : o.name);
           },
         },
         h("strong", { text: o.code }),
@@ -246,6 +291,7 @@ function renderHits(query, hits) {
   );
   list.hidden = false;
   $("sym-search").setAttribute("aria-expanded", "true");
+  $("sym-live").textContent = `검색 결과 ${search.options.length}개. 위아래 화살표로 고르고 Enter로 넣습니다`;
   search.active = -1;
 }
 
@@ -253,12 +299,15 @@ async function runSearch(query) {
   search.abort?.abort();
   search.abort = new AbortController();
   showNote("찾는 중…");
+  const stillTyped = () => $("sym-search").value.trim() === query;
   try {
-    const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`, { signal: search.abort.signal });
+    const url = `/api/search?q=${encodeURIComponent(query)}`;
+    const response = await fetch(url, { signal: search.abort.signal });
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    renderHits(query, await response.json());
+    const hits = await response.json();
+    if (stillTyped()) renderHits(query, hits); // 그사이 칸이 바뀌었으면 버린다
   } catch (error) {
-    if (error.name === "AbortError") return;
+    if (error.name === "AbortError" || !stillTyped()) return;
     showNote("검색하지 못했습니다. 코드를 그대로 쓰고 Enter를 누르면 넣을 수 있습니다");
   }
 }
@@ -292,7 +341,7 @@ function wireSearch() {
     } else if (event.key === "Enter") {
       event.preventDefault();
       const option = search.options[search.active];
-      if (option && !option.disabled) addSymbol(option.code, option.name === "입력한 코드 그대로 넣기" ? "" : option.name);
+      if (option && !option.disabled) addSymbol(option.code, option.raw ? "" : option.name);
       else if (input.value.trim()) addSymbol(input.value);
     } else if (event.key === "Escape") {
       closeList();
@@ -310,60 +359,92 @@ function setLoading(on) {
   $("run-label").textContent = on ? "계산 중…" : "계산하기";
   $("status").textContent = on ? `${state.symbols.length}개 종목 주가를 받고 계산하는 중입니다` : "";
   $("output").classList.toggle("dim", on);
-  if (on && $("output").hidden) {
-    $("empty").replaceChildren(h("p", { class: "empty-title", text: "계산하는 중입니다…" }), h("p", { class: "muted", text: "처음 보는 종목은 Yahoo Finance에서 주가를 받느라 몇 초 걸립니다." }));
+  if ($("output").hidden) {
+    const busy = [
+      h("p", { class: "empty-title", text: "계산하는 중입니다…" }),
+      h("p", { class: "muted", text: "처음 보는 종목은 Yahoo Finance에서 주가를 받느라 몇 초 걸립니다." }),
+    ];
+    $("empty").replaceChildren(...(on ? busy : EMPTY_IDLE.map((node) => node.cloneNode(true))));
   }
+}
+
+async function post(body) {
+  const response = await fetch("/api/backtest", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return { response, json: await response.json().catch(() => null) };
 }
 
 async function run() {
   const errors = validate();
   showErrors(errors);
   if (Object.keys(errors).length || state.loading) return;
+  // 계산 중에도 조건을 바꿀 수 있으니, 주소와 색은 보낸 때의 조건으로 만든다
+  const sent = cond();
+  const slots = new Map(state.symbols.map((s) => [s.code, s.slot]));
   setLoading(true);
-  const body = {
-    symbols: state.symbols.map((s) => s.code),
-    start: state.start,
-    end: state.end,
-    freq: state.freq,
-    anchor: anchorOf(state),
-    amount: state.amount,
-    currency: state.currency,
-    fractional: state.fractional,
-    fee_pct: state.fee,
-  };
+  let reply;
   try {
-    const response = await fetch("/api/backtest", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
-    if (response.status === 422) {
-      const detail = (await response.json()).detail ?? [];
-      state.serverErrors = Object.fromEntries(detail.map((d) => [d.field, d.message]));
-      setLoading(false);
-      showErrors(validate());
-      if (!$("status").textContent) $("status").textContent = "입력을 확인해 주세요";
-      return;
-    }
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-    state.result = data;
-    state.badSymbols = new Map(data.errors.map((e) => [e.symbol, e.message]));
-    for (const result of data.results) {
-      const entry = state.symbols.find((s) => s.code === result.symbol);
-      if (entry) entry.name = result.name;
-    }
-    history.replaceState(null, "", `?${toQuery(cond())}`);
-    setLoading(false);
-    renderForm();
-    showErrors(validate());
-    renderResult(data);
+    reply = await post({
+      symbols: sent.codes,
+      start: sent.start,
+      end: sent.end,
+      freq: sent.freq,
+      anchor: anchorOf(sent),
+      amount: sent.amount,
+      currency: sent.currency,
+      fractional: sent.fractional,
+      fee_pct: sent.fee,
+    });
   } catch {
     setLoading(false);
     renderFailure("서버에 연결하지 못했습니다. 서버가 켜져 있는지 확인하고 다시 시도해 주세요.");
+    return;
   }
+  const { response, json } = reply;
+  setLoading(false);
+  if (response.status === 422) {
+    state.serverErrors = Object.fromEntries((json?.detail ?? []).map((d) => [d.field, d.message]));
+    showErrors(validate());
+    if (!$("status").textContent) {
+      $("status").textContent = "입력을 확인해 주세요";
+      $("status").dataset.kind = "errors";
+    }
+    return;
+  }
+  if (!response.ok || !json) {
+    renderFailure(`서버가 계산하지 못했습니다 (HTTP ${response.status}). 잠시 뒤 다시 시도해 주세요.`);
+    return;
+  }
+  state.badSymbols = new Map(json.errors.map((e) => [e.symbol, e.message]));
+  for (const result of json.results) {
+    const entry = state.symbols.find((s) => s.code === result.symbol);
+    if (entry) entry.name = result.name;
+  }
+  history.replaceState(null, "", `?${toQuery(sent)}`);
+  shownSlots = slots;
+  renderForm();
+  showErrors(validate());
+  try {
+    renderResult(json);
+  } catch (error) {
+    console.error(error);
+    renderFailure("결과를 화면에 그리지 못했습니다. 새로고침한 뒤 다시 시도해 주세요.", false);
+    return;
+  }
+  const failed = json.errors.length ? `, ${json.errors.length}개 실패` : "";
+  $("status").textContent = `계산했습니다: ${json.results.length}개 종목${failed}`;
 }
 
 // ---------- 결과 (F-06, F-10) ----------
 
+/** 보이는 결과의 종목 → 색 자리. 요청을 보낸 때 떠 둔다 (색은 종목에 붙는다, 상세 설계 5절). */
+let shownSlots = new Map();
+
 function slotOf(code) {
-  return state.symbols.find((s) => s.code === code)?.slot ?? 0;
+  return shownSlots.get(code) ?? state.symbols.find((s) => s.code === code)?.slot ?? 0;
 }
 
 function signClass(value) {
@@ -401,7 +482,7 @@ function header(data) {
   const foreign = results.find((r) => r.currency !== params.currency);
   const fxText = foreign ? `, 환율 ${fx(foreign.summary.eval_fx)}${params.currency === "KRW" ? "원" : ""}` : "";
   const span = params.start <= ALL_START ? "상장 이후 전체" : period(params.start, params.end);
-  const title = `${results.length}개 종목 · ${freqText()} ${money(params.amount, params.currency)} · ${span}`;
+  const title = `${results.length}개 종목 · ${freqText(params.freq, params.anchor)} ${money(params.amount, params.currency)} · ${span}`;
   const copy = h("button", { type: "button", class: "btn2" }, icon(["M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1", "M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"]), "링크 복사");
   copy.addEventListener("click", async () => {
     try {
@@ -633,7 +714,7 @@ function wireForm() {
   $("fee").addEventListener("input", (e) => {
     state.fee = e.target.value.trim() === "" ? 0 : Number(e.target.value);
     state.serverErrors = {};
-    $("advanced-summary").textContent = `· ${state.fractional ? "소수점" : "정수 주"} · 수수료 ${state.fee}%`;
+    renderAdvancedSummary();
     showErrors(validate());
   });
   $("fee").addEventListener("blur", changed);
@@ -658,7 +739,11 @@ function wireTheme() {
   sync();
 }
 
+/** 처음 빈 자리 문구 (첫 계산이 실패로 끝나면 되돌린다). */
+let EMPTY_IDLE = [];
+
 function init() {
+  EMPTY_IDLE = [...$("empty").childNodes].map((node) => node.cloneNode(true));
   const fromUrl = readQuery(location.search);
   state.end = fromUrl.end ?? todayKst();
   state.start = fromUrl.start ?? shiftYears(state.end, 5);

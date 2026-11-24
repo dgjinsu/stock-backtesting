@@ -52,6 +52,7 @@
           </div>
           <p class="hint" id="sym-hint">한국 종목은 005930.KS(코스피), 035720.KQ(코스닥)처럼 넣습니다</p>
           <p class="field-error" id="sym-error" hidden></p>
+          <p class="sr" id="sym-live" aria-live="polite"></p>
         </div>
 
         <div class="group">
@@ -83,6 +84,7 @@
             <option value="0">월요일</option><option value="1">화요일</option><option value="2">수요일</option><option value="3">목요일</option><option value="4">금요일</option>
           </select>에 사기</label>
           <span class="muted" id="daily-row" hidden>모든 거래일에 삽니다</span>
+          <p class="field-error" id="anchor-error" hidden></p>
           <p class="hint">휴장일이면 다음 거래일. 달(주)을 넘기면 그 달(주) 마지막 거래일</p>
         </div>
 
@@ -126,7 +128,7 @@
       </form>
     </aside>
 
-    <main class="results" id="results" aria-live="polite">
+    <main class="results" id="results">
       <section class="empty" id="empty">
         <p class="empty-title">조건을 정하고 계산하기를 누르세요</p>
         <p class="muted">예시로 QQQ·QLD를 5년 동안 매월 1일 200만원씩 산 경우가 채워져 있습니다.</p>
