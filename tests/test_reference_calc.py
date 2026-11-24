@@ -59,8 +59,8 @@ def test_reference_v2_matches_expected(reference_output: dict[str, Any]) -> None
 def test_v2_metrics_match_rules_table() -> None:
     """계산 규칙 9-8 표. 표는 수익률을 소수 1자리로 적었고 저장값은 2자리라 ±0.055(반올림 두 번)로 비교한다."""
     m = EXPECTED["v2"]["metrics"]
-    assert m["max_drawdown_pct"] == pytest.approx(-42.2, abs=0.055)
-    assert m["max_drawdown_date"] == "2026-11-20"
+    assert m["max_drawdown"]["pct"] == pytest.approx(-42.2, abs=0.055)
+    assert m["max_drawdown"]["date"] == "2026-11-20"
     assert (m["underwater_days"], m["trading_days"]) == (331, 1250)
     assert m["underwater_pct"] == pytest.approx(26.5, abs=0.055)
     assert m["longest_underwater"] == {
@@ -81,6 +81,19 @@ def test_v2_metrics_match_rules_table() -> None:
     assert m["tax"] == pytest.approx(22_731_410, abs=1)
     assert m["profit_after_tax"] == pytest.approx(83_093_180, abs=1)
     assert (m["buys"], m["buys_below_eval_price"], m["buys_below_avg_cost"]) == (60, 51, 24)
+
+
+def test_v2_last_year_return_equals_summary_return() -> None:
+    """9-2: 올해 누적 수익률은 수익률 추이의 마지막 값이고, 마지막 날은 평가 환율로 본다 (5절)."""
+    v2 = EXPECTED["v2"]
+    assert v2["metrics"]["years"]["2026"]["return_pct"] == v2["strategies"]["none"]["return_pct"]
+
+
+def test_v2_months_cover_first_buy_month_to_last_ended_month() -> None:
+    """9-3: 2021-12(첫 매수) ~ 2026-10(끝날짜가 든 11월은 아직 안 끝났다) = 59달."""
+    months = EXPECTED["v2"]["metrics"]["months"]
+    assert months["count"] == 59
+    assert 0 < months["up"] < months["count"]
 
 
 def test_v2_price_and_fx_effects_add_up_to_profit() -> None:
@@ -114,15 +127,16 @@ def test_v2_strategy_matches_rules_table(rule: str) -> None:
 
 
 def test_v2_sweeps_match_rules_table() -> None:
-    """9-7: 평단가가 가장 낮은 기준일 20일 $37.64, 가장 높은 15일 $38.27. 2025-04 시작부터 원금 아래."""
+    """9-7: 평단가가 가장 낮은 기준일 24일 $37.57, 가장 높은 15일 $38.27. 2025-04 시작부터 원금 아래."""
     anchors = EXPECTED["v2"]["anchor_sweep"]
     low = min(anchors, key=lambda a: anchors[a])
     high = max(anchors, key=lambda a: anchors[a])
-    assert (low, round(anchors[low], 2)) == ("20", 37.64)
+    assert (low, round(anchors[low], 2)) == ("24", 37.57)
     assert (high, round(anchors[high], 2)) == ("15", 38.27)
     starts = EXPECTED["v2"]["start_sweep"]
     assert starts["2025-03"] == pytest.approx(0.82, abs=0.01)
     assert starts["2025-04"] == pytest.approx(-0.71, abs=0.01)
     assert all(ret < 0 for month, ret in starts.items() if month >= "2025-04")
+    assert EXPECTED["v2"]["period"] == ["2021-11-25", "2026-11-24"]
     assert min(starts) == "2021-12"
     assert max(starts) == "2026-05"  # 끝날짜 6개월 전까지
