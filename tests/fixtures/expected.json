@@ -575,6 +575,21 @@
       "2026-03": -18.36,
       "2026-04": -20.48,
       "2026-05": -23.82
+    },
+    "dollar_tax": {
+      "tax_fx": 1344.16,
+      "profit": 48171.0,
+      "tax": 10188.0,
+      "profit_after_tax": 37982.0
+    },
+    "switch_cross_exchange": {
+      "value": 298106846.0,
+      "return_pct": 148.42,
+      "xirr_pct": 37.64,
+      "avg_cost_asset": 76241.1205,
+      "worst_return_pct": -26.24,
+      "leftover_cash_invest": 0.0,
+      "rule_days": 14
     }
   }
 }

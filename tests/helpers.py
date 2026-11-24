@@ -64,7 +64,13 @@ def load_series(symbol: str) -> Series:
             continue
         dates.append(day)
         close.append(price)
-    return Series(symbol=symbol, currency=result["meta"]["currency"], dates=dates, close=close)
+    return Series(
+        symbol=symbol,
+        currency=result["meta"]["currency"],
+        dates=dates,
+        close=close,
+        exchange_tz=str(result["meta"].get("exchangeTimezoneName") or ""),  # market.py와 같은 규칙
+    )
 
 
 class FakeYahoo:

@@ -37,7 +37,10 @@ def load(symbol):
             continue
         dates.append(d)
         close.append(c)
-    return {"symbol": symbol, "currency": r["meta"]["currency"], "dates": dates, "close": close}
+    # 거래소 시간대: 레버리지 전환에서 기준 종목과 같은 거래소인지 본다 (9-6). 모르면 빈 문자열
+    tz = r["meta"].get("exchangeTimezoneName") or ""
+    return {"symbol": symbol, "currency": r["meta"]["currency"], "dates": dates, "close": close,
+            "exchange_tz": tz}
 
 
 def asof(series, day):
@@ -161,6 +164,8 @@ def plan_buys(asset, fx, ref, buys, amount, rule, ma_days=200):
     rule: none | ma_dip | ma_hot | switch | lump_sum. 수수료 0, 소수점 매수. 규칙이 걸린 매수일 수도 돌려준다.
     """
     plan, cash, days = [], 0.0, 0
+    # 기준 종목이 다른 거래소(시간대가 다르거나 모름)면 매수일보다 앞선 마지막 거래일 종가로 본다 (9-6, 결정 d29)
+    same_exchange = bool(ref) and ref["exchange_tz"] != "" and ref["exchange_tz"] == asset["exchange_tz"]
     for d in buys:
         p = asof(asset, d)
         r = asof(fx, d) if fx else 1.0
@@ -179,9 +184,10 @@ def plan_buys(asset, fx, ref, buys, amount, rule, ma_days=200):
                 days += hit
                 spend = min(cash, MULTIPLIER[rule][0 if hit else 1] * unit)
         elif rule == "switch":
-            avg = moving_average(ref, d, ma_days)
+            ref_day = d if same_exchange else d - dt.timedelta(days=1)
+            avg = moving_average(ref, ref_day, ma_days)
             if avg is not None:
-                on = asof(ref, d) > avg
+                on = asof(ref, ref_day) > avg
                 days += not on
                 spend = cash if on else 0.0
         cash -= spend
@@ -237,8 +243,11 @@ def underwater(value, invested):
     return value < invested * (1 - 1e-12)
 
 
-def v2_metrics(asset, fx, start, end, anchor, amount):
-    """9-1 ~ 9-5절. 기본 적립(소수점 매수, 수수료 0)."""
+def v2_metrics(asset, fx, start, end, anchor, amount, tax_fx=1.0):
+    """9-1 ~ 9-5절. 기본 적립(소수점 매수, 수수료 0).
+
+    tax_fx는 투자 통화 1단위의 원화 값 (원화 투자면 1, 달러 투자면 끝날짜의 원/달러 환율, 9-5절).
+    """
     buys = buy_days(asset["dates"], start, end, "monthly", anchor)
     plan, _ = plan_buys(asset, fx, None, buys, amount, "none")
     rows, end_state = hold(asset, fx, plan, end)
@@ -265,15 +274,17 @@ def v2_metrics(asset, fx, start, end, anchor, amount):
         _, v, inv = [row for row in rows if row[0].year == year][-1]
         change = round((year_end[year] / year_end[year - 1] - 1) * 100, 2) if year - 1 in year_end else None
         years[str(year)] = {"return_pct": round((v / inv - 1) * 100, 2), "price_change_pct": change}
-    # 9-3 월별 (투자 통화): 첫 매수일이 든 달부터 달력상 끝난 달까지
+    # 9-3 월별 (투자 통화): 첫 매수일이 든 달부터 끝난 달까지.
+    # 끝난 달 = 말일이 끝날짜 이하이고 데이터도 그 말일까지 있는 달 (2절 진행 중인 달과 같은 판정, 결정 d24)
     month_end = {}
     for d, c in zip(asset["dates"], asset["close"]):
         if d <= end:
             month_end[(d.year, d.month)] = c * (asof(fx, d) if fx else 1.0)
     first = (buys[0].year, buys[0].month)
-    ended = (end.year, end.month)  # 끝날짜가 말일이 아니면 그 달은 아직 안 끝났다
-    if (end + dt.timedelta(days=1)).month == end.month:
-        ended = (end.year, end.month - 1) if end.month > 1 else (end.year - 1, 12)
+    cut = min(end, asset["dates"][-1])
+    ended = (cut.year, cut.month)  # cut이 말일이 아니면 그 달은 아직 안 끝났다
+    if (cut + dt.timedelta(days=1)).month == cut.month:
+        ended = (cut.year, cut.month - 1) if cut.month > 1 else (cut.year - 1, 12)
     keys = sorted(month_end)
     monthly = [(f"{b[0]}-{b[1]:02d}", month_end[b] / month_end[a] - 1)
                for a, b in zip(keys, keys[1:]) if first <= b <= ended]
@@ -284,7 +295,8 @@ def v2_metrics(asset, fx, start, end, anchor, amount):
     pe = asof(asset, end)
     cost, shares = end_state["cost"], end_state["shares"]
     profit = end_state["value"] - invested
-    tax = max(0.0, profit - 2_500_000) * 0.22 if asset["currency"] != "KRW" else 0.0
+    # 9-5: 손익을 원화로 바꿔 계산하고 투자 통화로 되돌린다. 한국 종목은 0
+    tax = max(0.0, profit * tax_fx - 2_500_000) * 0.22 / tax_fx if asset["currency"] != "KRW" else 0.0
     return {
         "max_drawdown": {"date": mdd[1].isoformat(), "pct": round(mdd[0] * 100, 2)},
         "underwater_days": sum(under),
@@ -312,8 +324,13 @@ def v2_metrics(asset, fx, start, end, anchor, amount):
 
 
 def v2_case(start, end):
-    """9-8절 v2 기준값: QLD, 매월 1일 200만원, 원화, 수수료 0, 소수점 매수."""
+    """9-8절 v2 기준값: QLD, 매월 1일 200만원, 원화, 수수료 0, 소수점 매수.
+
+    같은 기간·기준일로 검증용 사례 둘을 더한다. dollar_tax는 QQQ 매월 1일 $1,500 달러 투자의 양도세(9-5,
+    결정 d25), switch_cross_exchange는 005930.KS 매월 1일 200만원을 QQQ 기준으로 레버리지 전환(9-6, 결정 d29).
+    """
     qld, qqq, fx = load("QLD"), load("QQQ"), load("USDKRW=X")
+    samsung = load("005930.KS")
     amount = 2_000_000
     last = end.year * 12 + end.month - 1 - 6  # 끝날짜가 든 달의 6개월 전 달까지 (9-7절)
     starts = {}
@@ -330,7 +347,17 @@ def v2_case(start, end):
         "anchor_sweep": {str(a): simulate(qld, fx, start, end, "monthly", a, amount)["avg_cost_asset"]
                          for a in list(range(1, 29)) + [31]},
         "start_sweep": starts,
+        "dollar_tax": dollar_tax(qqq, fx, start, end),
+        "switch_cross_exchange": strategy(samsung, None, qqq, start, end, 1, amount, "switch"),
     }
+
+
+def dollar_tax(asset, usdkrw, start, end):
+    """9-5절 달러 투자 양도세: 매월 1일 $1,500, 손익을 끝날짜 원/달러 환율로 원화로 바꿔 계산한다 (결정 d25)."""
+    tax_fx = asof(usdkrw, end)
+    m = v2_metrics(asset, None, start, end, 1, 1_500, tax_fx=tax_fx)
+    return {"tax_fx": round(tax_fx, 2), "profit": m["profit"], "tax": m["tax"],
+            "profit_after_tax": m["profit_after_tax"]}
 
 
 CASES = [
