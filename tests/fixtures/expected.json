@@ -1,0 +1,371 @@
+{
+  "data_snapshot": "Yahoo Finance 일별 종가, 2026-11-24 저장 (tests/fixtures/yahoo)",
+  "period": [
+    "2021-11-24",
+    "2026-11-24"
+  ],
+  "cases": [
+    {
+      "name": "월1일_200만원_5년",
+      "invest_currency": "KRW",
+      "freq": "monthly",
+      "anchor": 1,
+      "amount": 2000000,
+      "fractional": true,
+      "fee": 0.0,
+      "results": {
+        "QQQ": {
+          "buys": 60,
+          "first_buy": "2021-12-01",
+          "last_buy": "2026-11-02",
+          "invested": 120000000.0,
+          "shares": 211.474743,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 419.5291,
+          "avg_cost_invest": 567443.65,
+          "eval_price": 651.03,
+          "eval_fx": 1344.16,
+          "value": 185059126.0,
+          "return_pct": 54.22,
+          "xirr_pct": 17.47
+        },
+        "QLD": {
+          "buys": 60,
+          "first_buy": "2021-12-01",
+          "last_buy": "2026-11-02",
+          "invested": 120000000.0,
+          "shares": 2336.312544,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 37.9743,
+          "avg_cost_invest": 51362.99,
+          "eval_price": 71.91,
+          "eval_fx": 1344.16,
+          "value": 225824590.0,
+          "return_pct": 88.19,
+          "xirr_pct": 25.75
+        },
+        "TQQQ": {
+          "buys": 60,
+          "first_buy": "2021-12-01",
+          "last_buy": "2026-11-02",
+          "invested": 120000000.0,
+          "shares": 3625.536582,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 24.4708,
+          "avg_cost_invest": 33098.55,
+          "eval_price": 49.1,
+          "eval_fx": 1344.16,
+          "value": 239279090.0,
+          "return_pct": 99.4,
+          "xirr_pct": 28.19
+        },
+        "SOXL": {
+          "buys": 60,
+          "first_buy": "2021-12-01",
+          "last_buy": "2026-11-02",
+          "invested": 120000000.0,
+          "shares": 3488.855396,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 25.4295,
+          "avg_cost_invest": 34395.23,
+          "eval_price": 43.21,
+          "eval_fx": 1344.16,
+          "value": 202636747.0,
+          "return_pct": 68.86,
+          "xirr_pct": 21.22
+        }
+      }
+    },
+    {
+      "name": "월1일_200만원_5년_정수주",
+      "invest_currency": "KRW",
+      "freq": "monthly",
+      "anchor": 1,
+      "amount": 2000000,
+      "fractional": false,
+      "fee": 0.0,
+      "results": {
+        "QQQ": {
+          "buys": 60,
+          "first_buy": "2021-12-01",
+          "last_buy": "2026-11-02",
+          "invested": 120000000.0,
+          "shares": 211.0,
+          "leftover_cash_asset": 151.6973,
+          "avg_cost_asset": 419.7541,
+          "avg_cost_invest": 567220.89,
+          "eval_price": 651.03,
+          "eval_fx": 1344.16,
+          "value": 184847589.0,
+          "return_pct": 54.04,
+          "xirr_pct": 17.43
+        },
+        "QLD": {
+          "buys": 60,
+          "first_buy": "2021-12-01",
+          "last_buy": "2026-11-02",
+          "invested": 120000000.0,
+          "shares": 2336.0,
+          "leftover_cash_asset": 35.0968,
+          "avg_cost_asset": 37.9643,
+          "avg_cost_invest": 51349.95,
+          "eval_price": 71.91,
+          "eval_fx": 1344.16,
+          "value": 225841555.0,
+          "return_pct": 88.2,
+          "xirr_pct": 25.76
+        },
+        "TQQQ": {
+          "buys": 60,
+          "first_buy": "2021-12-01",
+          "last_buy": "2026-11-02",
+          "invested": 120000000.0,
+          "shares": 3625.0,
+          "leftover_cash_asset": 37.5101,
+          "avg_cost_asset": 24.4641,
+          "avg_cost_invest": 33089.76,
+          "eval_price": 49.1,
+          "eval_fx": 1344.16,
+          "value": 239294096.0,
+          "return_pct": 99.41,
+          "xirr_pct": 28.2
+        },
+        "SOXL": {
+          "buys": 60,
+          "first_buy": "2021-12-01",
+          "last_buy": "2026-11-02",
+          "invested": 120000000.0,
+          "shares": 3489.0,
+          "leftover_cash_asset": 41.6373,
+          "avg_cost_asset": 25.4165,
+          "avg_cost_invest": 34379.62,
+          "eval_price": 43.21,
+          "eval_fx": 1344.16,
+          "value": 202701113.0,
+          "return_pct": 68.92,
+          "xirr_pct": 21.24
+        }
+      }
+    },
+    {
+      "name": "월15일_200만원_5년_수수료0.25%",
+      "invest_currency": "KRW",
+      "freq": "monthly",
+      "anchor": 15,
+      "amount": 2000000,
+      "fractional": true,
+      "fee": 0.0025,
+      "results": {
+        "QLD": {
+          "buys": 60,
+          "first_buy": "2021-12-15",
+          "last_buy": "2026-11-16",
+          "invested": 120000000.0,
+          "shares": 2311.080766,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 38.3646,
+          "avg_cost_invest": 51923.76,
+          "eval_price": 71.91,
+          "eval_fx": 1344.16,
+          "value": 223385723.0,
+          "return_pct": 86.15,
+          "xirr_pct": 25.67
+        }
+      }
+    },
+    {
+      "name": "매주월요일_50만원_5년",
+      "invest_currency": "KRW",
+      "freq": "weekly",
+      "anchor": 0,
+      "amount": 500000,
+      "fractional": true,
+      "fee": 0.0,
+      "results": {
+        "QQQ": {
+          "buys": 261,
+          "first_buy": "2021-11-29",
+          "last_buy": "2026-11-23",
+          "invested": 130500000.0,
+          "shares": 229.617307,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 419.8835,
+          "avg_cost_invest": 568336.95,
+          "eval_price": 651.03,
+          "eval_fx": 1344.16,
+          "value": 200935476.0,
+          "return_pct": 53.97,
+          "xirr_pct": 17.59
+        },
+        "QLD": {
+          "buys": 261,
+          "first_buy": "2021-11-29",
+          "last_buy": "2026-11-23",
+          "invested": 130500000.0,
+          "shares": 2544.592783,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 37.8892,
+          "avg_cost_invest": 51285.22,
+          "eval_price": 71.91,
+          "eval_fx": 1344.16,
+          "value": 245956656.0,
+          "return_pct": 88.47,
+          "xirr_pct": 26.08
+        },
+        "TQQQ": {
+          "buys": 261,
+          "first_buy": "2021-11-29",
+          "last_buy": "2026-11-23",
+          "invested": 130500000.0,
+          "shares": 3963.561492,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 24.3247,
+          "avg_cost_invest": 32924.93,
+          "eval_price": 49.1,
+          "eval_fx": 1344.16,
+          "value": 261588145.0,
+          "return_pct": 100.45,
+          "xirr_pct": 28.71
+        },
+        "SOXL": {
+          "buys": 261,
+          "first_buy": "2021-11-29",
+          "last_buy": "2026-11-23",
+          "invested": 130500000.0,
+          "shares": 3786.566104,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 25.4617,
+          "avg_cost_invest": 34463.94,
+          "eval_price": 43.21,
+          "eval_fx": 1344.16,
+          "value": 219928128.0,
+          "return_pct": 68.53,
+          "xirr_pct": 21.36
+        }
+      }
+    },
+    {
+      "name": "매일_10만원_5년",
+      "invest_currency": "KRW",
+      "freq": "daily",
+      "anchor": null,
+      "amount": 100000,
+      "fractional": true,
+      "fee": 0.0,
+      "results": {
+        "QQQ": {
+          "buys": 1254,
+          "first_buy": "2021-11-24",
+          "last_buy": "2026-11-23",
+          "invested": 125400000.0,
+          "shares": 220.591977,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 419.9581,
+          "avg_cost_invest": 568470.36,
+          "eval_price": 651.03,
+          "eval_fx": 1344.16,
+          "value": 193037512.0,
+          "return_pct": 53.94,
+          "xirr_pct": 17.55
+        },
+        "QLD": {
+          "buys": 1254,
+          "first_buy": "2021-11-24",
+          "last_buy": "2026-11-23",
+          "invested": 125400000.0,
+          "shares": 2443.480115,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 37.9129,
+          "avg_cost_invest": 51320.25,
+          "eval_price": 71.91,
+          "eval_fx": 1344.16,
+          "value": 236183252.0,
+          "return_pct": 88.34,
+          "xirr_pct": 26.01
+        },
+        "TQQQ": {
+          "buys": 1254,
+          "first_buy": "2021-11-24",
+          "last_buy": "2026-11-23",
+          "invested": 125400000.0,
+          "shares": 3804.040765,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 24.3529,
+          "avg_cost_invest": 32964.95,
+          "eval_price": 49.1,
+          "eval_fx": 1344.16,
+          "value": 251060055.0,
+          "return_pct": 100.21,
+          "xirr_pct": 28.61
+        },
+        "SOXL": {
+          "buys": 1254,
+          "first_buy": "2021-11-24",
+          "last_buy": "2026-11-23",
+          "invested": 125400000.0,
+          "shares": 3629.129285,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 25.5266,
+          "avg_cost_invest": 34553.74,
+          "eval_price": 43.21,
+          "eval_fx": 1344.16,
+          "value": 210784016.0,
+          "return_pct": 68.09,
+          "xirr_pct": 21.21
+        }
+      }
+    },
+    {
+      "name": "월1일_1500달러_5년",
+      "invest_currency": "USD",
+      "freq": "monthly",
+      "anchor": 1,
+      "amount": 1500,
+      "fractional": true,
+      "fee": 0.0,
+      "results": {
+        "QQQ": {
+          "buys": 60,
+          "first_buy": "2021-12-01",
+          "last_buy": "2026-11-02",
+          "invested": 90000.0,
+          "shares": 212.234221,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 424.0598,
+          "avg_cost_invest": 424.06,
+          "eval_price": 651.03,
+          "eval_fx": 1.0,
+          "value": 138171.0,
+          "return_pct": 53.52,
+          "xirr_pct": 17.29
+        }
+      }
+    },
+    {
+      "name": "월1일_200만원_5년_삼성전자",
+      "invest_currency": "KRW",
+      "freq": "monthly",
+      "anchor": 1,
+      "amount": 2000000,
+      "fractional": true,
+      "fee": 0.0,
+      "results": {
+        "005930.KS": {
+          "buys": 60,
+          "first_buy": "2021-12-01",
+          "last_buy": "2026-11-02",
+          "invested": 120000000.0,
+          "shares": 1572.215699,
+          "leftover_cash_asset": 0.0,
+          "avg_cost_asset": 76325.405,
+          "avg_cost_invest": 76325.41,
+          "eval_price": 189400.0,
+          "eval_fx": 1.0,
+          "value": 297777653.0,
+          "return_pct": 148.15,
+          "xirr_pct": 37.59
+        }
+      }
+    }
+  ]
+}
