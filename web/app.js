@@ -9,6 +9,7 @@ import {
   estimateBuys,
   readQuery,
   shiftYears,
+  symbolStatus,
   toQuery,
   todayKst,
   validate as validateCond,
@@ -109,28 +110,23 @@ function showErrors(clientErrors) {
 
 // ---------- 조건 패널 그리기 ----------
 
-/** 종목 줄 상태 (F-01): 받는 중 / 저장본으로 계산(기준일) / 찾을 수 없음. 기본이면 null. */
-function symbolStatus(code) {
-  const why = state.badSymbols.get(code);
-  if (why) return { cls: "bad", text: why.includes("찾을 수 없") ? "찾을 수 없음" : "계산 못 함" };
-  if (state.loading && state.sending.has(code)) return { cls: "busy", text: "받는 중" };
-  const stale = state.staleSymbols.get(code);
-  if (stale) return { cls: "stale", text: `저장본 · ${stale}` };
-  return null;
-}
-
 function renderSymbols() {
   const list = $("sym-list");
   list.replaceChildren(
     ...state.symbols.map((s) => {
-      const status = symbolStatus(s.code);
+      const status = symbolStatus(s.code, {
+        loading: state.loading,
+        sending: state.sending,
+        bad: state.badSymbols,
+        stale: state.staleSymbols,
+      });
       return h(
         "li",
         { class: status ? `sym ${status.cls}` : "sym" },
         swatch(s.slot),
         h("strong", { text: s.code }),
         h("span", { class: "nm", text: s.name || "" }),
-        status ? h("span", { class: "st", text: status.text }) : null,
+        status ? h("span", { class: "st", text: status.text, title: status.title }) : null,
         h(
           "button",
           {

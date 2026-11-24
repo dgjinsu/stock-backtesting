@@ -9,6 +9,7 @@ import {
   isDate,
   readQuery,
   shiftYears,
+  symbolStatus,
   toQuery,
   todayKst,
   validate,
@@ -184,4 +185,45 @@ test("estimateBuys: 매주와 매일은 어림값", () => {
 
 test("estimateBuys: 기간이 없으면 0", () => {
   assert.equal(estimateBuys({ ...BASE, start: "2026-11-24", end: "2026-11-24" }), 0);
+});
+
+const IDLE = { loading: false, sending: new Set(), bad: new Map(), stale: new Map() };
+
+test("symbolStatus: 아무 일 없으면 기본", () => {
+  assert.equal(symbolStatus("QQQ", IDLE), null);
+});
+
+test("symbolStatus: 계산 중이고 보낸 종목만 받는 중", () => {
+  const busy = { ...IDLE, loading: true, sending: new Set(["QQQ"]) };
+  assert.deepEqual(symbolStatus("QQQ", busy), { cls: "busy", text: "받는 중" });
+  assert.equal(symbolStatus("QLD", busy), null); // 계산 중에 넣은 종목
+  assert.equal(symbolStatus("QQQ", { ...busy, loading: false }), null);
+});
+
+test("symbolStatus: 다시 계산하면 앞에서 실패한 종목도 받는 중", () => {
+  const state = {
+    ...IDLE,
+    loading: true,
+    sending: new Set(["XXXX"]),
+    bad: new Map([["XXXX", "'XXXX' 종목을 찾을 수 없습니다."]]),
+  };
+  assert.equal(symbolStatus("XXXX", state).cls, "busy");
+});
+
+test("symbolStatus: 실패 이유에 따라 찾을 수 없음 / 계산 못 함", () => {
+  const bad = new Map([
+    ["XXXX", "'XXXX' 종목을 찾을 수 없습니다."],
+    ["QLD", "주가를 받지 못했습니다. 잠시 뒤 다시 시도해 주세요."],
+  ]);
+  assert.equal(symbolStatus("XXXX", { ...IDLE, bad }).text, "찾을 수 없음");
+  assert.equal(symbolStatus("QLD", { ...IDLE, bad }).text, "계산 못 함");
+});
+
+test("symbolStatus: 저장본은 짧게, 전체 날짜는 title", () => {
+  const stale = new Map([["QLD", "2026-11-20"]]);
+  assert.deepEqual(symbolStatus("QLD", { ...IDLE, stale }), {
+    cls: "stale",
+    text: "저장본 11-20",
+    title: "2026-11-20까지 저장된 데이터로 계산",
+  });
 });

@@ -444,7 +444,8 @@ a {
   box-shadow: inset 0 0 0 2px var(--warn);
 }
 .sym .st {
-  flex: none;
+  flex: none; /* 상태는 짧게 두고(저장본 MM-DD), 좁으면 이름이 줄어든다 */
+  white-space: nowrap;
   font-size: 12px;
   font-weight: 600;
   color: var(--muted);

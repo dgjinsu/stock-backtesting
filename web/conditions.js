@@ -120,3 +120,22 @@ export function estimateBuys(cond) {
   }
   return count;
 }
+
+/**
+ * 종목 줄 상태 (F-01). 기본이면 null.
+ * 계산 중이고 보낸 종목이면 "받는 중"이 앞선다 (앞 계산에서 실패했어도 다시 받는 중이다).
+ * 그다음 실패("찾을 수 없음"/"계산 못 함"), 저장본("저장본 MM-DD", 전체 날짜는 title).
+ */
+export function symbolStatus(code, { loading, sending, bad, stale }) {
+  if (loading && sending.has(code)) return { cls: "busy", text: "받는 중" };
+  const why = bad.get(code);
+  if (why) return { cls: "bad", text: why.includes("찾을 수 없") ? "찾을 수 없음" : "계산 못 함" };
+  const day = stale.get(code);
+  if (day)
+    return {
+      cls: "stale",
+      text: `저장본 ${day.slice(5)}`,
+      title: `${day}까지 저장된 데이터로 계산`,
+    };
+  return null;
+}

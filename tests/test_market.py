@@ -281,6 +281,20 @@ def test_search_other_client_errors_raise_market_error(
         _run(tmp_path, scenario)
 
 
+def test_search_400_without_json_body_raises_market_error(tmp_path: Path) -> None:
+    """400인데 본문이 JSON이 아니면(프록시 HTML 등) 검색어 탓인지 알 수 없으니 실패다."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, text="<html>bad gateway</html>")
+
+    async def go() -> list[SearchHit]:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+            return await Market(tmp_path, client).search("qld")
+
+    with pytest.raises(MarketError, match="검색"):
+        asyncio.run(go())
+
+
 def test_search_failure_raises_market_error(tmp_path: Path) -> None:
     async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> list[SearchHit]:
         yahoo.fail = True
