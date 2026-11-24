@@ -310,3 +310,26 @@ def test_search_too_long_query_names_q_field(api: Api) -> None:
     response = api.client.get("/api/search", params={"q": "x" * 51})
     assert response.status_code == 422
     assert response.json()["detail"][0]["field"] == "q"
+
+
+def test_backtest_shared_fx_pair_is_fetched_once_even_when_failing(api: Api) -> None:
+    assert _post(api.client).status_code == 200
+    api.clock.now += 7 * 3600
+    api.yahoo.fail = True
+    api.yahoo.calls.clear()
+    _post(api.client)
+    assert sum(1 for path in api.yahoo.calls if path.endswith("USDKRW=X")) == 1
+
+
+def test_backtest_unexpected_error_is_not_hidden(api: Api, monkeypatch: pytest.MonkeyPatch) -> None:
+    market = api.client.app.state.market  # type: ignore[attr-defined]
+    original = market.get_series
+
+    async def broken(symbol: str) -> Any:
+        if symbol == "USDKRW=X":
+            raise RuntimeError("코드 버그")
+        return await original(symbol)
+
+    monkeypatch.setattr(market, "get_series", broken)
+    with pytest.raises(RuntimeError, match="코드 버그"):
+        _post(api.client)

@@ -24,6 +24,7 @@ FIELD_MESSAGES = {
     "currency": "통화는 KRW 또는 USD입니다",
     "fractional": "소수점 매수 여부는 true 또는 false입니다",
     "fee_pct": "수수료는 0~10% 사이 숫자입니다",
+    "q": "검색어는 50자까지 넣어 주세요",
 }
 
 

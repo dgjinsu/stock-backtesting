@@ -247,15 +247,23 @@ class FxError(MarketError):
 
 
 async def _fetch(
-    market: Market, symbol: str, currency: str
+    market: Market,
+    symbol: str,
+    currency: str,
+    fx_tasks: dict[str, "asyncio.Task[PriceHistory]"],
 ) -> tuple[PriceHistory, PriceHistory | None]:
-    """종목 하나와 (필요하면) 그 종목의 환율을 이어서 받는다. 종목끼리는 겹쳐서 받는다."""
+    """종목 하나와 (필요하면) 그 종목의 환율을 이어서 받는다. 종목끼리는 겹쳐서 받는다.
+
+    같은 환율 쌍은 fx_tasks에 작업 하나만 만들어 나눠 기다린다 (실패해도 한 번만 부른다).
+    """
     history = await market.get_series(symbol)
     if history.currency == currency:
         return history, None
     pair = f"{history.currency}{currency}=X"
+    if pair not in fx_tasks:
+        fx_tasks[pair] = asyncio.create_task(market.get_series(pair))
     try:
-        return history, await market.get_series(pair)
+        return history, await asyncio.shield(fx_tasks[pair])
     except MarketError as error:
         raise FxError(f"{pair} 환율을 받지 못해 계산하지 못했습니다.") from error
 
@@ -275,8 +283,10 @@ async def run_backtest(market: Market, request: BacktestRequest, today: date) ->
         fractional=request.fractional,
         fee=request.fee_pct / 100,
     )
+    fx_tasks: dict[str, asyncio.Task[PriceHistory]] = {}
     fetched = await asyncio.gather(
-        *(_fetch(market, s, request.currency) for s in request.symbols), return_exceptions=True
+        *(_fetch(market, s, request.currency, fx_tasks) for s in request.symbols),
+        return_exceptions=True,
     )
 
     results: list[ResultOut] = []
