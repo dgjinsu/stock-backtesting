@@ -147,6 +147,33 @@ def test_simulate_listed_after_start_is_flagged() -> None:
     assert summary.first_buy == date(2024, 1, 2)
 
 
+def test_simulate_listed_before_start_is_not_flagged() -> None:
+    assert _run("QLD", _params(EXPECTED["cases"][0])).summary.listed_after_start is False
+
+
+def test_simulate_fx_starting_after_first_buy_raises_engine_error() -> None:
+    days = _weekdays(date(2024, 1, 1), date(2024, 3, 29), frozenset({date(2024, 1, 1)}))
+    asset = Series("US", "USD", days, [10.0] * len(days))
+    fx_days = [d for d in days if d >= date(2024, 2, 1)]
+    fx = Series("USDKRW=X", "KRW", fx_days, [1300.0] * len(fx_days))
+    params = Params(date(2024, 1, 1), date(2024, 3, 29), "monthly", 1, 100_000.0, "KRW")
+    with pytest.raises(EngineError, match="환율"):
+        simulate(asset, fx, params)
+
+
+@pytest.mark.parametrize(
+    "with_fx", [True, False], ids=["fx-for-same-currency", "no-fx-for-other-currency"]
+)
+def test_simulate_rejects_fx_mismatching_currencies(with_fx: bool) -> None:
+    days = _weekdays(date(2024, 1, 1), date(2024, 3, 29))
+    currency = "KRW" if with_fx else "USD"
+    asset = Series("X", currency, days, [10.0] * len(days))
+    fx = Series("USDKRW=X", "KRW", days, [1300.0] * len(days)) if with_fx else None
+    params = Params(date(2024, 1, 1), date(2024, 3, 29), "monthly", 1, 100_000.0, "KRW")
+    with pytest.raises(ValueError, match="환율"):
+        simulate(asset, fx, params)
+
+
 def test_simulate_rejects_non_positive_amount() -> None:
     days = _weekdays(date(2024, 1, 2), date(2024, 3, 29))
     asset = Series("X", "KRW", days, [100.0] * len(days))
@@ -259,9 +286,15 @@ def test_xirr_without_sign_change_returns_none() -> None:
     assert xirr([(date(2023, 1, 1), -100.0), (date(2024, 1, 1), -10.0)]) is None
 
 
-def test_xirr_total_loss_is_close_to_minus_one_or_none() -> None:
-    rate = xirr([(date(2023, 1, 1), -100.0), (date(2024, 1, 1), 0.0)])
-    assert rate is None or rate < -0.99
+def test_xirr_total_loss_returns_none() -> None:
+    assert xirr([(date(2023, 1, 1), -100.0), (date(2024, 1, 1), 0.0)]) is None
+
+
+def test_xirr_falls_back_to_bisection_when_newton_jumps_out() -> None:
+    # 뉴턴법 첫 걸음이 −99.99% 아래로 튀어 이분법으로 푼다. 값은 이분법 결과를 적어 둔 것
+    rate = xirr([(date(2014, 1, 1), -100.0), (date(2024, 1, 1), 1.0)])
+    assert rate is not None
+    assert rate == pytest.approx(-0.368883508, abs=1e-6)
 
 
 # ---------- 그래프 날짜축 ----------

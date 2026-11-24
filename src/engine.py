@@ -21,7 +21,10 @@ _XIRR_HIGH = 100.0
 
 
 class EngineError(ValueError):
-    """계산할 수 없는 조건. 메시지는 사용자에게 그대로 보여 줄 한국어다."""
+    """데이터 때문에 계산할 수 없는 조건 (기간 안 매수일 없음, 환율 없음 등).
+
+    메시지는 사용자에게 그대로 보여 줄 한국어다. 입력 계약 위반(금액 0 등)은 ValueError다.
+    """
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,7 +85,7 @@ class DailyRow:
 
 @dataclass(frozen=True, slots=True)
 class Extreme:
-    """최고·최저 값과 그날."""
+    """최고·최저 값과 그날. value 단위는 쓰는 곳마다 다르다: best·worst는 %, peak_value는 금액."""
 
     date: date
     value: float
@@ -274,6 +277,10 @@ def _check_params(p: Params) -> None:
 def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
     """종목 하나에 매번 p.amount씩 산 결과. fx는 종목 통화 → 투자 통화 환율 (같으면 None)."""
     _check_params(p)
+    if (fx is None) != (asset.currency == p.currency):
+        raise ValueError(
+            f"{asset.symbol}: 종목 통화 {asset.currency}와 투자 통화 {p.currency}에 맞는 환율이 필요합니다"
+        )
     picked = buy_days(asset.dates, p.start, p.end, p.freq, p.anchor)
     if not picked:
         raise EngineError(f"{asset.symbol}: 기간 안에 매수일이 없습니다")
@@ -288,27 +295,27 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
     last_index = _asof_index(asset.dates, p.end)
     for i in range(first_index, last_index + 1):
         day, price = asset.dates[i], asset.close[i]
-        rate = _rate_on(fx, day)
+        fx_rate = _rate_on(fx, day)
         if day in buy_set:
             invested += p.amount
             flows.append((day, -p.amount))
-            net = p.amount * (1 - p.fee) / rate  # 수수료를 뺀 종목 통화 금액
+            net = p.amount * (1 - p.fee) / fx_rate  # 수수료를 뺀 종목 통화 금액
             if p.fractional:
                 qty = net / price
-                cost_asset += p.amount / rate
+                cost_asset += p.amount / fx_rate
                 cost_invest += p.amount
             else:
                 cash += net
                 qty = float(math.floor(cash / price + 1e-9))
                 cash -= qty * price
                 cost_asset += qty * price / (1 - p.fee)
-                cost_invest += qty * price / (1 - p.fee) * rate
+                cost_invest += qty * price / (1 - p.fee) * fx_rate
             shares += qty
             buys.append(
                 BuyRow(
                     date=day,
                     price=price,
-                    fx=rate,
+                    fx=fx_rate,
                     qty=qty,
                     cum_qty=shares,
                     avg_cost_asset=cost_asset / shares if shares > 0 else None,
@@ -317,12 +324,12 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
                     cash=cash,
                 )
             )
-        value = (shares * price + cash) * rate
+        value = (shares * price + cash) * fx_rate
         daily.append(
             DailyRow(
                 date=day,
                 price=price,
-                fx=rate,
+                fx=fx_rate,
                 value=value,
                 invested=invested,
                 return_pct=(value / invested - 1) * 100,
@@ -335,7 +342,7 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
     eval_fx = _rate_on(fx, p.end)
     value = (shares * eval_price + cash) * eval_fx
     flows.append((p.end, value))
-    rate_of_return = xirr(flows)
+    annual_rate = xirr(flows)
     # 마지막 거래일은 요약과 같은 평가 환율(끝날 기준)로 다시 평가해 그래프 끝과 요약을 맞춘다
     daily[-1] = replace(daily[-1], fx=eval_fx, value=value, return_pct=(value / invested - 1) * 100)
 
@@ -357,7 +364,7 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
         value=value,
         profit=value - invested,
         return_pct=(value / invested - 1) * 100,
-        xirr_pct=None if rate_of_return is None else rate_of_return * 100,
+        xirr_pct=None if annual_rate is None else annual_rate * 100,
         best=Extreme(best.date, best.return_pct),
         worst=Extreme(worst.date, worst.return_pct),
         peak_value=Extreme(peak.date, peak.value),
