@@ -232,6 +232,7 @@ def _chart_out(chart: engine.Chart, invest: str) -> ChartOut:
             )
             for symbol, s in chart.series.items()
         },
+        total_days=chart.total_days,
     )
 
 

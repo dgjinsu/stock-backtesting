@@ -311,12 +311,14 @@ def test_build_chart_merges_dates_and_fills_missing_days() -> None:
     assert chart.series["B"].price == [None, 20.0, 20.0, 25.0]
     assert chart.series["A"].price == [10.0, 11.0, 12.0, 12.0]
     assert chart.series["A"].invested[-1] == pytest.approx(300.0)
+    assert chart.total_days == 4
 
 
 def test_build_chart_downsampling_keeps_first_last_and_extremes() -> None:
     result = _run("QLD", _params(EXPECTED["cases"][4]))  # 매일 매수, 거래일 1,254개
     chart = build_chart({"QLD": result}, max_points=100)
     assert len(chart.dates) <= 100
+    assert chart.total_days == len(result.daily)
     for must in (
         result.daily[0].date,
         result.daily[-1].date,

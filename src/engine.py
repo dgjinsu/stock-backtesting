@@ -145,10 +145,11 @@ class ChartSeries:
 
 @dataclass(frozen=True, slots=True)
 class Chart:
-    """모든 종목이 같은 날짜축을 쓰는 그래프 데이터."""
+    """모든 종목이 같은 날짜축을 쓰는 그래프 데이터. total_days는 줄이기 전 날짜 수."""
 
     dates: list[date]
     series: dict[str, ChartSeries]
+    total_days: int
 
 
 # ---------- 매수일 (계산 규칙 2절) ----------
@@ -436,4 +437,5 @@ def build_chart(results: Mapping[str, SimResult], max_points: int = 1000) -> Cha
             )
             for symbol, s in full.items()
         },
+        total_days=len(all_dates),
     )

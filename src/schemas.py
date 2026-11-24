@@ -146,8 +146,11 @@ class ChartSeriesOut(BaseModel):
 
 
 class ChartOut(BaseModel):
+    """그래프 데이터. 날짜가 많으면 줄여서 보내고, total_days는 줄이기 전 날짜 수다."""
+
     dates: list[date]
     series: dict[str, ChartSeriesOut]
+    total_days: int
 
 
 class SymbolError(BaseModel):
