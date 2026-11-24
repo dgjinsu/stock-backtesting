@@ -11,6 +11,7 @@ from bisect import bisect_right
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import date, timedelta
+from itertools import pairwise
 from typing import Literal
 
 Freq = Literal["daily", "weekly", "monthly"]
@@ -438,4 +439,161 @@ def build_chart(results: Mapping[str, SimResult], max_points: int = 1000) -> Cha
             for symbol, s in full.items()
         },
         total_days=len(all_dates),
+    )
+
+
+# ---------- v2 분석 (계산 규칙 9-1 ~ 9-5) ----------
+
+TAX_FREE_KRW = 2_500_000.0  # 양도세 기본 공제 (9-5절)
+TAX_RATE = 0.22
+
+
+@dataclass(frozen=True, slots=True)
+class Underwater:
+    """원금 아래가 이어진 구간. recovered는 다시 원금 위로 올라온 날 (끝날까지 못 올라왔으면 None)."""
+
+    days: int
+    start: date
+    recovered: date | None
+
+
+@dataclass(frozen=True, slots=True)
+class YearResult:
+    """연도별 (9-2절). price_change_pct는 전해 데이터가 없으면 None."""
+
+    year: int
+    return_pct: float
+    price_change_pct: float | None
+
+
+@dataclass(frozen=True, slots=True)
+class MonthResult:
+    """월 수익률 (9-3절). month는 "YYYY-MM", 투자 통화 기준의 종목 자체 수익률."""
+
+    month: str
+    return_pct: float
+
+
+@dataclass(frozen=True, slots=True)
+class Analysis:
+    """v2 지표 (9-1 ~ 9-5절). 금액은 투자 통화, 비율은 %."""
+
+    max_drawdown: Extreme | None  # value는 평가금 낙폭 %, 낙폭이 없으면 None
+    underwater_days: int
+    trading_days: int
+    underwater_pct: float
+    longest_underwater: Underwater | None
+    last_underwater: date | None
+    buys_below_eval_price: int
+    buys_below_avg_cost: int
+    years: list[YearResult]
+    months: list[MonthResult]
+    price_effect: float
+    fx_effect: float
+    avg_buy_fx: float | None  # 투자 통화와 종목 통화가 같으면 None
+    tax: float
+    profit_after_tax: float
+
+
+def _is_underwater(row: DailyRow) -> bool:
+    """평가금 < 투자금 (9-1절). 부동소수점 오차만큼의 차이는 같다고 본다."""
+    return row.value < row.invested * (1 - 1e-12)
+
+
+def _longest_run(rows: Sequence[DailyRow], flags: Sequence[bool]) -> Underwater | None:
+    """flags가 이어진 가장 긴 구간. 같은 길이면 앞의 것 (결정 d25)."""
+    best: Underwater | None = None
+    i = 0
+    while i < len(rows):
+        if not flags[i]:
+            i += 1
+            continue
+        j = i
+        while j < len(rows) and flags[j]:
+            j += 1
+        if best is None or j - i > best.days:
+            best = Underwater(j - i, rows[i].date, rows[j].date if j < len(rows) else None)
+        i = j
+    return best
+
+
+def _months(asset: Series, fx: Series | None, first_buy: date, end: date) -> list[MonthResult]:
+    """9-3절: 월말 값 = 그 달 마지막 거래일 종가 × 그날 환율. 첫 매수 달부터 달력상 끝난 달까지."""
+    month_end: dict[tuple[int, int], float] = {}
+    for day, close in zip(asset.dates, asset.close, strict=True):
+        if day <= end:
+            month_end[(day.year, day.month)] = close * _rate_on(fx, day)
+    last = (end.year, end.month)
+    if (end + timedelta(days=1)).month == end.month:  # 끝날짜가 말일이 아니면 그 달은 진행 중이다
+        last = (end.year, end.month - 1) if end.month > 1 else (end.year - 1, 12)
+    keys = sorted(month_end)
+    return [
+        MonthResult(f"{b[0]}-{b[1]:02d}", (month_end[b] / month_end[a] - 1) * 100)
+        for a, b in pairwise(keys)
+        if (first_buy.year, first_buy.month) <= b <= last
+    ]
+
+
+def _years(result: SimResult, asset: Series, end: date) -> list[YearResult]:
+    """9-2절: 그해 마지막 거래일의 수익률 추이 값, 주가 등락은 전해 마지막 종가 대비."""
+    year_end: dict[int, float] = {}
+    for day, close in zip(asset.dates, asset.close, strict=True):
+        if day <= end:
+            year_end[day.year] = close
+    last_row: dict[int, DailyRow] = {row.date.year: row for row in result.daily}
+    out = []
+    for year in sorted(last_row):
+        before = year_end.get(year - 1)
+        change = (year_end[year] / before - 1) * 100 if before else None
+        out.append(YearResult(year, last_row[year].return_pct, change))
+    return out
+
+
+def analyze(
+    result: SimResult, asset: Series, fx: Series | None, end: date, tax_fx: float = 1.0
+) -> Analysis:
+    """v2 지표. 계산 규칙 9-1 ~ 9-5절.
+
+    result는 simulate(asset, fx, params)의 결과이고 end는 params.end다.
+    tax_fx는 투자 통화 1단위의 원화 값이다 (원화 투자면 1, 달러 투자면 평가일 원/달러 환율).
+    양도세는 원화로 계산해 투자 통화로 돌려준다. 종목 통화가 원화(한국 종목)면 0이다.
+    """
+    rows, s = result.daily, result.summary
+    # 9-1 흔들림
+    peak, drawdown = 0.0, None
+    for row in rows:
+        peak = max(peak, row.value)
+        change = (row.value / peak - 1) * 100 if peak > 0 else 0.0
+        if change < 0 and (drawdown is None or change < drawdown.value):
+            drawdown = Extreme(row.date, change)
+    flags = [_is_underwater(row) for row in rows]
+    under = [row.date for row, flag in zip(rows, flags, strict=True) if flag]
+    # 9-4 수익 분해 (투자 통화와 종목 통화가 같으면 환율 효과 0)
+    cost_asset = (s.avg_cost_asset or 0.0) * s.shares  # 매수원가(종목), 4절
+    asset_value = s.shares * s.eval_price + s.leftover_cash
+    price_effect = (asset_value - cost_asset) * s.eval_fx
+    fx_effect = cost_asset * s.eval_fx - s.invested if fx is not None else 0.0
+    if fx is None:
+        price_effect = s.profit
+    # 9-5 양도세
+    taxable = result.currency != "KRW"
+    tax = max(0.0, s.profit * tax_fx - TAX_FREE_KRW) * TAX_RATE / tax_fx if taxable else 0.0
+    return Analysis(
+        max_drawdown=drawdown,
+        underwater_days=len(under),
+        trading_days=len(rows),
+        underwater_pct=len(under) / len(rows) * 100,
+        longest_underwater=_longest_run(rows, flags),
+        last_underwater=under[-1] if under else None,
+        buys_below_eval_price=sum(1 for b in result.buys if b.price < s.eval_price),
+        buys_below_avg_cost=sum(
+            1 for b in result.buys if s.avg_cost_asset is not None and b.price < s.avg_cost_asset
+        ),
+        years=_years(result, asset, end),
+        months=_months(asset, fx, s.first_buy, end),
+        price_effect=price_effect,
+        fx_effect=fx_effect,
+        avg_buy_fx=s.invested / cost_asset if fx is not None and cost_asset > 0 else None,
+        tax=tax,
+        profit_after_tax=s.profit - tax,
     )

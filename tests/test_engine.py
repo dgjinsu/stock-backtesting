@@ -1,11 +1,22 @@
 """계산 엔진(src/engine.py)을 기준값과 계산 규칙으로 확인한다. 네트워크 없이 fixture만 쓴다."""
 
+from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any
 
 import pytest
 
-from src.engine import EngineError, Params, Series, build_chart, buy_days, simulate, xirr
+from src.engine import (
+    Analysis,
+    EngineError,
+    Params,
+    Series,
+    analyze,
+    build_chart,
+    buy_days,
+    simulate,
+    xirr,
+)
 from tests.helpers import CASE_IDS, load_expected, load_series
 
 EXPECTED = load_expected()
@@ -326,3 +337,128 @@ def test_build_chart_downsampling_keeps_first_last_and_extremes() -> None:
         result.summary.worst.date,
     ):
         assert must in chart.dates
+
+
+# ---------- v2 분석: 계산 규칙 9-1 ~ 9-5 ----------
+
+V2 = EXPECTED["v2"]
+
+
+def _v2_params(**changes: Any) -> Params:
+    start, end = (date.fromisoformat(d) for d in V2["period"])
+    params = Params(start, end, "monthly", V2["anchor"], float(V2["amount"]), V2["invest_currency"])
+    return replace(params, **changes)
+
+
+def _analyze(symbol: str, params: Params) -> Analysis:
+    asset = load_series(symbol)
+    fx = (
+        None
+        if asset.currency == params.currency
+        else load_series(f"{asset.currency}{params.currency}=X")
+    )
+    return analyze(simulate(asset, fx, params), asset, fx, params.end)
+
+
+def test_analyze_drawdown_and_underwater_match_v2_reference() -> None:
+    a, m = _analyze("QLD", _v2_params()), V2["metrics"]
+    assert a.max_drawdown is not None
+    assert a.max_drawdown.date == date.fromisoformat(m["max_drawdown"]["date"])
+    assert a.max_drawdown.value == pytest.approx(m["max_drawdown"]["pct"], abs=0.01)
+    assert (a.underwater_days, a.trading_days) == (m["underwater_days"], m["trading_days"])
+    assert a.underwater_pct == pytest.approx(m["underwater_pct"], abs=0.01)
+    assert a.longest_underwater is not None
+    longest = m["longest_underwater"]
+    assert a.longest_underwater.days == longest["days"]
+    assert a.longest_underwater.start.isoformat() == longest["start"]
+    assert a.longest_underwater.recovered is not None
+    assert a.longest_underwater.recovered.isoformat() == longest["recovered"]
+    assert a.last_underwater == date.fromisoformat(m["last_underwater"])
+    assert a.buys_below_eval_price == m["buys_below_eval_price"]
+    assert a.buys_below_avg_cost == m["buys_below_avg_cost"]
+
+
+def test_analyze_years_and_months_match_v2_reference() -> None:
+    a, m = _analyze("QLD", _v2_params()), V2["metrics"]
+    years = {str(y.year): y for y in a.years}
+    assert list(years) == list(m["years"])
+    for year, want in m["years"].items():
+        assert years[year].return_pct == pytest.approx(want["return_pct"], abs=0.01)
+        if want["price_change_pct"] is None:
+            assert years[year].price_change_pct is None
+        else:
+            assert years[year].price_change_pct == pytest.approx(want["price_change_pct"], abs=0.01)
+    assert len(a.months) == m["months"]["count"]
+    assert sum(1 for x in a.months if x.return_pct > 0) == m["months"]["up"]
+    best = max(a.months, key=lambda x: x.return_pct)
+    worst = min(a.months, key=lambda x: x.return_pct)
+    assert (best.month, worst.month) == (
+        m["months"]["best"]["month"],
+        m["months"]["worst"]["month"],
+    )
+    assert best.return_pct == pytest.approx(m["months"]["best"]["return_pct"], abs=0.01)
+    assert worst.return_pct == pytest.approx(m["months"]["worst"]["return_pct"], abs=0.01)
+
+
+def test_analyze_profit_split_and_tax_match_v2_reference() -> None:
+    a, m = _analyze("QLD", _v2_params()), V2["metrics"]
+    assert a.price_effect == pytest.approx(m["price_effect"], abs=1)
+    assert a.fx_effect == pytest.approx(m["fx_effect"], abs=1)
+    assert a.price_effect + a.fx_effect == pytest.approx(m["profit"], abs=1)
+    assert a.avg_buy_fx == pytest.approx(m["avg_buy_fx"], abs=0.01)
+    assert a.tax == pytest.approx(m["tax"], abs=1)
+    assert a.profit_after_tax == pytest.approx(m["profit_after_tax"], abs=1)
+
+
+def test_analyze_korean_stock_has_no_fx_effect_and_no_tax() -> None:
+    a = _analyze("005930.KS", _v2_params())
+    assert a.fx_effect == 0
+    assert a.avg_buy_fx is None
+    assert a.tax == 0
+    assert a.price_effect == pytest.approx(a.profit_after_tax, abs=1e-6)
+
+
+def test_analyze_dollar_investment_converts_tax_with_given_rate() -> None:
+    """9-5: 달러 투자면 손익을 원화로 바꿔 세금을 계산하고 다시 달러로 보여 준다."""
+    params = _v2_params(amount=1500.0, currency="USD")
+    asset = load_series("QLD")
+    result = simulate(asset, None, params)
+    a = analyze(result, asset, None, params.end, tax_fx=1344.16)
+    profit_krw = result.summary.profit * 1344.16
+    assert a.tax == pytest.approx(max(0.0, profit_krw - 2_500_000) * 0.22 / 1344.16, abs=0.01)
+    assert a.fx_effect == 0
+
+
+def _rising(days: int = 70) -> Series:
+    dates = [date(2024, 1, 1) + timedelta(days=i) for i in range(days)]
+    return Series("UP", "KRW", dates, [100.0 + i for i in range(days)])
+
+
+def test_analyze_without_drawdown_or_underwater_days() -> None:
+    """결정 d25: 낙폭이 없으면 None, 원금 아래였던 날이 없으면 0일·None."""
+    asset = _rising()
+    params = Params(date(2024, 1, 1), date(2024, 3, 10), "daily", None, 1000.0, "KRW")
+    a = analyze(simulate(asset, None, params), asset, None, params.end)
+    assert a.max_drawdown is None
+    assert a.underwater_days == 0
+    assert a.longest_underwater is None
+    assert a.last_underwater is None
+
+
+def test_analyze_period_without_ended_month_has_no_months() -> None:
+    """결정 d25: 끝난 달이 없으면 월별은 빈 목록 (끝날짜 3-10은 3월 말일이 아니다)."""
+    asset = _rising()
+    params = Params(date(2024, 3, 1), date(2024, 3, 9), "daily", None, 1000.0, "KRW")
+    assert analyze(simulate(asset, None, params), asset, None, params.end).months == []
+
+
+def test_analyze_longest_underwater_tie_keeps_the_first() -> None:
+    """결정 d25: 가장 긴 원금 아래 구간이 같은 길이로 둘이면 앞의 것."""
+    prices = [100.0, 90.0, 90.0, 200.0, 90.0, 40.0, 300.0]
+    dates = [date(2024, 1, 1) + timedelta(days=i) for i in range(len(prices))]
+    asset = Series("ZIG", "KRW", dates, prices)
+    params = Params(dates[0], dates[-1], "daily", None, 100.0, "KRW")
+    a = analyze(simulate(asset, None, params), asset, None, params.end)
+    assert a.longest_underwater is not None
+    assert (a.longest_underwater.days, a.longest_underwater.start) == (2, dates[1])
+    assert a.longest_underwater.recovered == dates[3]
