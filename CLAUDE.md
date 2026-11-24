@@ -16,6 +16,7 @@ PC 웹 브라우저만 대상으로 하고, 지금은 v1(F-01~F-10)을 만든다
 | 코드 규칙 | [docs/8_코드컨벤션.md](docs/8_코드컨벤션.md) |
 | 화면 시안 | https://claude.ai/artifact/Nvxz1FH9bYPKwinAibsZmr (Artifact 도구 `read`로 연다. "v1" 페이지가 기준) |
 | 개발 현황판 | https://claude.ai/artifact/4qzSDxqhz7o8zoeF2CvucF (기록 방법은 `.claude/skills/dev-board/SKILL.md`) |
+| 결정 보드 | https://claude.ai/artifact/JaxQyqXbXZLdmN4houmWh5 (Claude가 혼자 정한 것과 사용자가 할 일. 사용자 답은 `data/dev/answers`) |
 
 ## 명령 (Windows, 저장소 루트에서)
 
@@ -27,7 +28,11 @@ python -m venv .venv                                         # 처음 한 번
 .\.venv\Scripts\python -m pytest tests\test_engine.py -q     # 일부 테스트만
 ```
 
-Git Bash에서는 `.venv/Scripts/python`으로 쓴다. 서버 실행 명령은 1단계에서 여기에 더한다.
+```powershell
+.\.venv\Scripts\python -m src.main --open                     # 서버 켜고 브라우저 열기 (실행.bat과 같음)
+```
+
+Git Bash에서는 `.venv/Scripts/python`으로 쓴다. 환경변수 `HOST`, `PORT`, `DATA_DIR`로 주소와 캐시 위치를 바꾼다.
 
 ## 일하는 순서
 
