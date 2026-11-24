@@ -25,6 +25,15 @@ CASE_IDS = {
     "월1일_200만원_5년_삼성전자": "monthly1-krw2m-005930",
 }
 
+# 9-3 끝난 달 (결정 d24, v2 사례 QLD 매월 1일, 첫 달 2021-12): 사례 id →
+# (QLD를 이 날까지 자름, None이면 그대로 / 끝날짜 / 마지막 달 / 달 수). 엔진과 참고 스크립트가 같이 쓴다
+MONTH_END_CASES: dict[str, tuple[date | None, date, str, int]] = {
+    "data-0929-end-0930-skips-sep": (date(2026, 9, 29), date(2026, 9, 30), "2026-08", 57),
+    "data-full-end-0930-keeps-sep": (None, date(2026, 9, 30), "2026-09", 58),
+    "end-0615-skips-jun": (None, date(2026, 6, 15), "2026-05", 54),
+    "data-1030fri-end-1031sat-skips-oct": (date(2026, 10, 30), date(2026, 10, 31), "2026-09", 58),
+}
+
 
 @cache
 def load_expected() -> dict[str, Any]:
