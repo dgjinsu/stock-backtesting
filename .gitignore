@@ -1,2 +1,24 @@
 # 받은 주가 저장소 (다시 받을 수 있음)
 data/
+
+# 파이썬
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# 비밀값
+.env
+
+# Claude Code 개인 설정
+.claude/settings.local.json
+
+# 편집기·OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

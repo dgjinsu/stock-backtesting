@@ -1,0 +1,9 @@
+# 줄 끝은 LF로 통일한다. Windows 배치 파일만 CRLF.
+* text=auto eol=lf
+*.bat text eol=crlf
+
+*.png binary
+*.ico binary
+
+# 저장한 Yahoo 응답은 한 줄짜리 큰 JSON이라 diff를 보지 않는다
+tests/fixtures/yahoo/*.json -diff linguist-generated
