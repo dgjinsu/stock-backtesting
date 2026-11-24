@@ -58,10 +58,10 @@ export function price(value, currency) {
   return currency === "USD" ? `$${text}` : `${text} ${currency}`;
 }
 
-/** 수량: 소수 2자리까지 (정수면 정수로). */
-export function qty(value) {
+/** 수량: 소수 digits자리까지 (정수면 정수로). fixed면 자리를 채워 표에서 줄이 맞는다. */
+export function qty(value, digits = 2, { fixed = false } = {}) {
   if (value === null || value === undefined) return "—";
-  return value.toLocaleString("ko-KR", { maximumFractionDigits: 2 });
+  return value.toLocaleString("ko-KR", { minimumFractionDigits: fixed ? digits : 0, maximumFractionDigits: digits });
 }
 
 /** 환율: 1 이상이면 소수 2자리, 작으면 유효숫자 4자리. */

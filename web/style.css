@@ -178,5 +178,20 @@ a { color: var(--c1); }
 .tbl .sym-cell { text-align: left; font-weight: 700; }
 .tbl .sym-cell > span { display: inline-flex; align-items: center; gap: 8px; }
 
+.box-head { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; padding: 14px 20px; }
+.box-head h3 { padding: 0; margin-right: auto; }
+.box-body { padding: 0 20px 18px; display: flex; flex-direction: column; gap: 12px; }
+.box-foot { border-top: 1px solid var(--line); padding: 10px 20px; text-align: center; }
+.chart-tools { display: flex; flex-wrap: wrap; gap: 8px; }
+.chart-tools .seg button, .box-head .seg button { min-height: 32px; font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+.chart-wrap { position: relative; height: 340px; }
+.chart-missing { margin: 0; height: 100%; display: grid; place-items: center; text-align: center; padding: 0 24px; color: var(--muted); background: var(--sunken); border-radius: 12px; font-size: 14px; }
+.legend { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: 13px; }
+.legend li { display: inline-flex; align-items: center; gap: 6px; }
+.legend .lg-label { color: var(--muted); }
+.tbl tr.gap td { text-align: center; color: var(--muted); font-size: 13px; background: var(--sunken); }
+.link-btn { border: 0; background: none; color: var(--c1); font-weight: 600; font-size: 14px; cursor: pointer; padding: 6px 10px; border-radius: 8px; }
+.link-btn:hover { background: var(--sunken); }
+
 .notice { border-top: 1px solid var(--line); padding-top: 16px; font-size: 13px; color: var(--muted); line-height: 1.8; }
 .notice ul { margin: 0; padding-left: 18px; }

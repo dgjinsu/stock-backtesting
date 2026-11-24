@@ -59,6 +59,9 @@ test("qty: 소수 2자리까지, 정수는 정수로", () => {
   assert.equal(qty(211.47), "211.47");
   assert.equal(qty(60), "60");
   assert.equal(qty(2336.3123), "2,336.31");
+  assert.equal(qty(39.9531, 4), "39.9531");
+  assert.equal(qty(13.1, 4, { fixed: true }), "13.1000");
+  assert.equal(qty(13.1, 4), "13.1");
 });
 
 test("fx: 1 이상은 소수 2자리, 작으면 유효숫자 4자리", () => {

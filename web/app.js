@@ -13,6 +13,7 @@ import {
   todayKst,
   validate as validateCond,
 } from "./conditions.js";
+import { buysSection, chartSection, clearCharts, csvButton } from "./charts.js";
 import { h, icon, swatch } from "./dom.js";
 import { fx, money, pct, period, price, qty, signedMoney } from "./format.js";
 
@@ -464,6 +465,7 @@ function signClass(value) {
 }
 
 function renderFailure(message, retry = true) {
+  clearCharts();
   $("empty").hidden = true;
   const output = $("output");
   output.hidden = false;
@@ -507,7 +509,7 @@ function header(data) {
     "div",
     { class: "res-head" },
     h("div", {}, h("h2", { text: title }), h("p", { text: `${params.start <= ALL_START ? "상장일" : params.start} ~ ${params.end} · ${buyText} · 평가 ${latest} 종가${fxText}` })),
-    h("div", { class: "actions", id: "result-actions" }, copy),
+    h("div", { class: "actions" }, copy, csvButton(data)),
   );
 }
 
@@ -658,6 +660,8 @@ function renderResult(data) {
     ...alerts(data),
     h("div", { class: "cards" }, ...data.results.map((r) => card(r, data.params.currency))),
     compareTable(data),
+    chartSection(data, slotOf),
+    buysSection(data, slotOf),
     notice(data),
   );
 }

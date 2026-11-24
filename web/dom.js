@@ -1,7 +1,6 @@
 // DOM을 만드는 작은 도우미. 화면 모듈(app.js, charts.js)이 같이 쓴다.
 
-/** 종목 선 모양. 색(--c1~--c8)과 함께 종목에 붙는다 (상세 설계 5절). */
-export const DASHES = ["", "7 4", "2 3", "10 3 2 3", "12 4", "4 4", "1 4", "8 3 1 3"];
+import { DASHES } from "./chartdata.js";
 
 const SVG = "http://www.w3.org/2000/svg";
 
@@ -22,8 +21,8 @@ export function h(tag, props = {}, ...children) {
   return el;
 }
 
-/** 종목 선 모양 견본 (색 + 점선). slot은 0~7. */
-export function swatch(slot, width = 20) {
+/** 종목 선 모양 견본 (색 + 점선). slot은 0~7. color를 주면 그 색(투자금·평단가는 var(--ref)). */
+export function swatch(slot, width = 20, { color = `var(--c${slot + 1})` } = {}) {
   const svg = document.createElementNS(SVG, "svg");
   svg.setAttribute("width", String(width));
   svg.setAttribute("height", "6");
@@ -33,7 +32,7 @@ export function swatch(slot, width = 20) {
   for (const [k, v] of Object.entries({ x1: 1, y1: 3, x2: width - 1, y2: 3, "stroke-width": 3, "stroke-linecap": "round" })) {
     line.setAttribute(k, String(v));
   }
-  line.style.stroke = `var(--c${slot + 1})`;
+  line.style.stroke = color;
   if (DASHES[slot]) line.style.strokeDasharray = DASHES[slot];
   svg.append(line);
   return svg;

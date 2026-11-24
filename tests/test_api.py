@@ -126,6 +126,7 @@ def test_backtest_chart_shares_one_date_axis(api: Api) -> None:
     client = api.client
     chart = _post(client, freq="daily", anchor=None, amount=100_000).json()["chart"]
     assert 0 < len(chart["dates"]) <= 1000
+    assert chart["total_days"] > len(chart["dates"])  # 5년 매일(약 1,250일)은 줄여서 보낸다
     for symbol in ("QQQ", "QLD"):
         series = chart["series"][symbol]
         assert len(series["value"]) == len(chart["dates"])
@@ -158,6 +159,7 @@ def test_backtest_all_symbols_failing_returns_only_errors(
     body = response.json()
     assert body["results"] == []
     assert body["chart"]["dates"] == []
+    assert body["chart"]["total_days"] == 0
     assert len(body["errors"]) == 1
 
 
