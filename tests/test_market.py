@@ -58,9 +58,7 @@ class Clock:
         return self.now
 
 
-def _run(
-    tmp_path: Path, scenario: Callable[[Market, FakeYahoo, Clock], Awaitable[Any]]
-) -> Any:
+def _run(tmp_path: Path, scenario: Callable[[Market, FakeYahoo, Clock], Awaitable[Any]]) -> Any:
     yahoo, clock = FakeYahoo(), Clock()
 
     async def main() -> Any:
@@ -120,7 +118,15 @@ def test_get_series_second_call_within_six_hours_uses_cache(tmp_path: Path) -> N
 
     assert _run(tmp_path, scenario) == 1
     saved = json.loads((tmp_path / "prices" / "QLD.json").read_text(encoding="utf-8"))
-    assert set(saved) >= {"symbol", "name", "currency", "exchange_tz", "fetched_at", "dates", "close"}
+    assert set(saved) >= {
+        "symbol",
+        "name",
+        "currency",
+        "exchange_tz",
+        "fetched_at",
+        "dates",
+        "close",
+    }
     assert saved["fetched_at"] == int(T0)
     assert list((tmp_path / "prices").glob("*.tmp")) == []
 
@@ -191,7 +197,9 @@ def test_get_series_unknown_symbol_raises_not_found(tmp_path: Path) -> None:
         _run(tmp_path, scenario)
 
 
-@pytest.mark.parametrize("symbol", ["../etc", "", "A" * 21, "QQQ QLD"], ids=["path", "empty", "long", "space"])
+@pytest.mark.parametrize(
+    "symbol", ["../etc", "", "A" * 21, "QQQ QLD"], ids=["path", "empty", "long", "space"]
+)
 def test_get_series_rejects_bad_symbol_without_network(tmp_path: Path, symbol: str) -> None:
     async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> int:
         with pytest.raises(MarketError, match="종목 코드"):
@@ -224,15 +232,32 @@ def test_get_series_sends_at_most_two_requests_to_yahoo_at_once(tmp_path: Path) 
 
 SEARCH_PAYLOAD = {
     "quotes": [
-        {"symbol": "QLD", "shortname": "ProShares Ultra QQQ", "exchDisp": "NYSEArca", "quoteType": "ETF"},
-        {"symbol": "QLD240119C00050000", "shortname": "QLD Jan 2024 50 Call", "exchDisp": "OPR", "quoteType": "OPTION"},
-        {"symbol": "005930.KS", "longname": "Samsung Electronics Co., Ltd.", "exchDisp": "KSE", "quoteType": "EQUITY"},
+        {
+            "symbol": "QLD",
+            "shortname": "ProShares Ultra QQQ",
+            "exchDisp": "NYSEArca",
+            "quoteType": "ETF",
+        },
+        {
+            "symbol": "QLD240119C00050000",
+            "shortname": "QLD Jan 2024 50 Call",
+            "exchDisp": "OPR",
+            "quoteType": "OPTION",
+        },
+        {
+            "symbol": "005930.KS",
+            "longname": "Samsung Electronics Co., Ltd.",
+            "exchDisp": "KSE",
+            "quoteType": "EQUITY",
+        },
     ]
 }
 
 
 def test_search_keeps_supported_types_and_caches_for_a_day(tmp_path: Path) -> None:
-    async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> tuple[list[SearchHit], int]:
+    async def scenario(
+        market: Market, yahoo: FakeYahoo, clock: Clock
+    ) -> tuple[list[SearchHit], int]:
         yahoo.search_payload = SEARCH_PAYLOAD
         first = await market.search(" qld ")
         clock.now += 3600
@@ -248,7 +273,9 @@ def test_search_keeps_supported_types_and_caches_for_a_day(tmp_path: Path) -> No
 
 
 def test_search_blank_query_returns_nothing_without_network(tmp_path: Path) -> None:
-    async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> tuple[list[SearchHit], int]:
+    async def scenario(
+        market: Market, yahoo: FakeYahoo, clock: Clock
+    ) -> tuple[list[SearchHit], int]:
         return await market.search("   "), len(yahoo.calls)
 
     assert _run(tmp_path, scenario) == ([], 0)
