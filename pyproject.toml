@@ -36,7 +36,10 @@ warn_unreachable = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 # live 표시한 테스트(실제 Yahoo 호출)는 기본에서 빼고 `pytest -m live`로만 돌린다 (상세 설계 6절)
 addopts = ["-ra", "--strict-markers", "--strict-config", "-m", "not live"]
 markers = ["live: 실제 Yahoo를 부르는 확인. 기본 실행과 CI에서 빠진다"]
+# starlette가 TestClient의 httpx를 httpx2로 옮기라고 알린다. 테스트 동작과 무관해 숨긴다
+filterwarnings = ["ignore:Using `httpx` with `starlette.testclient` is deprecated"]
 xfail_strict = true
