@@ -571,6 +571,7 @@ def analyze(
     """v2 지표. 계산 규칙 9-1 ~ 9-5절.
 
     result는 simulate(asset, fx, params)의 결과이고 end는 params.end다.
+    asset은 끝날짜로 자르지 않은 전체 데이터다. 9-3 끝난 달은 2절 매수일처럼 데이터 마지막 날을 본다 (결정 d24).
     tax_fx는 투자 통화 1단위의 원화 값이다 (원화 투자면 1, 달러 투자면 끝날짜 당일 또는 그 이전 마지막
     USDKRW=X 종가, 9-5절).
     엔진은 투자 통화를 모르므로 기본값을 두지 않는다. 0 이하면 ValueError.

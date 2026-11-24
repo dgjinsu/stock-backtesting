@@ -241,7 +241,11 @@ def _chart_out(chart: engine.Chart, invest: str) -> ChartOut:
 
 def _to_series(history: PriceHistory) -> engine.Series:
     return engine.Series(
-        history.symbol, history.currency, history.dates, history.close, history.exchange_tz
+        history.symbol,
+        history.currency,
+        history.dates,
+        history.close,
+        exchange_tz=history.exchange_tz,
     )
 
 
