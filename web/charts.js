@@ -204,8 +204,19 @@ function afterChartJs() {
   draw();
 }
 
+/** 지금 탭을 다시 그린다. 그리다 난 오류는 그래프 자리에 알린다 (microtask라 run()이 못 잡는다). */
 function draw() {
   if (!current?.wrap.isConnected) return; // 결과가 바뀌었거나 지워졌다
+  try {
+    drawNow();
+  } catch (error) {
+    console.error(error);
+    const text = "그래프를 그리지 못했습니다. 새로고침한 뒤 다시 계산해 주세요.";
+    current.wrap.replaceChildren(h("p", { class: "chart-missing", text }));
+  }
+}
+
+function drawNow() {
   current.chart?.destroy();
   current.chart = null;
   const { data, slotOf, wrap, legend, hint } = current;
@@ -218,17 +229,7 @@ function draw() {
     waitForChartJs(wrap);
     return;
   }
-  try {
-    current.chart = newChart(ChartJs, wrap, data, model);
-  } catch (error) {
-    console.error(error);
-    wrap.replaceChildren(
-      h("p", {
-        class: "chart-missing",
-        text: "그래프를 그리지 못했습니다. 새로고침한 뒤 다시 계산해 주세요.",
-      }),
-    );
-  }
+  current.chart = newChart(ChartJs, wrap, data, model);
 }
 
 function newChart(ChartJs, wrap, data, model) {

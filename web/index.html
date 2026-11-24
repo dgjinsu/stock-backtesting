@@ -32,6 +32,7 @@
       crossorigin="anonymous"
       referrerpolicy="no-referrer"
       async
+      onload="if (!window.Chart) this.dataset.failed = '1'"
       onerror="this.dataset.failed = '1'"
     ></script>
     <script type="module" src="app.js"></script>

@@ -31,6 +31,8 @@
   --warn: #7a5200;
   --warnbg: #fff4d6;
   --negbg: #fcedec;
+  --shadow-sm: rgba(0, 0, 0, 0.06);
+  --shadow-lg: rgba(0, 0, 0, 0.12);
   color-scheme: light;
 }
 :root.dark {
@@ -64,6 +66,8 @@
   --warn: #f1cb73;
   --warnbg: #2a2210;
   --negbg: #2c1716;
+  --shadow-sm: rgba(0, 0, 0, 0.3);
+  --shadow-lg: rgba(0, 0, 0, 0.5);
   color-scheme: dark;
 }
 
@@ -350,7 +354,7 @@ a {
   font-weight: 600;
   box-shadow:
     0 0 0 1px var(--line),
-    0 1px 2px rgba(0, 0, 0, 0.06);
+    0 1px 2px var(--shadow-sm);
 }
 .seg.inline-seg {
   display: inline-flex;
@@ -489,7 +493,7 @@ a {
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  box-shadow: 0 8px 24px var(--shadow-lg);
   overflow: hidden;
   max-height: 360px;
   overflow-y: auto;

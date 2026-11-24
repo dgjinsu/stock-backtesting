@@ -75,6 +75,7 @@ class FakeYahoo:
         self.chart_override: Any = None
         self.extra: dict[str, Any] = {}
         self.search_payload: Any = {"quotes": []}
+        self.search_status = 200  # Yahoo는 한글 같은 검색어에 400을 준다
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
         self.calls.append(request.url.path)
@@ -85,6 +86,10 @@ class FakeYahoo:
             if self.fail:
                 return httpx.Response(500, json={"error": "down"})
             if request.url.path.startswith("/v1/finance/search"):
+                if self.search_status != 200:
+                    error = {"code": "Bad Request", "description": "Invalid Search Query"}
+                    body = {"finance": {"result": None, "error": error}}
+                    return httpx.Response(self.search_status, json=body)
                 return httpx.Response(200, json=self.search_payload)
             if self.chart_override is not None:
                 return httpx.Response(200, json=self.chart_override)

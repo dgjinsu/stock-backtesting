@@ -248,6 +248,20 @@ def test_search_blank_query_returns_nothing_without_network(tmp_path: Path) -> N
     assert _run(tmp_path, scenario) == ([], 0)
 
 
+def test_search_invalid_query_returns_nothing(tmp_path: Path) -> None:
+    """Yahoo는 한글 검색어에 400 "Invalid Search Query"를 준다 (2026-11-25 확인). 결과 없음으로 본다."""
+
+    async def scenario(
+        market: Market, yahoo: FakeYahoo, clock: Clock
+    ) -> tuple[list[SearchHit], list[SearchHit], int]:
+        yahoo.search_status = 400
+        first = await market.search("삼성전자")
+        second = await market.search("삼성전자")
+        return first, second, len(yahoo.calls)
+
+    assert _run(tmp_path, scenario) == ([], [], 1)
+
+
 def test_search_failure_raises_market_error(tmp_path: Path) -> None:
     async def scenario(market: Market, yahoo: FakeYahoo, clock: Clock) -> list[SearchHit]:
         yahoo.fail = True
