@@ -10,6 +10,7 @@ ES 모듈을 알아본다). 로컬에 node가 없으면 건너뛰고, CI(환경�
 
 import io
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +32,30 @@ def run(label: str, command: list[str]) -> bool:
 def python_module(*args: str) -> list[str]:
     """지금 파이썬으로 `-m <args>`를 돌리는 명령."""
     return [sys.executable, "-m", *args]
+
+
+def web_files() -> list[Path]:
+    """줄 길이를 보는 웹 파일 (web/의 js·css·html, tests/web/의 테스트)."""
+    patterns = ["web/*.js", "web/*.css", "web/*.html", "tests/web/*.mjs"]
+    return sorted(path for pattern in patterns for path in ROOT.glob(pattern))
+
+
+# 속성 하나만 있는 줄 (주소, SRI 해시, SVG path처럼 나눌 수 없는 값)
+_ONE_ATTRIBUTE = re.compile(r'^\s*[\w:-]+="[^"]*"\s*/?>?\s*$')
+
+
+def long_lines(paths: list[Path], limit: int, root: Path) -> list[str]:
+    """limit자를 넘는 줄 ("파일:줄 (N자)"). 코드 컨벤션 1절. 테스트(test_check_script.py)가 부른다.
+
+    HTML에서 나눌 수 없는 속성 하나만 있는 줄은 뺀다.
+    """
+    found: list[str] = []
+    for path in paths:
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for number, line in enumerate(lines, start=1):
+            if len(line) > limit and not _ONE_ATTRIBUTE.match(line):
+                found.append(f"{path.relative_to(root).as_posix()}:{number} ({len(line)}자)")
+    return found
 
 
 def web_steps() -> list[tuple[str, list[str]]] | None:

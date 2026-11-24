@@ -87,7 +87,8 @@ export function validate(cond, today) {
   if (cond.codes.length === 0) errors.symbols = "종목을 하나 이상 넣어 주세요";
   if (!cond.start) errors.start = "시작일을 넣어 주세요";
   if (!cond.end) errors.end = "끝날짜를 넣어 주세요";
-  if (cond.start && cond.end && cond.start >= cond.end) errors.start = "시작일은 끝날짜보다 앞이어야 합니다";
+  if (cond.start && cond.end && cond.start >= cond.end)
+    errors.start = "시작일은 끝날짜보다 앞이어야 합니다";
   if (cond.end && cond.end > today) errors.end = `끝날짜는 오늘(${today})보다 늦을 수 없습니다`;
   if (!(cond.amount > 0)) errors.amount = "금액은 0보다 커야 합니다";
   if (!(cond.fee >= 0 && cond.fee <= 10)) errors.fee = "수수료는 0~10%입니다";
@@ -108,8 +109,12 @@ export function estimateBuys(cond) {
   let count = 0;
   const cursor = new Date(Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), 1));
   while (cursor <= end) {
-    const last = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0)).getUTCDate();
-    const day = new Date(Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), Math.min(cond.monthDay, last)));
+    const last = new Date(
+      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth() + 1, 0),
+    ).getUTCDate();
+    const day = new Date(
+      Date.UTC(cursor.getUTCFullYear(), cursor.getUTCMonth(), Math.min(cond.monthDay, last)),
+    );
     if (day >= start && day <= end) count += 1;
     cursor.setUTCMonth(cursor.getUTCMonth() + 1);
   }

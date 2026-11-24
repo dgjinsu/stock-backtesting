@@ -14,7 +14,8 @@ function withSign(value, text) {
 /** 88.19 → "+88.19%", -39.39 → "−39.39%". digits는 소수 자리. */
 export function pct(value, digits = 2) {
   if (value === null || value === undefined) return "계산 불가";
-  const text = `${Math.abs(value).toLocaleString("ko-KR", { minimumFractionDigits: digits, maximumFractionDigits: digits })}%`;
+  const options = { minimumFractionDigits: digits, maximumFractionDigits: digits };
+  const text = `${Math.abs(value).toLocaleString("ko-KR", options)}%`;
   return withSign(Number(value.toFixed(digits)), text);
 }
 
@@ -37,10 +38,12 @@ export function krwShort(value) {
 /** 금액. 원은 짧게(억·만) 또는 전부, 그 밖은 통화 기호와 소수 2자리(큰 값은 정수). */
 export function money(value, currency, { short = true } = {}) {
   if (value === null || value === undefined) return "—";
-  if (currency === "KRW") return short ? krwShort(value) : `${value < 0 ? MINUS : ""}${int.format(Math.abs(value))}원`;
+  if (currency === "KRW")
+    return short ? krwShort(value) : `${value < 0 ? MINUS : ""}${int.format(Math.abs(value))}원`;
   const abs = Math.abs(value);
   const text = abs >= 10000 ? int.format(abs) : two.format(abs);
-  return `${value < 0 ? MINUS : ""}${currency === "USD" ? "$" : ""}${text}${currency === "USD" ? "" : ` ${currency}`}`;
+  const sign = value < 0 ? MINUS : "";
+  return currency === "USD" ? `${sign}$${text}` : `${sign}${text} ${currency}`;
 }
 
 /** 손익처럼 부호를 늘 붙이는 금액. */
@@ -54,14 +57,20 @@ export function price(value, currency) {
   if (value === null || value === undefined) return "—";
   if (currency === "KRW") return `${int.format(value)}원`;
   const digits = Math.abs(value) < 1 ? 4 : 2;
-  const text = value.toLocaleString("ko-KR", { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  const text = value.toLocaleString("ko-KR", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
   return currency === "USD" ? `$${text}` : `${text} ${currency}`;
 }
 
 /** 수량: 소수 digits자리까지 (정수면 정수로). fixed면 자리를 채워 표에서 줄이 맞는다. */
 export function qty(value, digits = 2, { fixed = false } = {}) {
   if (value === null || value === undefined) return "—";
-  return value.toLocaleString("ko-KR", { minimumFractionDigits: fixed ? digits : 0, maximumFractionDigits: digits });
+  return value.toLocaleString("ko-KR", {
+    minimumFractionDigits: fixed ? digits : 0,
+    maximumFractionDigits: digits,
+  });
 }
 
 /** 환율: 1 이상이면 소수 2자리, 작으면 유효숫자 4자리. */
@@ -75,7 +84,9 @@ export function fx(value) {
 export function period(startIso, endIso) {
   const start = new Date(`${startIso}T00:00:00Z`);
   const end = new Date(`${endIso}T00:00:00Z`);
-  let months = (end.getUTCFullYear() - start.getUTCFullYear()) * 12 + (end.getUTCMonth() - start.getUTCMonth());
+  let months =
+    (end.getUTCFullYear() - start.getUTCFullYear()) * 12 +
+    (end.getUTCMonth() - start.getUTCMonth());
   if (end.getUTCDate() + 1 < start.getUTCDate()) months -= 1;
   const years = Math.floor(months / 12);
   const rest = months % 12;

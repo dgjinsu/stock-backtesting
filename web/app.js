@@ -119,7 +119,12 @@ function renderSymbols() {
         h("span", { class: "nm", text: s.name || "" }),
         h(
           "button",
-          { type: "button", class: "x", "aria-label": `${s.code} 빼기`, onclick: () => removeSymbol(s.code) },
+          {
+            type: "button",
+            class: "x",
+            "aria-label": `${s.code} 빼기`,
+            onclick: () => removeSymbol(s.code),
+          },
           icon(["M6 6l12 12M18 6L6 18"], 14),
         ),
       ),
@@ -170,7 +175,8 @@ function renderForm() {
   $("daily-row").hidden = state.freq !== "daily";
   $("month-day").value = String(state.monthDay);
   $("week-day").value = String(state.weekDay);
-  if (document.activeElement !== $("amount")) $("amount").value = state.amount ? state.amount.toLocaleString("ko-KR") : "";
+  if (document.activeElement !== $("amount"))
+    $("amount").value = state.amount ? state.amount.toLocaleString("ko-KR") : "";
   $("amount-unit").textContent = state.currency === "KRW" ? "원" : "$";
   $("currency").value = state.currency;
   setOn("mode", (b) => (b.dataset.fractional === "true") === state.fractional);
@@ -184,7 +190,8 @@ function renderForm() {
 
 function renderAdvancedSummary() {
   const fee = Number.isFinite(state.fee) ? `${state.fee}%` : "확인 필요";
-  $("advanced-summary").textContent = `· ${state.fractional ? "소수점" : "정수 주"} · 수수료 ${fee}`;
+  $("advanced-summary").textContent =
+    `· ${state.fractional ? "소수점" : "정수 주"} · 수수료 ${fee}`;
 }
 
 function changed() {
@@ -294,7 +301,8 @@ function renderHits(query, hits) {
   );
   list.hidden = false;
   $("sym-search").setAttribute("aria-expanded", "true");
-  $("sym-live").textContent = `검색 결과 ${search.options.length}개. 위아래 화살표로 고르고 Enter로 넣습니다`;
+  $("sym-live").textContent =
+    `검색 결과 ${search.options.length}개. 위아래 화살표로 고르고 Enter로 넣습니다`;
   search.active = -1;
 }
 
@@ -364,12 +372,17 @@ function setLoading(on) {
   $("run").disabled = on || Object.keys(validate()).length > 0;
   $("run").querySelector(".spinner").hidden = !on;
   $("run-label").textContent = on ? "계산 중…" : "계산하기";
-  $("status").textContent = on ? `${state.symbols.length}개 종목 주가를 받고 계산하는 중입니다` : "";
+  $("status").textContent = on
+    ? `${state.symbols.length}개 종목 주가를 받고 계산하는 중입니다`
+    : "";
   $("output").classList.toggle("dim", on);
   if ($("output").hidden) {
     const busy = [
       h("p", { class: "empty-title", text: "계산하는 중입니다…" }),
-      h("p", { class: "muted", text: "처음 보는 종목은 Yahoo Finance에서 주가를 받느라 몇 초 걸립니다." }),
+      h("p", {
+        class: "muted",
+        text: "처음 보는 종목은 Yahoo Finance에서 주가를 받느라 몇 초 걸립니다.",
+      }),
     ];
     $("empty").replaceChildren(...(on ? busy : EMPTY_IDLE.map((node) => node.cloneNode(true))));
   }
@@ -422,12 +435,16 @@ async function run() {
     return;
   }
   if (!response.ok || !json) {
-    renderFailure(`서버가 계산하지 못했습니다 (HTTP ${response.status}). 잠시 뒤 다시 시도해 주세요.`);
+    renderFailure(
+      `서버가 계산하지 못했습니다 (HTTP ${response.status}). 잠시 뒤 다시 시도해 주세요.`,
+    );
     return;
   }
   // 계산 중에 뺀 종목의 오류는 남기지 않는다 (지울 줄이 없다)
   const listed = new Set(state.symbols.map((s) => s.code));
-  state.badSymbols = new Map(json.errors.filter((e) => listed.has(e.symbol)).map((e) => [e.symbol, e.message]));
+  state.badSymbols = new Map(
+    json.errors.filter((e) => listed.has(e.symbol)).map((e) => [e.symbol, e.message]),
+  );
   for (const result of json.results) {
     const entry = state.symbols.find((s) => s.code === result.symbol);
     if (entry) entry.name = result.name;
@@ -484,18 +501,36 @@ function renderFailure(message, retry = true) {
 function header(data) {
   const results = data.results;
   const params = data.params;
-  const buys = new Set(results.map((r) => `${r.summary.buys}|${r.summary.first_buy}|${r.summary.last_buy}`));
+  const buys = new Set(
+    results.map((r) => `${r.summary.buys}|${r.summary.first_buy}|${r.summary.last_buy}`),
+  );
   const first = results[0].summary;
+  const counts = results.map((r) => r.summary.buys);
   const buyText =
     buys.size === 1
       ? `종목마다 ${first.buys.toLocaleString("ko-KR")}회 매수 (${first.first_buy} ~ ${first.last_buy})`
-      : `매수 ${Math.min(...results.map((r) => r.summary.buys))}~${Math.max(...results.map((r) => r.summary.buys))}회 (종목마다 다름)`;
-  const latest = results.map((r) => r.data_through).sort().at(-1);
+      : `매수 ${Math.min(...counts)}~${Math.max(...counts)}회 (종목마다 다름)`;
+  const latest = results
+    .map((r) => r.data_through)
+    .sort()
+    .at(-1);
   const foreign = results.find((r) => r.currency !== params.currency);
-  const fxText = foreign ? `, 환율 ${fx(foreign.summary.eval_fx)}${params.currency === "KRW" ? "원" : ""}` : "";
+  const fxText = foreign
+    ? `, 환율 ${fx(foreign.summary.eval_fx)}${params.currency === "KRW" ? "원" : ""}`
+    : "";
   const span = params.start <= ALL_START ? "상장 이후 전체" : period(params.start, params.end);
-  const title = `${results.length}개 종목 · ${freqText(params.freq, params.anchor)} ${money(params.amount, params.currency)} · ${span}`;
-  const copy = h("button", { type: "button", class: "btn2" }, icon(["M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1", "M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1"]), "링크 복사");
+  const from = params.start <= ALL_START ? "상장일" : params.start;
+  const each = `${freqText(params.freq, params.anchor)} ${money(params.amount, params.currency)}`;
+  const title = `${results.length}개 종목 · ${each} · ${span}`;
+  const copy = h(
+    "button",
+    { type: "button", class: "btn2" },
+    icon([
+      "M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1",
+      "M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1",
+    ]),
+    "링크 복사",
+  );
   copy.addEventListener("click", async () => {
     try {
       await navigator.clipboard.writeText(location.href);
@@ -508,7 +543,14 @@ function header(data) {
   return h(
     "div",
     { class: "res-head" },
-    h("div", {}, h("h2", { text: title }), h("p", { text: `${params.start <= ALL_START ? "상장일" : params.start} ~ ${params.end} · ${buyText} · 평가 ${latest} 종가${fxText}` })),
+    h(
+      "div",
+      {},
+      h("h2", { text: title }),
+      h("p", {
+        text: `${from} ~ ${params.end} · ${buyText} · 평가 ${latest} 종가${fxText}`,
+      }),
+    ),
     h("div", { class: "actions" }, copy, csvButton(data)),
   );
 }
@@ -516,17 +558,63 @@ function header(data) {
 function alerts(data) {
   const boxes = [];
   const rest = data.results.length;
-  const alertIcon = () => icon(["M12 8v5", "M12 16.5v.5", "M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"], 18);
+  const alertIcon = () =>
+    icon(
+      [
+        "M12 8v5",
+        "M12 16.5v.5",
+        "M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
+      ],
+      18,
+    );
   for (const error of data.errors) {
-    boxes.push(h("div", { class: "alert bad", role: "alert" }, alertIcon(), h("div", {}, h("strong", { text: `${error.symbol}는 계산하지 못했습니다.` }), ` ${error.message} 나머지 ${rest}개 종목 결과를 보여 줍니다.`)));
+    boxes.push(
+      h(
+        "div",
+        { class: "alert bad", role: "alert" },
+        alertIcon(),
+        h(
+          "div",
+          {},
+          h("strong", { text: `${error.symbol}는 계산하지 못했습니다.` }),
+          ` ${error.message} 나머지 ${rest}개 종목 결과를 보여 줍니다.`,
+        ),
+      ),
+    );
   }
   for (const r of data.results.filter((x) => x.stale)) {
-    boxes.push(h("div", { class: "alert warn" }, alertIcon(), h("div", {}, h("strong", { text: `${r.symbol}는 ${r.data_through}까지 저장된 데이터로 계산했습니다.` }), ` Yahoo Finance에서 새로 받지 못했습니다. 평가 기준일도 ${r.data_through}입니다.`)));
+    boxes.push(
+      h(
+        "div",
+        { class: "alert warn" },
+        alertIcon(),
+        h(
+          "div",
+          {},
+          h("strong", {
+            text: `${r.symbol}는 ${r.data_through}까지 저장된 데이터로 계산했습니다.`,
+          }),
+          ` Yahoo Finance에서 새로 받지 못했습니다. 평가 기준일도 ${r.data_through}입니다.`,
+        ),
+      ),
+    );
   }
   if (data.params.start > ALL_START) {
     for (const r of data.results.filter((x) => x.listed_from)) {
       const more = data.results.length > 1 ? " 다른 종목보다 매수 횟수가 적습니다." : "";
-      boxes.push(h("div", { class: "alert info" }, icon(["M12 11v6", "M12 7.5v.5", "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z"], 18), h("div", {}, h("strong", { text: `${r.symbol}는 ${r.listed_from} 상장이라 그때부터 계산했습니다.` }), more)));
+      boxes.push(
+        h(
+          "div",
+          { class: "alert info" },
+          icon(["M12 11v6", "M12 7.5v.5", "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z"], 18),
+          h(
+            "div",
+            {},
+            h("strong", { text: `${r.symbol}는 ${r.listed_from} 상장이라 그때부터 계산했습니다.` }),
+            more,
+          ),
+        ),
+      );
     }
   }
   return boxes;
@@ -547,44 +635,135 @@ function card(result, invest) {
   const foreign = cur !== invest;
   const notes = result.notes.join(" · ");
   const avgSub = foreign
-    ? h("div", { class: "sub" }, `${investLabel(invest)} ${money(s.avg_cost_invest, invest, { short: false })}`, infoButton(`매수할 때마다 그날 환율로 계산한 ${investLabel(invest)} 평단가입니다. 달러 평단가 × 지금 환율(${fx(s.eval_fx)})과 다릅니다.`))
+    ? h(
+        "div",
+        { class: "sub" },
+        `${investLabel(invest)} ${money(s.avg_cost_invest, invest, { short: false })}`,
+        infoButton(
+          `매수할 때마다 그날 환율로 계산한 ${investLabel(invest)} 평단가입니다. ` +
+            `달러 평단가 × 지금 환율(${fx(s.eval_fx)})과 다릅니다.`,
+        ),
+      )
     : h("div", { class: "sub" }, "종목 통화 그대로");
   const leftover = s.leftover_cash > 0 ? ` · 남은 현금 ${price(s.leftover_cash, cur)}` : "";
   return h(
     "article",
     { class: "card" },
-    h("header", { class: "card-head" }, swatch(slotOf(result.symbol), 24), h("h3", { text: result.symbol }), h("span", { class: "muted small", text: result.name }), notes ? h("span", { class: "note", text: notes }) : null),
+    h(
+      "header",
+      { class: "card-head" },
+      swatch(slotOf(result.symbol), 24),
+      h("h3", { text: result.symbol }),
+      h("span", { class: "muted small", text: result.name }),
+      notes ? h("span", { class: "note", text: notes }) : null,
+    ),
     h(
       "div",
       { class: "stats" },
-      h("div", {}, h("div", { class: "lbl", text: "평단가" }), h("div", { class: "big", text: price(s.avg_cost_asset, cur) }), avgSub),
-      h("div", {}, h("div", { class: "lbl", text: "수익률" }), h("div", { class: `big ${signClass(s.return_pct)}`, text: pct(s.return_pct) }), h("div", { class: "sub", text: `손익 ${signedMoney(s.profit, invest)}` })),
-      h("div", {}, h("div", { class: "lbl", text: "연환산 (XIRR)" }), h("div", { class: "big", text: pct(s.xirr_pct) }), h("div", { class: "sub", text: "돈 넣은 시점을 반영" })),
+      h(
+        "div",
+        {},
+        h("div", { class: "lbl", text: "평단가" }),
+        h("div", { class: "big", text: price(s.avg_cost_asset, cur) }),
+        avgSub,
+      ),
+      h(
+        "div",
+        {},
+        h("div", { class: "lbl", text: "수익률" }),
+        h("div", { class: `big ${signClass(s.return_pct)}`, text: pct(s.return_pct) }),
+        h("div", { class: "sub", text: `손익 ${signedMoney(s.profit, invest)}` }),
+      ),
+      h(
+        "div",
+        {},
+        h("div", { class: "lbl", text: "연환산 (XIRR)" }),
+        h("div", { class: "big", text: pct(s.xirr_pct) }),
+        h("div", { class: "sub", text: "돈 넣은 시점을 반영" }),
+      ),
     ),
     h(
       "div",
       { class: "strip" },
-      h("div", {}, h("div", { class: "lbl", text: "투자금" }), h("div", { class: "v", text: money(s.invested, invest) })),
-      h("div", {}, h("div", { class: "lbl", text: "평가금" }), h("div", { class: "v", text: money(s.value, invest) })),
-      h("div", {}, h("div", { class: "lbl", text: "손익" }), h("div", { class: `v ${signClass(s.profit)}`, text: signedMoney(s.profit, invest) })),
+      h(
+        "div",
+        {},
+        h("div", { class: "lbl", text: "투자금" }),
+        h("div", { class: "v", text: money(s.invested, invest) }),
+      ),
+      h(
+        "div",
+        {},
+        h("div", { class: "lbl", text: "평가금" }),
+        h("div", { class: "v", text: money(s.value, invest) }),
+      ),
+      h(
+        "div",
+        {},
+        h("div", { class: "lbl", text: "손익" }),
+        h("div", { class: `v ${signClass(s.profit)}`, text: signedMoney(s.profit, invest) }),
+      ),
     ),
     h(
       "dl",
       { class: "facts" },
-      h("dt", { text: "보유 수량" }), h("dd", { text: `${qty(s.shares)}주${leftover}` }),
-      h("dt", { text: "현재가" }), h("dd", {}, price(s.eval_price, cur), " ", h("span", { class: "muted", text: `${s.eval_date} 종가` })),
-      h("dt", { text: "매수" }), h("dd", {}, `${s.buys.toLocaleString("ko-KR")}회 `, h("span", { class: "muted", text: `${s.first_buy} ~ ${s.last_buy}` })),
+      h("dt", { text: "보유 수량" }),
+      h("dd", { text: `${qty(s.shares)}주${leftover}` }),
+      h("dt", { text: "현재가" }),
+      h(
+        "dd",
+        {},
+        price(s.eval_price, cur),
+        " ",
+        h("span", { class: "muted", text: `${s.eval_date} 종가` }),
+      ),
+      h("dt", { text: "매수" }),
+      h(
+        "dd",
+        {},
+        `${s.buys.toLocaleString("ko-KR")}회 `,
+        h("span", { class: "muted", text: `${s.first_buy} ~ ${s.last_buy}` }),
+      ),
       h("dt", { text: "최고 · 최저 수익률" }),
-      h("dd", {}, h("span", { class: signClass(s.best.return_pct), text: pct(s.best.return_pct, 1) }), " ", h("span", { class: "muted", text: s.best.date }), " · ", h("span", { class: signClass(s.worst.return_pct), text: pct(s.worst.return_pct, 1) }), " ", h("span", { class: "muted", text: s.worst.date })),
+      h(
+        "dd",
+        {},
+        h("span", { class: signClass(s.best.return_pct), text: pct(s.best.return_pct, 1) }),
+        " ",
+        h("span", { class: "muted", text: s.best.date }),
+        " · ",
+        h("span", { class: signClass(s.worst.return_pct), text: pct(s.worst.return_pct, 1) }),
+        " ",
+        h("span", { class: "muted", text: s.worst.date }),
+      ),
       h("dt", { text: "평가금 최고점 대비" }),
-      h("dd", {}, h("span", { class: signClass(s.from_peak_pct), text: pct(s.from_peak_pct, 1) }), " ", h("span", { class: "muted", text: `최고 ${money(s.peak_value.value, invest)}, ${s.peak_value.date}` })),
+      h(
+        "dd",
+        {},
+        h("span", { class: signClass(s.from_peak_pct), text: pct(s.from_peak_pct, 1) }),
+        " ",
+        h("span", {
+          class: "muted",
+          text: `최고 ${money(s.peak_value.value, invest)}, ${s.peak_value.date}`,
+        }),
+      ),
     ),
   );
 }
 
 function compareTable(data) {
   const invest = data.params.currency;
-  const head = ["평단가", `${investLabel(invest)} 평단가`, "보유 수량", "평가금", "손익", "수익률", "XIRR", "최저 수익률", "고점 대비"];
+  const head = [
+    "평단가",
+    `${investLabel(invest)} 평단가`,
+    "보유 수량",
+    "평가금",
+    "손익",
+    "수익률",
+    "XIRR",
+    "최저 수익률",
+    "고점 대비",
+  ];
   return h(
     "section",
     { class: "box", "aria-labelledby": "cmp-h" },
@@ -595,7 +774,16 @@ function compareTable(data) {
       h(
         "table",
         { class: "tbl", "aria-labelledby": "cmp-h" },
-        h("thead", {}, h("tr", {}, h("th", { scope: "col", class: "left", text: "종목" }), ...head.map((t) => h("th", { scope: "col", text: t })))),
+        h(
+          "thead",
+          {},
+          h(
+            "tr",
+            {},
+            h("th", { scope: "col", class: "left", text: "종목" }),
+            ...head.map((t) => h("th", { scope: "col", text: t })),
+          ),
+        ),
         h(
           "tbody",
           {},
@@ -604,7 +792,11 @@ function compareTable(data) {
             return h(
               "tr",
               {},
-              h("th", { scope: "row", class: "sym-cell" }, h("span", {}, swatch(slotOf(r.symbol), 18), r.symbol)),
+              h(
+                "th",
+                { scope: "row", class: "sym-cell" },
+                h("span", {}, swatch(slotOf(r.symbol), 18), r.symbol),
+              ),
               h("td", { text: price(s.avg_cost_asset, r.currency) }),
               h("td", { text: money(s.avg_cost_invest, invest, { short: false }) }),
               h("td", { text: qty(s.shares) }),
@@ -623,18 +815,38 @@ function compareTable(data) {
 }
 
 function notice(data) {
-  const latest = data.results.map((r) => r.data_through).sort().at(-1);
-  const pairs = [...new Set(data.results.filter((r) => r.currency !== data.params.currency).map((r) => `${r.currency}${data.params.currency}=X`))];
-  const splits = data.results.flatMap((r) => (r.notes.length ? [`${r.symbol} ${r.notes.map((n) => n.replace(" 분할 반영", "")).join("·")}`] : []));
+  const latest = data.results
+    .map((r) => r.data_through)
+    .sort()
+    .at(-1);
+  const pairs = [
+    ...new Set(
+      data.results
+        .filter((r) => r.currency !== data.params.currency)
+        .map((r) => `${r.currency}${data.params.currency}=X`),
+    ),
+  ];
+  const fxPairs = pairs.length ? ` 환율은 ${pairs.join(", ")}.` : "";
+  const splits = data.results.flatMap((r) =>
+    r.notes.length
+      ? [`${r.symbol} ${r.notes.map((n) => n.replace(" 분할 반영", "")).join("·")}`]
+      : [],
+  );
   return h(
     "aside",
     { class: "notice", "aria-label": "안내" },
     h(
       "ul",
       {},
-      h("li", { text: `데이터: Yahoo Finance 일별 종가(비공식), ${latest} 종가 기준.${pairs.length ? ` 환율은 ${pairs.join(", ")}.` : ""}` }),
-      h("li", { text: `${splits.length ? `주식 분할은 반영했습니다 (${splits.join(", ")}). ` : ""}배당은 반영하지 않았습니다.` }),
-      h("li", { text: "세금과 환전 비용은 반영하지 않았습니다. 환전 비용은 고급 설정의 수수료에 합쳐 넣으세요." }),
+      h("li", {
+        text: `데이터: Yahoo Finance 일별 종가(비공식), ${latest} 종가 기준.${fxPairs}`,
+      }),
+      h("li", {
+        text: `${splits.length ? `주식 분할은 반영했습니다 (${splits.join(", ")}). ` : ""}배당은 반영하지 않았습니다.`,
+      }),
+      h("li", {
+        text: "세금과 환전 비용은 반영하지 않았습니다. 환전 비용은 고급 설정의 수수료에 합쳐 넣으세요.",
+      }),
       h("li", { text: "과거 데이터로 계산한 결과이며 투자 권유가 아닙니다." }),
     ),
   );
@@ -649,7 +861,10 @@ function renderResult(data) {
     renderFailure(reasons || "계산할 수 있는 종목이 없습니다.");
     return;
   }
-  const latest = data.results.map((r) => r.data_through).sort().at(-1);
+  const latest = data.results
+    .map((r) => r.data_through)
+    .sort()
+    .at(-1);
   status.classList.add(data.results.some((r) => r.stale) ? "warn" : "ok");
   $("data-status-text").textContent = `Yahoo Finance · ${latest} 종가`;
   $("empty").hidden = true;
@@ -695,7 +910,11 @@ function wireForm() {
       changed();
     });
   }
-  $("month-day").replaceChildren(...Array.from({ length: 31 }, (_, i) => h("option", { value: String(i + 1), text: i === 30 ? "말일" : `${i + 1}일` })));
+  $("month-day").replaceChildren(
+    ...Array.from({ length: 31 }, (_, i) =>
+      h("option", { value: String(i + 1), text: i === 30 ? "말일" : `${i + 1}일` }),
+    ),
+  );
   $("month-day").addEventListener("change", (e) => {
     state.monthDay = Number(e.target.value);
     changed();

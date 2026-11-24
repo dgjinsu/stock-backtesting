@@ -57,18 +57,31 @@ test("anchorOf: 주기마다 API의 anchor 값", () => {
 });
 
 test("toQuery: 예시 조건의 주소", () => {
-  assert.equal(toQuery(BASE), "s=QQQ,QLD&from=2021-11-25&to=2026-11-24&freq=monthly&day=1&amt=2000000&cur=KRW");
+  assert.equal(
+    toQuery(BASE),
+    "s=QQQ,QLD&from=2021-11-25&to=2026-11-24&freq=monthly&day=1&amt=2000000&cur=KRW",
+  );
 });
 
 test("toQuery: 매일은 day를 빼고, 정수 주와 수수료는 있을 때만 넣는다", () => {
-  const query = new URLSearchParams(toQuery({ ...BASE, freq: "daily", fractional: false, fee: 0.25 }));
+  const query = new URLSearchParams(
+    toQuery({ ...BASE, freq: "daily", fractional: false, fee: 0.25 }),
+  );
   assert.equal(query.get("day"), null);
   assert.equal(query.get("frac"), "0");
   assert.equal(query.get("fee"), "0.25");
 });
 
 test("readQuery: toQuery로 만든 주소를 그대로 되읽는다", () => {
-  const cond = { ...BASE, freq: "weekly", weekDay: 0, currency: "USD", amount: 1500, fractional: false, fee: 0.1 };
+  const cond = {
+    ...BASE,
+    freq: "weekly",
+    weekDay: 0,
+    currency: "USD",
+    amount: 1500,
+    fractional: false,
+    fee: 0.1,
+  };
   const found = readQuery(`?${toQuery(cond)}`);
   assert.deepEqual(found, {
     codes: ["QQQ", "QLD"],
@@ -88,11 +101,16 @@ test("readQuery: 쉼표가 %2C로 바뀐 옛 주소도 읽는다", () => {
 });
 
 test("toQuery: 특수 문자가 든 종목 코드는 인코딩한다", () => {
-  assert.equal(new URLSearchParams(toQuery({ ...BASE, codes: ["^GSPC", "BRK-B"] })).get("s"), "^GSPC,BRK-B");
+  assert.equal(
+    new URLSearchParams(toQuery({ ...BASE, codes: ["^GSPC", "BRK-B"] })).get("s"),
+    "^GSPC,BRK-B",
+  );
 });
 
 test("readQuery: 잘못된 값은 버린다", () => {
-  const found = readQuery("?s=qqq,../etc,QQQ,SPY&from=2021-1-1&to=x&freq=yearly&day=40&amt=-5&cur=JPY&fee=20");
+  const found = readQuery(
+    "?s=qqq,../etc,QQQ,SPY&from=2021-1-1&to=x&freq=yearly&day=40&amt=-5&cur=JPY&fee=20",
+  );
   assert.deepEqual(found, { codes: ["QQQ", "SPY"] });
 });
 
@@ -124,9 +142,15 @@ test("validate: 올바른 조건은 오류가 없다", () => {
 });
 
 test("validate: 항목마다 한국어 메시지", () => {
-  assert.deepEqual(validate({ ...BASE, codes: [] }, TODAY), { symbols: "종목을 하나 이상 넣어 주세요" });
-  assert.deepEqual(validate({ ...BASE, start: "2026-11-24" }, TODAY), { start: "시작일은 끝날짜보다 앞이어야 합니다" });
-  assert.deepEqual(validate({ ...BASE, end: "2026-11-25" }, TODAY), { end: "끝날짜는 오늘(2026-11-24)보다 늦을 수 없습니다" });
+  assert.deepEqual(validate({ ...BASE, codes: [] }, TODAY), {
+    symbols: "종목을 하나 이상 넣어 주세요",
+  });
+  assert.deepEqual(validate({ ...BASE, start: "2026-11-24" }, TODAY), {
+    start: "시작일은 끝날짜보다 앞이어야 합니다",
+  });
+  assert.deepEqual(validate({ ...BASE, end: "2026-11-25" }, TODAY), {
+    end: "끝날짜는 오늘(2026-11-24)보다 늦을 수 없습니다",
+  });
   assert.deepEqual(validate({ ...BASE, amount: 0 }, TODAY), { amount: "금액은 0보다 커야 합니다" });
   assert.deepEqual(validate({ ...BASE, fee: 11 }, TODAY), { fee: "수수료는 0~10%입니다" });
   assert.deepEqual(validate({ ...BASE, fee: Number.NaN }, TODAY), { fee: "수수료는 0~10%입니다" });
@@ -148,8 +172,14 @@ test("estimateBuys: 매월 31일은 짧은 달에 말일로 센다", () => {
 });
 
 test("estimateBuys: 매주와 매일은 어림값", () => {
-  assert.equal(estimateBuys({ ...BASE, freq: "weekly", start: "2025-11-25", end: "2026-11-24" }), 52);
-  assert.equal(estimateBuys({ ...BASE, freq: "daily", start: "2025-11-24", end: "2026-11-24" }), 252);
+  assert.equal(
+    estimateBuys({ ...BASE, freq: "weekly", start: "2025-11-25", end: "2026-11-24" }),
+    52,
+  );
+  assert.equal(
+    estimateBuys({ ...BASE, freq: "daily", start: "2025-11-24", end: "2026-11-24" }),
+    252,
+  );
 });
 
 test("estimateBuys: 기간이 없으면 0", () => {

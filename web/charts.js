@@ -91,7 +91,11 @@ function tabModel(data, slotOf) {
       format: (v) => pct(v),
       tick: (v) => `${v}%`,
       datasets: symbols.map((s) => symbolLine(s, chart.series[s].return_pct, slotOf(s))),
-      legend: symbols.map((s) => ({ slot: slotOf(s), label: s, value: pct(lastValue(chart.series[s].return_pct)) })),
+      legend: symbols.map((s) => ({
+        slot: slotOf(s),
+        label: s,
+        value: pct(lastValue(chart.series[s].return_pct)),
+      })),
       zeroLine: true,
     };
   }
@@ -112,7 +116,11 @@ function tabModel(data, slotOf) {
         refLine("평단가", series.avg_cost),
       ],
       legend: [
-        { slot: slotOf(symbol), label: `${symbol} 주가`, value: price(lastValue(series.price), cur) },
+        {
+          slot: slotOf(symbol),
+          label: `${symbol} 주가`,
+          value: price(lastValue(series.price), cur),
+        },
         { ref: true, slot: 0, label: "평단가", value: price(lastValue(series.avg_cost), cur) },
       ],
       hint: "주가가 평단가 위인 구간(초록)은 이익, 아래(빨강)는 손실입니다.",
@@ -126,11 +134,19 @@ function tabModel(data, slotOf) {
     datasets: [
       ...symbols.map((s) => symbolLine(s, prep(chart.series[s].value), slotOf(s))),
       ...invested.map((line) =>
-        refLine(line.symbol ? `투자금 ${line.symbol}` : "투자금", prep(line.values), line.symbol ? dashOf(slotOf(line.symbol)) : []),
+        refLine(
+          line.symbol ? `투자금 ${line.symbol}` : "투자금",
+          prep(line.values),
+          line.symbol ? dashOf(slotOf(line.symbol)) : [],
+        ),
       ),
     ],
     legend: [
-      ...symbols.map((s) => ({ slot: slotOf(s), label: s, value: money(lastValue(chart.series[s].value), invest) })),
+      ...symbols.map((s) => ({
+        slot: slotOf(s),
+        label: s,
+        value: money(lastValue(chart.series[s].value), invest),
+      })),
       ...invested.map((line) => ({
         ref: true,
         slot: line.symbol ? slotOf(line.symbol) : 0, // 종목마다 나뉘면 회색 선을 선 모양으로 가른다
@@ -156,7 +172,8 @@ function legendItems(items) {
   );
 }
 
-const MISSING = "그래프 도구(Chart.js)를 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요. 위의 숫자와 아래 매수 내역은 그대로 볼 수 있습니다.";
+const MISSING =
+  "그래프 도구(Chart.js)를 불러오지 못했습니다. 인터넷 연결을 확인하고 새로고침해 주세요. 위의 숫자와 아래 매수 내역은 그대로 볼 수 있습니다.";
 
 /** 결과를 지울 때(전체 실패 등) 그래프를 치운다. */
 export function clearCharts() {
@@ -171,7 +188,9 @@ export function clearCharts() {
 function waitForChartJs(wrap) {
   const script = document.getElementById("chartjs");
   const failed = !script || script.dataset.failed;
-  wrap.replaceChildren(h("p", { class: "chart-missing", text: failed ? MISSING : "그래프 도구를 불러오는 중입니다…" }));
+  wrap.replaceChildren(
+    h("p", { class: "chart-missing", text: failed ? MISSING : "그래프 도구를 불러오는 중입니다…" }),
+  );
   if (!failed) {
     script.addEventListener("load", afterChartJs, { once: true });
     script.addEventListener("error", draw, { once: true });
@@ -203,13 +222,21 @@ function draw() {
     current.chart = newChart(ChartJs, wrap, data, model);
   } catch (error) {
     console.error(error);
-    wrap.replaceChildren(h("p", { class: "chart-missing", text: "그래프를 그리지 못했습니다. 새로고침한 뒤 다시 계산해 주세요." }));
+    wrap.replaceChildren(
+      h("p", {
+        class: "chart-missing",
+        text: "그래프를 그리지 못했습니다. 새로고침한 뒤 다시 계산해 주세요.",
+      }),
+    );
   }
 }
 
 function newChart(ChartJs, wrap, data, model) {
   const values = model.legend.map((i) => `${i.label} 마지막 ${i.value}`).join(", ");
-  const canvas = h("canvas", { role: "img", "aria-label": `${TABS.find((t) => t.key === view.tab).label} 그래프. ${values}` });
+  const canvas = h("canvas", {
+    role: "img",
+    "aria-label": `${TABS.find((t) => t.key === view.tab).label} 그래프. ${values}`,
+  });
   wrap.replaceChildren(canvas);
   const axis = cssVar("--axis");
   const grid = cssVar("--grid");
@@ -310,15 +337,23 @@ function chartTools(data, slotOf) {
 
 function chartToolsChildren(data, slotOf, rebuild) {
   const children = [
-    segButtons(TABS, (t) => t.key === view.tab, (t) => {
-      view.tab = t.key;
-      rebuild();
-    }, "그래프 종류"),
+    segButtons(
+      TABS,
+      (t) => t.key === view.tab,
+      (t) => {
+        view.tab = t.key;
+        rebuild();
+      },
+      "그래프 종류",
+    ),
   ];
   if (view.tab === "value") {
     children.push(
       segButtons(
-        [{ key: false, label: "일반" }, { key: true, label: "로그" }],
+        [
+          { key: false, label: "일반" },
+          { key: true, label: "로그" },
+        ],
         (o) => o.key === view.log,
         (o) => {
           view.log = o.key;
@@ -358,8 +393,20 @@ export function chartSection(data, slotOf) {
   return h(
     "section",
     { class: "box", "aria-labelledby": "chart-h" },
-    h("div", { class: "box-head" }, h("h3", { id: "chart-h", text: "그래프" }), chartTools(data, slotOf)),
-    h("div", { class: "box-body" }, legend, wrap, hint, note ? h("p", { class: "hint", text: note }) : null),
+    h(
+      "div",
+      { class: "box-head" },
+      h("h3", { id: "chart-h", text: "그래프" }),
+      chartTools(data, slotOf),
+    ),
+    h(
+      "div",
+      { class: "box-body" },
+      legend,
+      wrap,
+      hint,
+      note ? h("p", { class: "hint", text: note }) : null,
+    ),
   );
 }
 
@@ -370,7 +417,10 @@ document.addEventListener("themechange", () => draw());
 function downloadCsv(data) {
   const text = buysCsv(data.results, data.params.currency);
   const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
-  const link = h("a", { href: url, download: csvFileName({ ...data.params, symbols: data.results.map((r) => r.symbol) }) });
+  const link = h("a", {
+    href: url,
+    download: csvFileName({ ...data.params, symbols: data.results.map((r) => r.symbol) }),
+  });
   document.body.append(link);
   link.click();
   link.remove();
@@ -383,7 +433,12 @@ const DOWNLOAD_ICON = ["M12 4v11", "M7 10l5 5 5-5", "M5 20h14"];
 export function csvButton(data, label = "CSV") {
   return h(
     "button",
-    { type: "button", class: "btn2", title: "모든 종목의 매수 내역 (엑셀에서 열 수 있는 UTF-8 CSV)", onclick: () => downloadCsv(data) },
+    {
+      type: "button",
+      class: "btn2",
+      title: "모든 종목의 매수 내역 (엑셀에서 열 수 있는 UTF-8 CSV)",
+      onclick: () => downloadCsv(data),
+    },
     icon(DOWNLOAD_ICON),
     label,
   );
@@ -414,7 +469,12 @@ function buyRow(no, row, result, params) {
     "tr",
     {},
     h("td", { class: "left muted", text: String(no) }),
-    ...BUY_COLUMNS.map((c) => h("td", { class: c.key === "date" ? "left" : null, text: cell(c, row, result, params.currency, params.fractional) })),
+    ...BUY_COLUMNS.map((c) =>
+      h("td", {
+        class: c.key === "date" ? "left" : null,
+        text: cell(c, row, result, params.currency, params.fractional),
+      }),
+    ),
   );
 }
 
@@ -426,13 +486,31 @@ function buysTable(data, result) {
     ? result.buys.map((row, i) => buyRow(i + 1, row, result, data.params))
     : [
         ...view8.head.map((r) => buyRow(r.no, r.row, result, data.params)),
-        h("tr", { class: "gap" }, h("td", { colspan: String(BUY_COLUMNS.length + 1), text: `⋯ ${view8.hidden.toLocaleString("ko-KR")}회 더 있음` })),
+        h(
+          "tr",
+          { class: "gap" },
+          h("td", {
+            colspan: String(BUY_COLUMNS.length + 1),
+            text: `⋯ ${view8.hidden.toLocaleString("ko-KR")}회 더 있음`,
+          }),
+        ),
         ...view8.tail.map((r) => buyRow(r.no, r.row, result, data.params)),
       ];
   return h(
     "table",
     { class: "tbl", "aria-label": `${result.symbol} 매수 내역` },
-    h("thead", {}, h("tr", {}, h("th", { scope: "col", class: "left", text: "회차" }), ...BUY_COLUMNS.map((c) => h("th", { scope: "col", class: c.key === "date" ? "left" : null, text: c.title(invest) })))),
+    h(
+      "thead",
+      {},
+      h(
+        "tr",
+        {},
+        h("th", { scope: "col", class: "left", text: "회차" }),
+        ...BUY_COLUMNS.map((c) =>
+          h("th", { scope: "col", class: c.key === "date" ? "left" : null, text: c.title(invest) }),
+        ),
+      ),
+    ),
     h("tbody", {}, ...rows),
   );
 }
