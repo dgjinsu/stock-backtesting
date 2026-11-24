@@ -34,8 +34,9 @@ class Settings:
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Settings":
+        """환경변수에서 설정을 읽는다. PORT가 1~65535 숫자가 아니면 ValueError."""
         port_text = env.get("PORT", "8000")
-        if not port_text.isdigit() or not 0 < int(port_text) < 65536:
+        if not port_text.isdecimal() or not 0 < int(port_text) < 65536:
             raise ValueError(f"PORT는 1~65535 사이 숫자여야 합니다: {port_text!r}")
         return cls(
             host=env.get("HOST", "127.0.0.1"),
@@ -73,6 +74,7 @@ def _open_browser_when_ready(url: str, timeout_s: float = 30.0) -> None:
 
 
 def main(argv: list[str]) -> None:
+    """서버를 켠다. `--open`이 있으면 준비된 뒤 브라우저를 연다."""
     import uvicorn
 
     settings = Settings.from_env(os.environ)
