@@ -2,6 +2,7 @@
 
 import asyncio
 from collections.abc import Iterator
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -11,8 +12,9 @@ from fastapi.testclient import TestClient
 
 from src.main import Settings, app, create_app
 from src.market import Market
-from tests.helpers import FakeYahoo
+from tests.helpers import FakeYahoo, inverted_fx_payload, load_series
 
+TODAY = date(2026, 11, 24)
 EXAMPLE: dict[str, Any] = {
     "symbols": ["QQQ", "QLD"],
     "start": "2021-11-24",
@@ -26,13 +28,29 @@ EXAMPLE: dict[str, Any] = {
 }
 
 
+class Clock:
+    def __init__(self) -> None:
+        self.now = 1_795_500_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+class Api:
+    """테스트용 서버 하나: TestClient, 가짜 Yahoo, 시계."""
+
+    def __init__(self, client: TestClient, yahoo: FakeYahoo, clock: Clock) -> None:
+        self.client, self.yahoo, self.clock = client, yahoo, clock
+
+
 @pytest.fixture
-def api(tmp_path: Path) -> Iterator[tuple[TestClient, FakeYahoo]]:
-    yahoo = FakeYahoo()
+def api(tmp_path: Path) -> Iterator[Api]:
+    yahoo, clock = FakeYahoo(), Clock()
     client = httpx.AsyncClient(transport=httpx.MockTransport(yahoo))
-    market = Market(tmp_path, client)
-    with TestClient(create_app(Settings(data_dir=tmp_path), market=market)) as test_client:
-        yield test_client, yahoo
+    market = Market(tmp_path, client, clock=clock)
+    server = create_app(Settings(data_dir=tmp_path), market=market, today=lambda: TODAY)
+    with TestClient(server) as test_client:
+        yield Api(test_client, yahoo, clock)
     asyncio.run(client.aclose())
 
 
@@ -75,8 +93,8 @@ def test_openapi_docs_page_is_served() -> None:
 # ---------- POST /api/backtest ----------
 
 
-def test_backtest_example_matches_expected_values(api: tuple[TestClient, FakeYahoo]) -> None:
-    client, _ = api
+def test_backtest_example_matches_expected_values(api: Api) -> None:
+    client = api.client
     response = _post(client)
     assert response.status_code == 200
     body = response.json()
@@ -104,8 +122,8 @@ def test_backtest_example_matches_expected_values(api: tuple[TestClient, FakeYah
     assert qld["buys"][0]["date"] == "2021-12-01"
 
 
-def test_backtest_chart_shares_one_date_axis(api: tuple[TestClient, FakeYahoo]) -> None:
-    client, _ = api
+def test_backtest_chart_shares_one_date_axis(api: Api) -> None:
+    client = api.client
     chart = _post(client, freq="daily", anchor=None, amount=100_000).json()["chart"]
     assert 0 < len(chart["dates"]) <= 1000
     for symbol in ("QQQ", "QLD"):
@@ -114,8 +132,8 @@ def test_backtest_chart_shares_one_date_axis(api: tuple[TestClient, FakeYahoo]) 
         assert len(series["return_pct"]) == len(chart["dates"])
 
 
-def test_backtest_usd_investment_needs_no_fx(api: tuple[TestClient, FakeYahoo]) -> None:
-    client, yahoo = api
+def test_backtest_usd_investment_needs_no_fx(api: Api) -> None:
+    client, yahoo = api.client, api.yahoo
     body = _post(client, symbols=["QQQ"], amount=1500, currency="USD").json()
     summary = _result(body, "QQQ")["summary"]
     assert summary["value"] == pytest.approx(138_171, abs=1)
@@ -123,8 +141,8 @@ def test_backtest_usd_investment_needs_no_fx(api: tuple[TestClient, FakeYahoo]) 
     assert not any("USDKRW" in path for path in yahoo.calls)
 
 
-def test_backtest_unknown_symbol_fails_alone(api: tuple[TestClient, FakeYahoo]) -> None:
-    client, _ = api
+def test_backtest_unknown_symbol_fails_alone(api: Api) -> None:
+    client = api.client
     body = _post(client, symbols=["QLD", "XXXX"]).json()
     assert [r["symbol"] for r in body["results"]] == ["QLD"]
     assert body["errors"] == [{"symbol": "XXXX", "message": "'XXXX' 종목을 찾을 수 없습니다."}]
@@ -132,9 +150,9 @@ def test_backtest_unknown_symbol_fails_alone(api: tuple[TestClient, FakeYahoo]) 
 
 
 def test_backtest_all_symbols_failing_returns_only_errors(
-    api: tuple[TestClient, FakeYahoo],
+    api: Api,
 ) -> None:
-    client, _ = api
+    client = api.client
     response = _post(client, symbols=["XXXX"])
     assert response.status_code == 200
     body = response.json()
@@ -175,9 +193,9 @@ def test_backtest_all_symbols_failing_returns_only_errors(
     ],
 )
 def test_backtest_bad_input_returns_422_with_korean_message(
-    api: tuple[TestClient, FakeYahoo], changes: dict[str, Any], field: str, words: str
+    api: Api, changes: dict[str, Any], field: str, words: str
 ) -> None:
-    client, yahoo = api
+    client, yahoo = api.client, api.yahoo
     response = _post(client, **changes)
     assert response.status_code == 422
     details = response.json()["detail"]
@@ -186,9 +204,9 @@ def test_backtest_bad_input_returns_422_with_korean_message(
 
 
 def test_backtest_weekly_without_anchor_defaults_to_monday(
-    api: tuple[TestClient, FakeYahoo],
+    api: Api,
 ) -> None:
-    client, _ = api
+    client = api.client
     body = _post(client, symbols=["QLD"], freq="weekly", anchor=None, amount=500_000).json()
     assert _result(body, "QLD")["summary"]["first_buy"] == "2021-11-29"
 
@@ -196,8 +214,8 @@ def test_backtest_weekly_without_anchor_defaults_to_monday(
 # ---------- GET /api/search ----------
 
 
-def test_search_returns_hits(api: tuple[TestClient, FakeYahoo]) -> None:
-    client, yahoo = api
+def test_search_returns_hits(api: Api) -> None:
+    client, yahoo = api.client, api.yahoo
     yahoo.search_payload = {
         "quotes": [
             {
@@ -215,9 +233,80 @@ def test_search_returns_hits(api: tuple[TestClient, FakeYahoo]) -> None:
     ]
 
 
-def test_search_failure_returns_503_with_message(api: tuple[TestClient, FakeYahoo]) -> None:
-    client, yahoo = api
+def test_search_failure_returns_503_with_message(api: Api) -> None:
+    client, yahoo = api.client, api.yahoo
     yahoo.fail = True
     response = client.get("/api/search", params={"q": "qld"})
     assert response.status_code == 503
     assert "검색" in response.json()["detail"]
+
+
+# ---------- 실패 경로와 경계 (리뷰 반영) ----------
+
+
+def test_backtest_krw_stock_bought_in_usd_keeps_small_fx(api: Api) -> None:
+    api.yahoo.extra["KRWUSD=X"] = inverted_fx_payload("USDKRW=X", "USD")
+    body = _post(api.client, symbols=["005930.KS"], amount=1500, currency="USD").json()
+    assert body["errors"] == []
+    result = _result(body, "005930.KS")
+    assert result["summary"]["eval_fx"] == pytest.approx(1 / 1344.16, rel=1e-5)
+    assert all(row["fx"] > 0 for row in result["buys"])
+
+
+def test_backtest_with_stale_cache_marks_result(api: Api) -> None:
+    assert _post(api.client).status_code == 200
+    api.clock.now += 7 * 3600
+    api.yahoo.fail = True
+    qld = _result(_post(api.client).json(), "QLD")
+    assert qld["stale"] is True
+    assert qld["data_through"] == "2026-11-23"
+
+
+def test_backtest_listed_after_start_reports_listing_date(api: Api) -> None:
+    qld = _result(_post(api.client, start="2020-01-01").json(), "QLD")
+    assert qld["listed_from"] == load_series("QLD").dates[0].isoformat()
+
+
+def test_backtest_fx_failure_fails_only_that_symbol(api: Api) -> None:
+    api.yahoo.missing.add("USDKRW=X")
+    body = _post(api.client, symbols=["QLD", "005930.KS"]).json()
+    assert [r["symbol"] for r in body["results"]] == ["005930.KS"]
+    assert body["errors"] == [
+        {"symbol": "QLD", "message": "USDKRW=X 환율을 받지 못해 계산하지 못했습니다."}
+    ]
+
+
+def test_backtest_without_buy_days_in_period_is_symbol_error(api: Api) -> None:
+    body = _post(api.client, start="2026-11-03", end="2026-11-20").json()
+    assert body["results"] == []
+    assert all("매수일" in e["message"] for e in body["errors"])
+    assert len(body["errors"]) == 2
+
+
+def test_backtest_end_after_injected_today_is_rejected(api: Api) -> None:
+    response = _post(api.client, end="2026-11-25")
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["field"] == "end"
+
+
+def test_backtest_reports_all_cross_field_errors_at_once(api: Api) -> None:
+    response = _post(api.client, freq="weekly", anchor=6, start="2026-11-24")
+    fields = {d["field"] for d in response.json()["detail"]}
+    assert fields == {"anchor", "start"}
+
+
+def test_backtest_non_text_symbol_has_own_message(api: Api) -> None:
+    details = _post(api.client, symbols=[1]).json()["detail"]
+    assert details[0]["field"] == "symbols"
+    assert "문자열" in details[0]["message"]
+
+
+def test_backtest_notes_split_after_end_too(api: Api) -> None:
+    qld = _result(_post(api.client, end="2024-01-02").json(), "QLD")
+    assert "2025-11-20 2:1 분할 반영" in qld["notes"]
+
+
+def test_search_too_long_query_names_q_field(api: Api) -> None:
+    response = api.client.get("/api/search", params={"q": "x" * 51})
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["field"] == "q"

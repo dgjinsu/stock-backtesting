@@ -63,6 +63,7 @@ class FakeYahoo:
 
     부른 경로와 동시에 처리 중인 요청 수를 센다. fail이면 500, fixture가 없거나 missing에
     넣은 종목은 404, chart_override가 있으면 차트 요청에 그 JSON을 200으로 돌려준다.
+    extra에 넣은 종목은 fixture 대신 그 JSON으로 답한다.
     """
 
     def __init__(self) -> None:
@@ -72,6 +73,7 @@ class FakeYahoo:
         self.fail = False
         self.missing: set[str] = set()
         self.chart_override: Any = None
+        self.extra: dict[str, Any] = {}
         self.search_payload: Any = {"quotes": []}
 
     async def __call__(self, request: httpx.Request) -> httpx.Response:
@@ -87,6 +89,8 @@ class FakeYahoo:
             if self.chart_override is not None:
                 return httpx.Response(200, json=self.chart_override)
             symbol = request.url.path.rsplit("/", 1)[-1]
+            if symbol in self.extra:
+                return httpx.Response(200, json=self.extra[symbol])
             fixture = YAHOO / f"{symbol}.json"
             if symbol in self.missing or not fixture.exists():
                 return httpx.Response(
@@ -95,3 +99,14 @@ class FakeYahoo:
             return httpx.Response(200, content=fixture.read_bytes())
         finally:
             self.in_flight -= 1
+
+
+def inverted_fx_payload(source: str, target: str) -> dict[str, Any]:
+    """저장한 환율 응답의 값을 뒤집어 반대 방향 환율 응답을 만든다 (예: USDKRW=X → KRWUSD=X)."""
+    raw = json.loads((YAHOO / f"{source}.json").read_text(encoding="utf-8"))
+    result = raw["chart"]["result"][0]
+    result["meta"]["currency"] = target
+    for key, block in (("quote", "close"), ("adjclose", "adjclose")):
+        values = result["indicators"][key][0][block]
+        result["indicators"][key][0][block] = [None if v is None else 1 / v for v in values]
+    return raw

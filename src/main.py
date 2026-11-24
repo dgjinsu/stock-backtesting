@@ -12,7 +12,7 @@ import threading
 import time
 import urllib.request
 import webbrowser
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -91,26 +91,24 @@ def today_kst() -> date:
 
 
 def _anchor_for(request: BacktestRequest) -> int | None:
-    """주기에 맞는 매수 기준일. 비어 있으면 매주 월요일, 매월 1일."""
+    """주기에 맞는 매수 기준일. 비어 있으면 매주 월요일, 매월 1일 (범위는 _check_request가 본다)."""
     if request.freq == "daily":
         return None
-    if request.freq == "weekly":
-        anchor = 0 if request.anchor is None else request.anchor
-        if not 0 <= anchor <= 4:
-            raise InputError(
-                [FieldError(field="anchor", message="매주 매수 요일은 0(월)~4(금) 중 하나입니다")]
-            )
-        return anchor
-    anchor = 1 if request.anchor is None else request.anchor
-    if not 1 <= anchor <= 31:
-        raise InputError(
-            [FieldError(field="anchor", message="매월 매수 날짜는 1~31 중 하나입니다")]
-        )
-    return anchor
+    if request.anchor is not None:
+        return request.anchor
+    return 0 if request.freq == "weekly" else 1
 
 
-def _check_dates(request: BacktestRequest, today: date) -> None:
+def _check_request(request: BacktestRequest, today: date) -> list[FieldError]:
+    """항목끼리 맞춰 보는 검사. 틀린 것을 모두 모아 돌려준다."""
     errors: list[FieldError] = []
+    anchor = _anchor_for(request)
+    if request.freq == "weekly" and anchor is not None and not 0 <= anchor <= 4:
+        errors.append(
+            FieldError(field="anchor", message="매주 매수 요일은 0(월)~4(금) 중 하나입니다")
+        )
+    if request.freq == "monthly" and anchor is not None and not 1 <= anchor <= 31:
+        errors.append(FieldError(field="anchor", message="매월 매수 날짜는 1~31 중 하나입니다"))
     if request.start >= request.end:
         errors.append(FieldError(field="start", message="시작일은 끝날짜보다 앞이어야 합니다"))
     if request.end > today:
@@ -119,17 +117,18 @@ def _check_dates(request: BacktestRequest, today: date) -> None:
                 field="end", message=f"끝날짜는 오늘({today.isoformat()})보다 늦을 수 없습니다"
             )
         )
-    if errors:
-        raise InputError(errors)
+    return errors
 
 
 def _validation_errors(exc: RequestValidationError) -> list[FieldError]:
     details: list[FieldError] = []
     for error in exc.errors():
-        location = [part for part in error.get("loc", ()) if part != "body"]
+        location = [part for part in error.get("loc", ()) if part not in ("body", "query", "path")]
         field = str(location[0]) if location else "body"
         if error.get("type") == "value_error":
             message = str(error.get("ctx", {}).get("error", "입력값이 올바르지 않습니다"))
+        elif field == "symbols" and len(location) > 1:
+            message = "종목 코드는 문자열로 넣어 주세요"
         else:
             message = FIELD_MESSAGES.get(field, "요청 형식이 올바르지 않습니다")
         details.append(FieldError(field=field, message=message))
@@ -151,6 +150,11 @@ def _maybe_money(value: float | None, currency: str) -> float | None:
     return None if value is None else _money(value, currency)
 
 
+def _fx(value: float) -> float:
+    """환율은 유효숫자 6자리. KRWUSD=X(약 0.000744)처럼 작은 환율도 0이 되지 않는다."""
+    return float(f"{value:.6g}")
+
+
 def _summary_out(s: engine.Summary, invest: str, asset: str) -> SummaryOut:
     return SummaryOut(
         buys=s.buys,
@@ -163,7 +167,7 @@ def _summary_out(s: engine.Summary, invest: str, asset: str) -> SummaryOut:
         avg_cost_invest=_maybe_money(s.avg_cost_invest, invest),
         eval_date=s.eval_date,
         eval_price=round(s.eval_price, 4),
-        eval_fx=round(s.eval_fx, 2),
+        eval_fx=_fx(s.eval_fx),
         value=_money(s.value, invest),
         profit=_money(s.profit, invest),
         return_pct=round(s.return_pct, 2),
@@ -182,7 +186,7 @@ def _result_out(
     notes = [
         f"{day.isoformat()} {ratio} 분할 반영"
         for day, ratio in history.splits
-        if params.start <= day <= params.end
+        if day >= params.start  # 끝날짜 뒤의 분할도 가격·수량에 반영돼 있다
     ]
     return ResultOut(
         symbol=history.symbol,
@@ -197,7 +201,7 @@ def _result_out(
             BuyOut(
                 date=b.date,
                 price=round(b.price, 4),
-                fx=round(b.fx, 2),
+                fx=_fx(b.fx),
                 qty=round(b.qty, 4),
                 cum_qty=round(b.cum_qty, 4),
                 avg_cost_asset=_maybe(b.avg_cost_asset, 4),
@@ -238,8 +242,29 @@ def _to_series(history: PriceHistory) -> engine.Series:
     return engine.Series(history.symbol, history.currency, history.dates, history.close)
 
 
+class FxError(MarketError):
+    """종목은 받았지만 그 종목의 환율을 받지 못했다."""
+
+
+async def _fetch(
+    market: Market, symbol: str, currency: str
+) -> tuple[PriceHistory, PriceHistory | None]:
+    """종목 하나와 (필요하면) 그 종목의 환율을 이어서 받는다. 종목끼리는 겹쳐서 받는다."""
+    history = await market.get_series(symbol)
+    if history.currency == currency:
+        return history, None
+    pair = f"{history.currency}{currency}=X"
+    try:
+        return history, await market.get_series(pair)
+    except MarketError as error:
+        raise FxError(f"{pair} 환율을 받지 못해 계산하지 못했습니다.") from error
+
+
 async def run_backtest(market: Market, request: BacktestRequest, today: date) -> BacktestResponse:
     """종목과 환율을 받고(동시에), 종목마다 계산하고, 그래프 날짜축을 맞춘다 (아키텍처 1절)."""
+    problems = _check_request(request, today)
+    if problems:
+        raise InputError(problems)
     params = engine.Params(
         start=request.start,
         end=request.end,
@@ -250,51 +275,28 @@ async def run_backtest(market: Market, request: BacktestRequest, today: date) ->
         fractional=request.fractional,
         fee=request.fee_pct / 100,
     )
-    _check_dates(request, today)
-
     fetched = await asyncio.gather(
-        *(market.get_series(s) for s in request.symbols), return_exceptions=True
+        *(_fetch(market, s, request.currency) for s in request.symbols), return_exceptions=True
     )
-    pairs = sorted(
-        {
-            f"{h.currency}{request.currency}=X"
-            for h in fetched
-            if isinstance(h, PriceHistory) and h.currency != request.currency
-        }
-    )
-    fx_fetched = await asyncio.gather(
-        *(market.get_series(p) for p in pairs), return_exceptions=True
-    )
-    fx_by_pair = dict(zip(pairs, fx_fetched, strict=True))
 
     results: list[ResultOut] = []
     errors: list[SymbolError] = []
     simulated: dict[str, engine.SimResult] = {}
-    for symbol, history in zip(request.symbols, fetched, strict=True):
-        if isinstance(history, MarketError):
-            errors.append(SymbolError(symbol=symbol, message=str(history)))
+    for symbol, outcome in zip(request.symbols, fetched, strict=True):
+        if isinstance(outcome, MarketError):  # FxError 포함: 그 종목만 실패
+            errors.append(SymbolError(symbol=symbol, message=str(outcome)))
             continue
-        if isinstance(history, BaseException):
-            raise history
-        fx: engine.Series | None = None
-        fx_stale = False
-        if history.currency != request.currency:
-            pair = f"{history.currency}{request.currency}=X"
-            fx_history = fx_by_pair[pair]
-            if isinstance(fx_history, BaseException):
-                errors.append(
-                    SymbolError(
-                        symbol=symbol, message=f"{pair} 환율을 받지 못해 계산하지 못했습니다."
-                    )
-                )
-                continue
-            fx, fx_stale = _to_series(fx_history), fx_history.stale
+        if isinstance(outcome, BaseException):
+            raise outcome
+        history, fx_history = outcome
+        fx = None if fx_history is None else _to_series(fx_history)
         try:
             sim = engine.simulate(_to_series(history), fx, params)
-        except ValueError as error:  # EngineError 포함: 기간 안 매수일 없음 등
+        except engine.EngineError as error:  # 데이터 때문에 계산할 수 없음: 기간 안 매수일 없음 등
             errors.append(SymbolError(symbol=symbol, message=str(error)))
             continue
         simulated[symbol] = sim
+        fx_stale = fx_history is not None and fx_history.stale
         results.append(_result_out(history, sim, params, fx_stale))
 
     return BacktestResponse(
@@ -308,8 +310,12 @@ async def run_backtest(market: Market, request: BacktestRequest, today: date) ->
 # ---------- 앱 ----------
 
 
-def create_app(settings: Settings | None = None, market: Market | None = None) -> FastAPI:
-    """API 라우트를 먼저 두고, 남은 경로는 web/ 정적 파일로 넘긴다. 테스트는 market을 넣는다."""
+def create_app(
+    settings: Settings | None = None,
+    market: Market | None = None,
+    today: Callable[[], date] = today_kst,
+) -> FastAPI:
+    """API 라우트를 먼저 두고, 남은 경로는 web/ 정적 파일로 넘긴다. 테스트는 market과 today를 넣는다."""
     settings = settings or Settings.from_env(os.environ)
 
     @asynccontextmanager
@@ -342,7 +348,7 @@ def create_app(settings: Settings | None = None, market: Market | None = None) -
     @app.post("/api/backtest")
     async def backtest(request: BacktestRequest) -> BacktestResponse:
         started = time.monotonic()
-        response = await run_backtest(app.state.market, request, today_kst())
+        response = await run_backtest(app.state.market, request, today())
         logger.info(
             "backtest %s %s: %d개 결과, %d개 실패, %.2fs",
             ",".join(request.symbols),
