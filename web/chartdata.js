@@ -134,14 +134,20 @@ function yearsBefore(iso, years) {
 }
 
 /**
- * 보는 기간의 첫 위치: 마지막 날짜의 years년 전 날(그날 포함) 이후 첫 날짜.
- * 전체(null)이거나 날짜축이 years년보다 짧으면 0.
+ * 보는 기간 시작 날짜: 마지막 날짜의 years년 전 날(그날 포함). 날짜축에 없는 날일 수 있다.
+ * 전체(null)이거나 날짜축이 years년보다 짧으면 첫 날짜, 날짜가 없으면 null.
  */
-export function rangeStart(dates, years) {
-  if (!years || !dates.length) return 0;
+export function rangeFrom(dates, years) {
+  if (!dates.length) return null;
+  if (!years) return dates[0];
   const from = yearsBefore(dates.at(-1), years);
-  const i = dates.findIndex((d) => d >= from);
-  return Math.max(i, 0);
+  return from > dates[0] ? from : dates[0];
+}
+
+/** 보는 기간의 첫 위치: rangeFrom 이후 첫 날짜. 전체이거나 날짜축이 years년보다 짧으면 0. */
+export function rangeStart(dates, years) {
+  const from = rangeFrom(dates, years);
+  return from === null ? 0 : Math.max(dates.findIndex((d) => d >= from), 0);
 }
 
 /** 가장 큰 최고 평가금이 가장 작은 것의 이 배수를 넘으면 로그 축으로 먼저 연다. */
@@ -181,12 +187,13 @@ export function splitsOf(notes) {
 
 /**
  * 분할일 세로선: dates(지금 그리는 날짜축)에서 그날, 점을 줄여 그날이 없으면 그 뒤 첫 날짜의
- * 위치. 날짜축 앞(보는 기간 밖)이나 뒤(끝날짜 뒤 분할)는 뺀다.
+ * 위치. from(보는 기간 시작 날짜, rangeFrom) 앞이나 날짜축 뒤(끝날짜 뒤 분할)는 뺀다.
+ * 줄인 축에서는 from과 첫 점 사이의 분할도 보는 기간 안이라 첫 점에 그린다.
  */
-export function splitMarks(notes, dates) {
+export function splitMarks(notes, dates, from = dates[0]) {
   if (!dates.length) return [];
   return splitsOf(notes).flatMap((split) => {
-    if (split.date < dates[0] || split.date > dates.at(-1)) return [];
+    if (split.date < from || split.date > dates.at(-1)) return [];
     const index = dates.findIndex((d) => d >= split.date);
     return [{ index, ...split, label: `${split.ratio} 분할` }];
   });

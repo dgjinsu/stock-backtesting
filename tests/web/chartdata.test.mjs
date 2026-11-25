@@ -16,6 +16,7 @@ import {
   logFirstNote,
   logSafe,
   previewRows,
+  rangeFrom,
   rangeStart,
   sampledNote,
   splitMarks,
@@ -206,6 +207,18 @@ test("rangeStart: 2월 29일의 1년 전은 2월 28일로 본다", () => {
   assert.equal(rangeStart(["2027-02-26", "2027-02-28", "2027-03-01", "2028-02-29"], 1), 1);
 });
 
+test("rangeFrom: 보는 기간 시작 날짜는 마지막 날짜의 N년 전 날 (날짜축에 없어도)", () => {
+  assert.equal(rangeFrom(LONG, 1), "2025-11-23");
+  assert.equal(rangeFrom(LONG, 3), "2023-11-23");
+  assert.equal(rangeFrom(["2027-02-26", "2028-02-29"], 1), "2027-02-28");
+});
+
+test("rangeFrom: 전체(null)이거나 기간이 N년보다 짧으면 첫 날짜, 날짜가 없으면 null", () => {
+  assert.equal(rangeFrom(LONG, null), "2021-12-01");
+  assert.equal(rangeFrom(["2026-03-02", "2026-11-23"], 1), "2026-03-02");
+  assert.equal(rangeFrom([], 1), null);
+});
+
 test("logFirst: 가장 큰 최고 평가금이 가장 작은 것의 5배를 넘으면 그 종목", () => {
   const peaks = [
     { symbol: "QQQ", value: 228_690_000 },
@@ -285,4 +298,17 @@ test("splitMarks: 끝날짜 뒤와 보는 기간 앞의 분할은 빠진다", ()
     [["2026-06-22", 1]],
   );
   assert.deepEqual(splitMarks(notes, []), []);
+});
+
+test("splitMarks: 줄인 축의 최근 1년에서 첫 점보다 앞이어도 보는 기간 안이면 첫 점에 그린다", () => {
+  // 리뷰 재현 사례: 1년 전 날은 2025-11-23, 잘린 축의 첫 점은 2025-11-26
+  const dates = ["2021-12-01", "2025-11-19", "2025-11-26", "2026-06-22", "2026-11-23"];
+  const labels = dates.slice(rangeStart(dates, 1));
+  const from = rangeFrom(dates, 1);
+  assert.deepEqual(labels, ["2025-11-26", "2026-06-22", "2026-11-23"]);
+  assert.deepEqual(splitMarks(["2025-11-24 2:1 분할 반영"], labels, from), [
+    { index: 0, date: "2025-11-24", ratio: "2:1", label: "2:1 분할" },
+  ]);
+  // 보는 기간(1년 전 날) 앞의 분할은 여전히 빠진다
+  assert.deepEqual(splitMarks(["2025-11-20 2:1 분할 반영"], labels, from), []);
 });

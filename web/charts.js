@@ -13,6 +13,7 @@ import {
   logFirstNote,
   logSafe,
   previewRows,
+  rangeFrom,
   rangeStart,
   sampledNote,
   splitMarks,
@@ -177,7 +178,9 @@ function tabModel(data, slotOf) {
   const chart = data.chart;
   const invest = data.params.currency;
   const symbols = data.results.map((r) => r.symbol);
-  const start = rangeStart(chart.dates, RANGES.find((r) => r.key === view.range)?.years ?? null);
+  const years = RANGES.find((r) => r.key === view.range)?.years ?? null;
+  const from = rangeFrom(chart.dates, years); // 분할일은 잘린 축의 첫 점이 아니라 이 날짜로 거른다
+  const start = rangeStart(chart.dates, years);
   const cut = (values) => values.slice(start);
   const labels = cut(chart.dates);
   if (view.tab === "return") {
@@ -197,7 +200,7 @@ function tabModel(data, slotOf) {
     const series = chart.series[symbol];
     const pos = cssVar("--pos");
     const neg = cssVar("--neg");
-    const marks = splitMarks(result.notes, labels);
+    const marks = splitMarks(result.notes, labels, from);
     return {
       labels,
       format: (v) => price(v, cur),
@@ -278,7 +281,15 @@ function legendItems(items) {
       swatch(item.slot, 22, item.ref ? { color: "var(--ref)" } : {}),
       h("span", { class: "lg-label", text: item.label }),
       h("strong", { text: item.value }),
-      item.hidden ? h("span", { class: "lg-off", text: "숨김" }) : null,
+      // 버튼 안에서는 aria-pressed가 상태를 알리므로 이름이 바뀌지 않게 읽지 않는다 (APG 토글
+      // 버튼). 버튼이 아닌 투자금 항목은 상태를 알릴 다른 수단이 없어 읽게 둔다
+      item.hidden
+        ? h("span", {
+            class: "lg-off",
+            text: "숨김",
+            "aria-hidden": item.toggle ? "true" : null,
+          })
+        : null,
     ];
     const li = (...children) => h("li", { class: item.hidden ? "off" : null }, ...children);
     if (!item.toggle) return li(...content);
@@ -290,7 +301,7 @@ function legendItems(items) {
           class: "lg-btn",
           "aria-pressed": String(!item.hidden),
           "data-focus": `legend:${item.toggle}`,
-          title: item.hidden ? `${item.toggle} 다시 보이기` : `${item.toggle} 숨기기`,
+          title: "누르면 그래프에서 숨기거나 다시 보입니다", // 상태와 상관없이 같은 글
           onclick: () => toggleSymbol(item.toggle),
         },
         ...content,

@@ -1041,8 +1041,11 @@ a {
 .legend .off strong {
   text-decoration: line-through;
 }
-.legend .off .swatch,
+/* 값은 흐리게(opacity) 하지 않고 muted로 낮춘다: --sunken·--surface 위 대비 라이트 5.5:1, 다크 7:1 이상 */
 .legend .off strong {
+  color: var(--muted);
+}
+.legend .off .swatch {
   opacity: 0.45;
 }
 .legend .lg-btn[aria-pressed="false"] {
