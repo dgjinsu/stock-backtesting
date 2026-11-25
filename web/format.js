@@ -1,6 +1,9 @@
-// 숫자·날짜 표시. 손익은 부호(+/−)를 꼭 붙인다 (기능 명세 "정해 둔 것").
+// 숫자·날짜·조건 표시. 손익은 부호(+/−)를 꼭 붙인다 (기능 명세 "정해 둔 것").
+
+import { ALL_START } from "./conditions.js";
 
 export const MINUS = "−"; // U+2212
+const WEEKDAYS = ["월요일", "화요일", "수요일", "목요일", "금요일"];
 
 const int = new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 0 });
 const two = new Intl.NumberFormat("ko-KR", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -95,4 +98,35 @@ export function period(startIso, endIso) {
   if (months) return `${months}개월`;
   const days = Math.round((end - start) / 86400000);
   return `${days}일`;
+}
+
+/** 주기 글자. anchor는 API 값: 매주는 요일(0=월), 매월은 날짜(31=말일), 매일은 null. */
+export function freqText(freq, anchor) {
+  if (freq === "daily") return "매일";
+  if (freq === "weekly") return `매주 ${WEEKDAYS[anchor]}`;
+  return anchor === 31 ? "매월 말일" : `매월 ${anchor}일`;
+}
+
+/** 투자 통화 이름: 원화, 달러. */
+export function investLabel(currency) {
+  return currency === "KRW" ? "원화" : currency === "USD" ? "달러" : currency;
+}
+
+/**
+ * 접힌 조건 줄의 글 (F-11, 시안 v2): "기간 · 주기 · 종목마다 금액 · 통화".
+ * params는 API 응답의 params(요청 그대로)다. "전체"는 상장일부터이고,
+ * 정수 주와 수수료는 기본값이 아닐 때만 붙인다.
+ */
+export function condLine(params) {
+  const from = params.start <= ALL_START ? "상장일" : params.start;
+  return [
+    `${from} ~ ${params.end}`,
+    freqText(params.freq, params.anchor),
+    `종목마다 ${money(params.amount, params.currency)}`,
+    investLabel(params.currency),
+    params.fractional === false ? "정수 주만" : null,
+    params.fee_pct > 0 ? `수수료 ${params.fee_pct}%` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }

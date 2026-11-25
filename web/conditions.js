@@ -88,6 +88,34 @@ export function readQuery(search) {
   return found;
 }
 
+/**
+ * 탭 목록에서 키를 눌렀을 때 옮겨 갈 탭 (WAI-ARIA 탭 패턴, F-11).
+ * →는 다음, ←는 앞 탭이고 끝에서는 반대쪽 끝으로 넘어간다. Home은 처음, End는 마지막.
+ * 다른 키이거나 모르는 탭이면 null (그 키는 브라우저 기본 동작에 맡긴다).
+ */
+export function nextTab(tab, key) {
+  const from = RESULT_TABS.indexOf(tab);
+  if (from < 0) return null;
+  const last = RESULT_TABS.length - 1;
+  const to = {
+    ArrowRight: from === last ? 0 : from + 1,
+    ArrowLeft: from === 0 ? last : from - 1,
+    Home: 0,
+    End: last,
+  }[key];
+  return to === undefined ? null : RESULT_TABS[to];
+}
+
+/**
+ * 조건 패널 접기 규칙 (F-11). 결과(탭)가 보일 때 요약이 아닌 탭이면 결과 위에 접힌 줄(bar)을 두고,
+ * "조건 펼치기"를 누르지 않았으면(expanded가 아니면) 패널을 접는다(collapsed).
+ * 결과가 없거나 실패를 보이는 중이면 탭이 없으니 줄 없이 패널을 편다.
+ */
+export function panelFold({ hasResult, tab, expanded }) {
+  const bar = hasResult && tab !== DEFAULT_TAB;
+  return { bar, collapsed: bar && !expanded };
+}
+
 /** 서버에 보내기 전 입력 검사 (F-10). 항목 이름 → 한국어 메시지. 서버도 같은 검사를 한다. */
 export function validate(cond, today) {
   const errors = {};

@@ -10,6 +10,8 @@ import {
   SYMBOL_PATTERN,
   anchorOf,
   estimateBuys,
+  nextTab,
+  panelFold,
   readQuery,
   shiftYears,
   symbolStatus,
@@ -19,9 +21,19 @@ import {
 } from "./conditions.js";
 import { buysSection, chartSection, clearCharts, csvButton } from "./charts.js";
 import { h, icon, swatch } from "./dom.js";
-import { fx, money, pct, period, price, qty, signedMoney } from "./format.js";
+import {
+  condLine,
+  freqText,
+  fx,
+  investLabel,
+  money,
+  pct,
+  period,
+  price,
+  qty,
+  signedMoney,
+} from "./format.js";
 
-const WEEKDAYS = ["월요일", "화요일", "수요일", "목요일", "금요일"];
 const DEFAULT_SYMBOLS = ["QQQ", "QLD"];
 
 const $ = (id) => document.getElementById(id);
@@ -58,17 +70,6 @@ const resultView = { tab: DEFAULT_TAB, expanded: false, shown: null };
 /** 지금 조건 (conditions.js의 cond 모양). */
 function cond() {
   return { ...state, codes: state.symbols.map((s) => s.code) };
-}
-
-/** 주기 글자. 결과 머리 줄은 요청 당시 조건(params)으로 만든다. */
-function freqText(freq, anchor) {
-  if (freq === "daily") return "매일";
-  if (freq === "weekly") return `매주 ${WEEKDAYS[anchor]}`;
-  return anchor === 31 ? "매월 말일" : `매월 ${anchor}일`;
-}
-
-function investLabel(currency) {
-  return currency === "KRW" ? "원화" : currency === "USD" ? "달러" : currency;
 }
 
 // ---------- 입력 검사 (F-02, F-04, F-10) ----------
@@ -978,19 +979,11 @@ function tabPanel(key, ...children) {
 }
 
 function onTabKey(event) {
-  const from = RESULT_TABS.indexOf(event.target.dataset?.tab);
-  if (from < 0) return;
-  const last = RESULT_TABS.length - 1;
-  const to = {
-    ArrowRight: from === last ? 0 : from + 1,
-    ArrowLeft: from === 0 ? last : from - 1,
-    Home: 0,
-    End: last,
-  }[event.key];
-  if (to === undefined) return;
+  const to = nextTab(event.target.dataset?.tab, event.key);
+  if (to === null) return;
   event.preventDefault();
-  selectTab(RESULT_TABS[to]);
-  $(`tab-${RESULT_TABS[to]}`).focus();
+  selectTab(to);
+  $(`tab-${to}`).focus();
 }
 
 /** 탭을 바꾼다. 다시 계산하지 않고, 주소는 보이는 결과의 조건에서 tab만 바꾼다. */
@@ -1022,34 +1015,26 @@ function showTab() {
  * "조건 펼치기"를 누르면 그 탭에 머문 채 패널을 열고, 같은 버튼("조건 접기")으로 다시 접는다.
  */
 function layoutPanel() {
-  const folding = resultView.shown !== null && resultView.tab !== DEFAULT_TAB;
-  const collapsed = folding && !resultView.expanded;
+  const { bar, collapsed } = panelFold({
+    hasResult: resultView.shown !== null,
+    tab: resultView.tab,
+    expanded: resultView.expanded,
+  });
   $("panel").hidden = collapsed;
-  $("cond-bar").hidden = !folding;
+  $("cond-bar").hidden = !bar;
   $("cond-bar").setAttribute("aria-label", collapsed ? "조건 (접힘)" : "조건 (펼침)");
   $("cond-toggle").setAttribute("aria-expanded", String(!collapsed));
   $("cond-toggle-label").textContent = collapsed ? "조건 펼치기" : "조건 접기";
 }
 
-/** 접힌 줄의 조건 한 줄. 폼이 아니라 보이는 결과를 계산한 조건(params)으로 만든다. */
+/** 접힌 줄의 종목과 조건 한 줄. 폼이 아니라 보이는 결과를 계산한 조건(params)으로 만든다. */
 function renderCondBar(data) {
-  const params = data.params;
   $("cond-syms").replaceChildren(
     ...data.results.map((r) =>
       h("span", { class: "cond-sym" }, swatch(slotOf(r.symbol), 14), r.symbol),
     ),
   );
-  const from = params.start <= ALL_START ? "상장일" : params.start;
-  $("cond-text").textContent = [
-    `${from} ~ ${params.end}`,
-    freqText(params.freq, params.anchor),
-    `종목마다 ${money(params.amount, params.currency)}`,
-    investLabel(params.currency),
-    params.fractional === false ? "정수 주만" : null,
-    params.fee_pct > 0 ? `수수료 ${params.fee_pct}%` : null,
-  ]
-    .filter(Boolean)
-    .join(" · ");
+  $("cond-text").textContent = condLine(data.params);
 }
 
 // ---------- 시작 ----------

@@ -9,6 +9,8 @@ import {
   anchorOf,
   estimateBuys,
   isDate,
+  nextTab,
+  panelFold,
   readQuery,
   shiftYears,
   symbolStatus,
@@ -175,6 +177,61 @@ test("readQuery: 탭이 있어도 나머지 조건은 v1과 같게 읽는다", (
   const { tab, ...rest } = readQuery(`?${V1_QUERY}&tab=buys`);
   assert.equal(tab, "buys");
   assert.deepEqual(rest, readQuery(`?${V1_QUERY}`));
+});
+
+test("nextTab: →는 다음 탭, 마지막에서는 처음으로", () => {
+  assert.equal(nextTab("summary", "ArrowRight"), "analysis");
+  assert.equal(nextTab("strategy", "ArrowRight"), "buys");
+  assert.equal(nextTab("buys", "ArrowRight"), "summary");
+});
+
+test("nextTab: ←는 앞 탭, 처음에서는 마지막으로", () => {
+  assert.equal(nextTab("strategy", "ArrowLeft"), "analysis");
+  assert.equal(nextTab("summary", "ArrowLeft"), "buys");
+});
+
+test("nextTab: Home은 처음, End는 마지막 탭", () => {
+  assert.equal(nextTab("analysis", "Home"), "summary");
+  assert.equal(nextTab("analysis", "End"), "buys");
+  assert.equal(nextTab("summary", "Home"), "summary");
+});
+
+test("nextTab: 다른 키나 모르는 탭이면 null", () => {
+  for (const key of ["Enter", " ", "Tab", "ArrowDown", "ArrowUp"]) {
+    assert.equal(nextTab("summary", key), null, key);
+  }
+  assert.equal(nextTab("foo", "ArrowRight"), null);
+});
+
+test("panelFold: 결과가 없으면 접힌 줄도 없고 패널은 편다", () => {
+  for (const tab of RESULT_TABS) {
+    assert.deepEqual(panelFold({ hasResult: false, tab, expanded: false }), {
+      bar: false,
+      collapsed: false,
+    });
+  }
+});
+
+test("panelFold: 요약 탭은 늘 패널을 편다", () => {
+  for (const expanded of [false, true]) {
+    assert.deepEqual(panelFold({ hasResult: true, tab: "summary", expanded }), {
+      bar: false,
+      collapsed: false,
+    });
+  }
+});
+
+test("panelFold: 요약이 아닌 탭은 접고, 조건 펼치기를 누르면 줄을 둔 채 편다", () => {
+  for (const tab of ["analysis", "strategy", "buys"]) {
+    assert.deepEqual(panelFold({ hasResult: true, tab, expanded: false }), {
+      bar: true,
+      collapsed: true,
+    });
+    assert.deepEqual(panelFold({ hasResult: true, tab, expanded: true }), {
+      bar: true,
+      collapsed: false,
+    });
+  }
 });
 
 test("isDate: 달력에 있는 날짜만", () => {
