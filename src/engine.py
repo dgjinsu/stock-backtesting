@@ -140,13 +140,14 @@ class SimResult:
 
 @dataclass(frozen=True, slots=True)
 class ChartSeries:
-    """그래프 한 종목. 첫 매수 전 날짜는 None."""
+    """그래프 한 종목. 첫 매수 전 날짜는 None. drawdown은 그날 평가금 낙폭(%, 9-1, 0 이하)."""
 
     value: list[float | None]
     invested: list[float | None]
     return_pct: list[float | None]
     price: list[float | None]
     avg_cost: list[float | None]
+    drawdown: list[float | None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -268,7 +269,12 @@ def _asof_index(dates: Sequence[date], day: date) -> int:
     return bisect_right(dates, day) - 1
 
 
-def _rate_on(fx: Series | None, day: date) -> float:
+def rate_on(fx: Series | None, day: date) -> float:
+    """환율. 계산 규칙 3절: day 당일 또는 그 이전 마지막 종가.
+
+    fx가 None이면(종목 통화와 투자 통화가 같으면) 1이다. day 이전 값이 없으면 EngineError.
+    9-5 양도세 환율(USDKRW=X)도 같은 규칙이라 main이 이 함수로 찾는다.
+    """
     if fx is None:
         return 1.0
     i = _asof_index(fx.dates, day)
@@ -307,7 +313,7 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
     last_index = _asof_index(asset.dates, p.end)
     for i in range(first_index, last_index + 1):
         day, price = asset.dates[i], asset.close[i]
-        fx_rate = _rate_on(fx, day)
+        fx_rate = rate_on(fx, day)
         if day in buy_set:
             invested += p.amount
             flows.append((day, -p.amount))
@@ -351,7 +357,7 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
 
     eval_index = _asof_index(asset.dates, p.end)
     eval_price = asset.close[eval_index]
-    eval_fx = _rate_on(fx, p.end)
+    eval_fx = rate_on(fx, p.end)
     value = (shares * eval_price + cash) * eval_fx
     flows.append((p.end, value))
     annual_rate = xirr(flows)
@@ -397,10 +403,29 @@ def _pick_indices(count: int, max_points: int, must: set[int]) -> list[int]:
     return sorted(even | must)
 
 
+def _drawdown_pct(rows: Sequence[DailyRow]) -> list[float]:
+    """9-1 평가금 낙폭(%). 그날 평가금 ÷ 첫 행부터 그날까지 평가금 최댓값 − 1. rows와 같은 순서, 0 이하."""
+    out: list[float] = []
+    peak = 0.0
+    for row in rows:
+        peak = max(peak, row.value)
+        out.append((row.value / peak - 1) * 100 if peak > 0 else 0.0)
+    return out
+
+
+def _max_drawdown(rows: Sequence[DailyRow], drawdown_pct: Sequence[float]) -> Extreme | None:
+    """가장 깊은 낙폭과 그날. 같은 값이면 앞의 날. 0 아래로 내려간 적이 없으면 None (결정 d25)."""
+    if not drawdown_pct:
+        return None
+    i = min(range(len(drawdown_pct)), key=drawdown_pct.__getitem__)
+    return Extreme(rows[i].date, drawdown_pct[i]) if drawdown_pct[i] < 0 else None
+
+
 def build_chart(results: Mapping[str, SimResult], max_points: int = 1000) -> Chart:
     """모든 종목 거래일을 합친 날짜축. 거래가 없는 날은 직전 값, 첫 매수 전은 None.
 
-    max_points보다 길면 일정 간격으로 줄이되 첫날, 마지막 날, 종목마다 최고·최저 수익률 날짜는 남긴다.
+    max_points보다 길면 일정 간격으로 줄이되 첫날, 마지막 날, 종목마다 최고·최저 수익률 날짜와
+    평가금 최대 낙폭 날짜는 남긴다.
     """
     all_dates = sorted({row.date for result in results.values() for row in result.daily})
     position = {d: i for i, d in enumerate(all_dates)}
@@ -413,22 +438,29 @@ def build_chart(results: Mapping[str, SimResult], max_points: int = 1000) -> Cha
             "return_pct": [None] * len(all_dates),
             "price": [None] * len(all_dates),
             "avg_cost": [None] * len(all_dates),
+            "drawdown": [None] * len(all_dates),
         }
-        rows = iter(result.daily)
+        drawdowns = _drawdown_pct(result.daily)
+        rows = iter(enumerate(result.daily))
         current = next(rows, None)
-        last: DailyRow | None = None
+        last: tuple[int, DailyRow] | None = None
         for i, d in enumerate(all_dates):
-            while current is not None and current.date <= d:
+            while current is not None and current[1].date <= d:
                 last, current = current, next(rows, None)
             if last is None:
                 continue
-            columns["value"][i] = last.value
-            columns["invested"][i] = last.invested
-            columns["return_pct"][i] = last.return_pct
-            columns["price"][i] = last.price
-            columns["avg_cost"][i] = last.avg_cost_asset
+            j, row = last
+            columns["value"][i] = row.value
+            columns["invested"][i] = row.invested
+            columns["return_pct"][i] = row.return_pct
+            columns["price"][i] = row.price
+            columns["avg_cost"][i] = row.avg_cost_asset
+            columns["drawdown"][i] = drawdowns[j]
         full[symbol] = ChartSeries(**columns)
         must |= {position[result.summary.best.date], position[result.summary.worst.date]}
+        deepest = _max_drawdown(result.daily, drawdowns)
+        if deepest is not None:
+            must.add(position[deepest.date])
 
     keep = _pick_indices(len(all_dates), max_points, must)
     return Chart(
@@ -440,6 +472,7 @@ def build_chart(results: Mapping[str, SimResult], max_points: int = 1000) -> Cha
                 return_pct=[s.return_pct[i] for i in keep],
                 price=[s.price[i] for i in keep],
                 avg_cost=[s.avg_cost[i] for i in keep],
+                drawdown=[s.drawdown[i] for i in keep],
             )
             for symbol, s in full.items()
         },
@@ -535,7 +568,7 @@ def _months(asset: Series, fx: Series | None, first_buy: date, end: date) -> lis
     month_end: dict[tuple[int, int], float] = {}
     for day, close in zip(asset.dates, asset.close, strict=True):
         if from_day <= day <= end and (fx is None or _asof_index(fx.dates, day) >= 0):
-            month_end[(day.year, day.month)] = close * _rate_on(fx, day)
+            month_end[(day.year, day.month)] = close * rate_on(fx, day)
     # 말일 ≤ 끝날짜 그리고 말일 ≤ 데이터 마지막 날  ⇔  말일 ≤ cutoff.
     # cutoff가 말일이 아니면 그 달은 진행 중이다
     cutoff = min(end, asset.dates[-1])
@@ -581,12 +614,7 @@ def analyze(
         raise ValueError(f"tax_fx는 0보다 큰 유한한 값이어야 합니다: {tax_fx}")
     rows, s = result.daily, result.summary
     # 9-1 흔들림
-    peak, drawdown = 0.0, None
-    for row in rows:
-        peak = max(peak, row.value)
-        change = (row.value / peak - 1) * 100 if peak > 0 else 0.0
-        if change < 0 and (drawdown is None or change < drawdown.value):
-            drawdown = Extreme(row.date, change)
+    drawdown = _max_drawdown(rows, _drawdown_pct(rows))
     flags = [_is_underwater(row) for row in rows]
     under = [row.date for row, flag in zip(rows, flags, strict=True) if flag]
     # 9-4 수익 분해. 달러 원가 = 넣은 돈을 매수일 환율로 바꾼 종목 통화 금액의 합 (결정 d26).
@@ -694,7 +722,7 @@ def simulate_rule(
     daily: list[DailyRow] = []
     for i in range(_asof_index(asset.dates, picked[0]), _asof_index(asset.dates, p.end) + 1):
         day, price = asset.dates[i], asset.close[i]
-        fx_rate = _rate_on(fx, day)
+        fx_rate = rate_on(fx, day)
         if day in buy_set:
             if rule == "lump_sum":
                 put = p.amount * len(picked) if day == picked[0] else 0.0
@@ -737,7 +765,7 @@ def simulate_rule(
             )
         )
     eval_price = asset.close[_asof_index(asset.dates, p.end)]
-    eval_fx = _rate_on(fx, p.end)
+    eval_fx = rate_on(fx, p.end)
     value = (shares * eval_price + cash) * eval_fx
     total = p.amount * len(picked)
     flows.append((p.end, value))
@@ -819,6 +847,7 @@ def anchor_sweep(asset: Series, fx: Series | None, p: Params) -> dict[int, float
     """매월 기준일을 1~28일과 말일(31)로 바꿨을 때의 평단가(종목 통화). 9-7절.
 
     주기와 상관없이 매월로 계산한다. 그 기준일로는 기간 안에 매수일이 없으면 None이다.
+    정수 주만 살 때 한 주도 사지 못하면 보유 수량이 0이라 평단가가 없어 None이다 (결정 d35).
     """
     out: dict[int, float | None] = {}
     for anchor in [*range(1, 29), 31]:
