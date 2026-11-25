@@ -1,11 +1,15 @@
 // 조건(종목·기간·주기·금액)을 다루는 순수 함수. DOM을 쓰지 않아 node --test로 시험한다.
 // cond 모양: { codes, start, end, freq, monthDay, weekDay, amount, currency, fractional, fee }
+// 주소에는 보고 있는 결과 탭(tab)도 같이 담는다 (F-11). 조건이 아니라 계산에는 쓰지 않는다.
 
 export const MAX_SYMBOLS = 8;
 export const ALL_START = "1970-01-02"; // "전체": 상장 이후 전부
 export const SYMBOL_PATTERN = /^[A-Za-z0-9.\-=^]{1,20}$/;
 export const FREQS = ["daily", "weekly", "monthly"];
 export const CURRENCIES = ["KRW", "USD"];
+/** 결과 탭 (F-11): 요약, 분석, 전략 비교, 매수 내역. 화면의 탭 순서와 같다. */
+export const RESULT_TABS = ["summary", "analysis", "strategy", "buys"];
+export const DEFAULT_TAB = "summary";
 const DAY_MS = 86_400_000;
 
 /** 한국 시각 기준 오늘 (YYYY-MM-DD). 서버의 "오늘"과 같은 기준이다. */
@@ -37,7 +41,8 @@ export function anchorOf(cond) {
   return null;
 }
 
-/** 조건을 주소 쿼리로 (F-09). 기본값인 항목(정수 주가 아님, 수수료 0)은 뺀다.
+/** 조건을 주소 쿼리로 (F-09). 기본값인 항목(정수 주가 아님, 수수료 0, 요약 탭)은 뺀다.
+ * cond.tab이 있으면 맨 뒤에 붙인다 (F-11). 모르는 탭 값은 넣지 않는다.
  * 종목 사이 쉼표는 읽기 쉽게 그대로 둔다 (s=QQQ,QLD). 쿼리 키는 상세 설계 5절 표. */
 export function toQuery(cond) {
   const params = new URLSearchParams();
@@ -50,10 +55,11 @@ export function toQuery(cond) {
   params.set("cur", cond.currency);
   if (!cond.fractional) params.set("frac", "0");
   if (cond.fee) params.set("fee", String(cond.fee));
+  if (RESULT_TABS.includes(cond.tab) && cond.tab !== DEFAULT_TAB) params.set("tab", cond.tab);
   return params.toString().replaceAll("%2C", ",");
 }
 
-/** 주소 쿼리에서 조건을 읽는다. 잘못된 값은 버리고 읽은 항목만 돌려준다. */
+/** 주소 쿼리에서 조건과 탭을 읽는다. 잘못된 값은 버리고 읽은 항목만 돌려준다. */
 export function readQuery(search) {
   const params = new URLSearchParams(search);
   const codes = (params.get("s") ?? "")
@@ -78,6 +84,7 @@ export function readQuery(search) {
   const feeText = params.get("fee");
   const fee = Number(feeText);
   if (feeText !== null && feeText !== "" && fee >= 0 && fee <= 10) found.fee = fee;
+  if (RESULT_TABS.includes(params.get("tab"))) found.tab = params.get("tab");
   return found;
 }
 
