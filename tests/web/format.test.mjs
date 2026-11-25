@@ -4,6 +4,7 @@ import { test } from "node:test";
 
 import {
   MINUS,
+  advancedText,
   condLine,
   freqText,
   fx,
@@ -69,6 +70,30 @@ test("condLine: 전체 기간은 상장일부터", () => {
   assert.equal(
     condLine({ ...PARAMS, start: "1970-01-02" }),
     "상장일 ~ 2026-11-24 · 매월 1일 · 종목마다 200만원 · 원화",
+  );
+});
+
+test("condLine: 양도세 어림(F-20)은 켰을 때만 붙인다", () => {
+  assert.equal(condLine({ ...PARAMS, tax: true }), `${LINE} · 양도세 반영`);
+  assert.equal(condLine({ ...PARAMS, tax: false }), LINE);
+  assert.equal(
+    condLine({ ...PARAMS, fee_pct: 0.1, tax: true }),
+    `${LINE} · 수수료 0.1% · 양도세 반영`,
+  );
+});
+
+test("advancedText: 접힌 고급 설정 제목 옆 지금 값 (F-05, 시안 v2)", () => {
+  assert.equal(advancedText({ fractional: true, fee: 0, tax: false }), "· 소수점 · 수수료 0%");
+  assert.equal(
+    advancedText({ fractional: false, fee: 0.25, tax: true }),
+    "· 정수 주 · 수수료 0.25% · 양도세",
+  );
+});
+
+test("advancedText: 수수료가 숫자가 아니면 확인 필요", () => {
+  assert.equal(
+    advancedText({ fractional: true, fee: Number.NaN, tax: false }),
+    "· 소수점 · 수수료 확인 필요",
   );
 });
 

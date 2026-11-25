@@ -1,4 +1,4 @@
-// 그래프 데이터, 매수 내역 미리보기, CSV를 만드는 순수 함수 (F-07, F-08, F-13). DOM 없음.
+// 그래프 데이터, 매수 내역 미리보기, CSV를 만드는 순수 함수 (F-07, F-08, F-12, F-13). DOM 없음.
 
 import { money } from "./format.js";
 
@@ -147,7 +147,12 @@ export function rangeFrom(dates, years) {
 /** 보는 기간의 첫 위치: rangeFrom 이후 첫 날짜. 전체이거나 날짜축이 years년보다 짧으면 0. */
 export function rangeStart(dates, years) {
   const from = rangeFrom(dates, years);
-  return from === null ? 0 : Math.max(dates.findIndex((d) => d >= from), 0);
+  return from === null
+    ? 0
+    : Math.max(
+        dates.findIndex((d) => d >= from),
+        0,
+      );
 }
 
 /** 가장 큰 최고 평가금이 가장 작은 것의 이 배수를 넘으면 로그 축으로 먼저 연다. */
@@ -197,4 +202,38 @@ export function splitMarks(notes, dates, from = dates[0]) {
     const index = dates.findIndex((d) => d >= split.date);
     return [{ index, ...split, label: `${split.ratio} 분할` }];
   });
+}
+
+// ---------- 카드의 작은 수익률 그래프 (F-12) ----------
+
+/** 좌표를 소수 1자리로 줄인다 (path 글자 수를 줄인다). −0은 0으로. */
+function coord(value) {
+  return Math.round(value * 10) / 10 || 0;
+}
+
+/**
+ * 카드의 작은 수익률 그래프: values(chart.series[종목].return_pct)를 width×height 상자의 SVG path로.
+ * Chart.js 없이 SVG로 그려서 카드가 많아도 그래프 인스턴스가 늘지 않는다.
+ * - x는 날짜축 위치로 고르게 나눈다 (카드끼리 같은 날짜축). 날짜가 하나면 가운데.
+ * - y는 값이 클수록 위이고, 범위에 0을 넣어 0% 선(zeroY)이 늘 상자 안에 있다. 위아래 pad만큼 띄운다.
+ * - null은 건너뛰고, 빈 자리 뒤 첫 점에서 선을 새로 시작한다 (첫 매수 전 날짜는 null이다).
+ * 돌려주는 값: { path, zeroY, last(마지막 null 아닌 값), min, max }. 그릴 값이 없으면 null.
+ */
+export function sparkline(values, { width = 300, height = 48, pad = 2 } = {}) {
+  const points = (values ?? []).flatMap((v, i) => (v === null || v === undefined ? [] : [i]));
+  if (!points.length) return null;
+  const present = points.map((i) => values[i]);
+  const min = Math.min(0, ...present);
+  const max = Math.max(0, ...present);
+  const n = values.length;
+  const xOf = (i) => (n === 1 ? width / 2 : (i / (n - 1)) * width);
+  const yOf = (v) =>
+    max === min ? height / 2 : pad + ((max - v) / (max - min)) * (height - 2 * pad);
+  let path = "";
+  let previous = -2;
+  for (const i of points) {
+    path += `${i === previous + 1 ? "L" : "M"}${coord(xOf(i))} ${coord(yOf(values[i]))}`;
+    previous = i;
+  }
+  return { path, zeroY: coord(yOf(0)), last: lastValue(values), min, max };
 }

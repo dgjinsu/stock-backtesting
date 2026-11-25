@@ -1,5 +1,5 @@
 // 적립식 백테스트 화면: 조건 패널, 검색, 입력 검사, 주소 공유, 결과(카드·비교 표·알림·안내),
-// 결과 탭과 조건 패널 접기(F-11).
+// 결과 탭과 조건 패널 접기(F-11), 양도세 어림 스위치(F-20).
 // 계산은 서버(/api/backtest)가 하고 여기서는 입력을 받고 결과를 그린다 (아키텍처 1절).
 
 import {
@@ -19,9 +19,11 @@ import {
   todayKst,
   validate as validateCond,
 } from "./conditions.js";
+import { sparkline } from "./chartdata.js";
 import { buysSection, chartSection, clearCharts, csvButton } from "./charts.js";
-import { h, icon, swatch } from "./dom.js";
+import { h, icon, keepFocus, svgEl, swatch } from "./dom.js";
 import {
+  advancedText,
   condLine,
   freqText,
   fx,
@@ -34,6 +36,17 @@ import {
   signedMoney,
 } from "./format.js";
 import { highlights, summaryParts } from "./insights.js";
+import {
+  SORT_HINT,
+  afterTax,
+  bestIndexes,
+  compareColumns,
+  costNotice,
+  fxNote,
+  nextSort,
+  sortRows,
+  underwaterText,
+} from "./results.js";
 
 const DEFAULT_SYMBOLS = ["QQQ", "QLD"];
 
@@ -50,6 +63,7 @@ const state = {
   currency: "KRW",
   fractional: true,
   fee: 0,
+  tax: false, // 해외주식 양도세 어림 (F-20)
   loading: false,
   serverErrors: {},
   badSymbols: new Map(), // code → 이유
@@ -216,15 +230,14 @@ function renderForm() {
   if (document.activeElement !== $("fee") && Number.isFinite(state.fee)) {
     $("fee").value = String(state.fee);
   }
+  $("tax").setAttribute("aria-checked", String(state.tax));
   renderAdvancedSummary();
   renderSymbols();
   renderPreview();
 }
 
 function renderAdvancedSummary() {
-  const fee = Number.isFinite(state.fee) ? `${state.fee}%` : "확인 필요";
-  $("advanced-summary").textContent =
-    `· ${state.fractional ? "소수점" : "정수 주"} · 수수료 ${fee}`;
+  $("advanced-summary").textContent = advancedText(state);
 }
 
 function changed() {
@@ -464,6 +477,7 @@ async function run() {
       currency: sent.currency,
       fractional: sent.fractional,
       fee_pct: sent.fee,
+      tax: sent.tax,
     });
   } catch {
     setLoading(false);
@@ -687,9 +701,53 @@ function infoButton(text) {
   );
 }
 
-function card(result, invest) {
+/**
+ * 카드의 작은 수익률 그래프 (F-12, 시안 v2): chart.series[종목].return_pct 선과 0% 점선.
+ * 카드가 여러 개라 Chart.js 인스턴스를 늘리지 않게 SVG로 그린다 (Chart.js를 못 불러와도 보인다).
+ * 좌표는 chartdata.js의 sparkline이 만들고, aria-label에 그래프의 마지막 수익률을 적는다.
+ */
+function sparkBox(result, chart) {
+  const line = sparkline(chart.series[result.symbol]?.return_pct);
+  if (!line) return null;
+  const s = result.summary;
+  const graph = svgEl("svg", {
+    class: "spark-svg",
+    viewBox: "0 0 300 48",
+    preserveAspectRatio: "none",
+    role: "img",
+    "aria-label": `${result.symbol} 수익률 추이 그래프. 마지막 수익률 ${pct(line.last)}`,
+  });
+  const zero = svgEl("line", {
+    class: "spark-zero",
+    x1: 0,
+    x2: 300,
+    y1: line.zeroY,
+    y2: line.zeroY,
+    "vector-effect": "non-scaling-stroke",
+  });
+  const path = svgEl("path", {
+    class: "spark-line",
+    d: line.path,
+    "vector-effect": "non-scaling-stroke",
+  });
+  path.style.stroke = `var(--c${slotOf(result.symbol) + 1})`;
+  graph.append(zero, path);
+  return h(
+    "div",
+    { class: "spark" },
+    graph,
+    h("span", { class: "spark-title", "aria-hidden": "true", text: "수익률 추이" }),
+    h("span", {
+      class: "spark-range",
+      text: `최고 ${pct(s.best.return_pct, 1)} · 최저 ${pct(s.worst.return_pct, 1)}`,
+    }),
+  );
+}
+
+function card(result, invest, chart) {
   const s = result.summary;
   const cur = result.currency;
+  const taxCell = afterTax(result, invest); // 양도세 어림(F-20)을 켰을 때만
   const foreign = cur !== invest;
   const notes = result.notes.join(" · ");
   const avgSub = foreign
@@ -740,9 +798,10 @@ function card(result, invest) {
         h("div", { class: "sub", text: "돈 넣은 시점을 반영" }),
       ),
     ),
+    sparkBox(result, chart),
     h(
       "div",
-      { class: "strip" },
+      { class: taxCell ? "strip four" : "strip" },
       h(
         "div",
         {},
@@ -761,6 +820,15 @@ function card(result, invest) {
         h("div", { class: "lbl", text: "손익" }),
         h("div", { class: `v ${signClass(s.profit)}`, text: signedMoney(s.profit, invest) }),
       ),
+      taxCell
+        ? h(
+            "div",
+            {},
+            h("div", { class: "lbl", text: taxCell.label }),
+            h("div", { class: `v ${taxCell.tone}`, text: taxCell.text }),
+            h("div", { class: "sub", text: taxCell.note }),
+          )
+        : null,
     ),
     h(
       "dl",
@@ -805,70 +873,114 @@ function card(result, invest) {
           text: `최고 ${money(s.peak_value.value, invest)}, ${s.peak_value.date}`,
         }),
       ),
+      h("dt", { text: "원금 아래" }),
+      h(
+        "dd",
+        { title: "평가금이 그날까지 넣은 돈보다 적었던 거래일 (전체 거래일 중 비율)" },
+        underwaterText(s),
+      ),
     ),
   );
 }
 
+/** 비교 표 정렬 상태 { key, dir } (F-12). 다시 계산하면(새 결과) 풀린다. */
+let tableSort = null;
+
+const ARIA_SORT = { asc: "ascending", desc: "descending" };
+
+/**
+ * 비교 표 (F-06, F-12). 열 제목 안의 버튼을 누르면 정렬하고(처음은 좋은 값이 위, 다시 누르면 반대,
+ * 값이 없는 종목은 맨 아래) 제목 칸의 aria-sort로 알린다. 열마다 가장 좋은 값은 굵게 하고
+ * 읽어 주는 글을 붙인다. 열·정렬·가장 좋은 값 규칙은 results.js.
+ */
 function compareTable(data) {
+  tableSort = null;
   const invest = data.params.currency;
-  const head = [
-    "평단가",
-    `${investLabel(invest)} 평단가`,
-    "보유 수량",
-    "평가금",
-    "손익",
-    "수익률",
-    "XIRR",
-    "최저 수익률",
-    "고점 대비",
-  ];
+  const columns = compareColumns(invest, { tax: data.params.tax === true });
+  // 가장 좋은 값은 정렬과 상관없이 결과 순서로 한 번 고른다 (열 key → 굵게 할 종목)
+  const best = new Map(
+    columns.map((c) => {
+      const found = bestIndexes(data.results.map(c.value), c.better, c.digits);
+      return [c.key, new Set([...found].map((i) => data.results[i].symbol))];
+    }),
+  );
+  const table = h("table", { class: "tbl cmp", "aria-labelledby": "cmp-h" });
+  const sortBy = (column) => {
+    tableSort = nextSort(tableSort, column);
+    keepFocus(table, render);
+  };
+  const headCell = (column) => {
+    const dir = tableSort?.key === column.key ? tableSort.dir : null;
+    return h(
+      "th",
+      { scope: "col", "aria-sort": dir ? ARIA_SORT[dir] : null },
+      h(
+        "button",
+        {
+          type: "button",
+          class: "sort-btn",
+          "data-focus": `sort:${column.key}`,
+          onclick: () => sortBy(column),
+        },
+        column.title,
+        dir
+          ? h("span", {
+              class: "sort-mark",
+              "aria-hidden": "true",
+              text: dir === "asc" ? "▲" : "▼",
+            })
+          : null,
+      ),
+    );
+  };
+  const row = (r) =>
+    h(
+      "tr",
+      {},
+      h(
+        "th",
+        { scope: "row", class: "sym-cell" },
+        h("span", {}, swatch(slotOf(r.symbol), 18), r.symbol),
+      ),
+      ...columns.map((c) => {
+        const top = best.get(c.key).has(r.symbol);
+        const tone = c.tone ? signClass(c.value(r)) : "";
+        return h(
+          "td",
+          { class: [tone, top ? "best" : ""].filter(Boolean).join(" ") || null },
+          c.text(r),
+          top ? h("span", { class: "sr", text: " (가장 좋은 값)" }) : null,
+        );
+      }),
+    );
+  const render = () => {
+    const column = tableSort && columns.find((c) => c.key === tableSort.key);
+    const rows = column ? sortRows(data.results, column.value, tableSort.dir) : data.results;
+    table.replaceChildren(
+      h(
+        "thead",
+        {},
+        h(
+          "tr",
+          {},
+          h("th", { scope: "col", class: "left", text: "종목" }),
+          ...columns.map(headCell),
+        ),
+      ),
+      h("tbody", {}, ...rows.map(row)),
+    );
+  };
+  render();
   return h(
     "section",
     { class: "box", "aria-labelledby": "cmp-h" },
-    h("h3", { id: "cmp-h", text: "비교 표" }),
     h(
       "div",
-      { class: "scroll" },
-      h(
-        "table",
-        { class: "tbl", "aria-labelledby": "cmp-h" },
-        h(
-          "thead",
-          {},
-          h(
-            "tr",
-            {},
-            h("th", { scope: "col", class: "left", text: "종목" }),
-            ...head.map((t) => h("th", { scope: "col", text: t })),
-          ),
-        ),
-        h(
-          "tbody",
-          {},
-          ...data.results.map((r) => {
-            const s = r.summary;
-            return h(
-              "tr",
-              {},
-              h(
-                "th",
-                { scope: "row", class: "sym-cell" },
-                h("span", {}, swatch(slotOf(r.symbol), 18), r.symbol),
-              ),
-              h("td", { text: price(s.avg_cost_asset, r.currency) }),
-              h("td", { text: money(s.avg_cost_invest, invest, { short: false }) }),
-              h("td", { text: qty(s.shares) }),
-              h("td", { text: money(s.value, invest) }),
-              h("td", { class: signClass(s.profit), text: signedMoney(s.profit, invest) }),
-              h("td", { class: signClass(s.return_pct), text: pct(s.return_pct) }),
-              h("td", { text: pct(s.xirr_pct) }),
-              h("td", { class: signClass(s.worst.return_pct), text: pct(s.worst.return_pct, 1) }),
-              h("td", { class: signClass(s.from_peak_pct), text: pct(s.from_peak_pct, 1) }),
-            );
-          }),
-        ),
-      ),
+      { class: "box-head" },
+      h("h3", { id: "cmp-h", text: "비교 표" }),
+      h("span", { class: "hint", text: SORT_HINT }),
     ),
+    h("div", { class: "scroll" }, table),
   );
 }
 
@@ -877,14 +989,8 @@ function notice(data) {
     .map((r) => r.data_through)
     .sort()
     .at(-1);
-  const pairs = [
-    ...new Set(
-      data.results
-        .filter((r) => r.currency !== data.params.currency)
-        .map((r) => `${r.currency}${data.params.currency}=X`),
-    ),
-  ];
-  const fxPairs = pairs.length ? ` 환율은 ${pairs.join(", ")}.` : "";
+  // 종목 통화가 다른 쌍과, 양도세를 켠 달러 투자면 양도세용 USDKRW=X (#39)
+  const fxText = fxNote(data.results, data.params);
   const splits = data.results.flatMap((r) =>
     r.notes.length
       ? [`${r.symbol} ${r.notes.map((n) => n.replace(" 분할 반영", "")).join("·")}`]
@@ -897,14 +1003,12 @@ function notice(data) {
       "ul",
       {},
       h("li", {
-        text: `데이터: Yahoo Finance 일별 종가(비공식), ${latest} 종가 기준.${fxPairs}`,
+        text: `데이터: Yahoo Finance 일별 종가(비공식), ${latest} 종가 기준.${fxText ? ` ${fxText}` : ""}`,
       }),
       h("li", {
         text: `${splits.length ? `주식 분할은 반영했습니다 (${splits.join(", ")}). ` : ""}배당은 반영하지 않았습니다.`,
       }),
-      h("li", {
-        text: "세금과 환전 비용은 반영하지 않았습니다. 환전 비용은 고급 설정의 수수료에 합쳐 넣으세요.",
-      }),
+      h("li", { text: costNotice(data.params.tax === true) }),
       h("li", { text: "과거 데이터로 계산한 결과이며 투자 권유가 아닙니다." }),
     ),
   );
@@ -936,7 +1040,11 @@ function renderResult(data) {
     tabPanel(
       "summary",
       insightsSection(data),
-      h("div", { class: "cards" }, ...data.results.map((r) => card(r, data.params.currency))),
+      h(
+        "div",
+        { class: "cards" },
+        ...data.results.map((r) => card(r, data.params.currency, data.chart)),
+      ),
       compareTable(data),
       chartSection(data, slotOf),
     ),
@@ -1174,6 +1282,10 @@ function wireForm() {
     showErrors(validate());
   });
   $("fee").addEventListener("blur", changed);
+  $("tax").addEventListener("click", () => {
+    state.tax = !state.tax;
+    changed();
+  });
 }
 
 function wireCondBar() {
@@ -1210,7 +1322,8 @@ function init() {
   const fromUrl = readQuery(location.search);
   state.end = fromUrl.end ?? todayKst();
   state.start = fromUrl.start ?? shiftYears(state.end, 5);
-  for (const key of ["freq", "monthDay", "weekDay", "amount", "currency", "fractional", "fee"]) {
+  const keys = ["freq", "monthDay", "weekDay", "amount", "currency", "fractional", "fee", "tax"];
+  for (const key of keys) {
     if (key in fromUrl) state[key] = fromUrl[key];
   }
   const codes = fromUrl.codes.length ? fromUrl.codes : DEFAULT_SYMBOLS;

@@ -239,6 +239,29 @@
                 </div>
               </div>
               <p class="field-error" id="fee-error" hidden></p>
+              <!-- 해외주식 양도세 어림 (F-20). 켜면 요청에 tax: true, 주소에 tax=1 -->
+              <div class="stack-gap">
+                <button
+                  type="button"
+                  class="sw"
+                  id="tax"
+                  role="switch"
+                  aria-checked="false"
+                  aria-labelledby="tax-label"
+                  aria-describedby="tax-rule tax-hint"
+                >
+                  <span class="sw-track" aria-hidden="true"><span class="sw-knob"></span></span
+                  ><span class="sw-text"
+                    ><span id="tax-label">해외주식 양도세 반영</span
+                    ><span class="hint block" id="tax-rule"
+                      >끝날짜에 모두 판다고 보고 250만원 공제 후 22%</span
+                    ></span
+                  >
+                </button>
+                <p class="hint" id="tax-hint">
+                  해마다 나눠 판 경우나 다른 종목 손실과 합치는 경우는 다루지 않는 어림값입니다.
+                </p>
+              </div>
             </div>
           </details>
 

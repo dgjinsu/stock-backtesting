@@ -121,8 +121,7 @@ test("readQuery: 잘못된 값은 버린다", () => {
 
 // ---------- 결과 탭 (F-11) ----------
 
-const V1_QUERY =
-  "s=QQQ,QLD&from=2021-11-25&to=2026-11-24&freq=monthly&day=1&amt=2000000&cur=KRW";
+const V1_QUERY = "s=QQQ,QLD&from=2021-11-25&to=2026-11-24&freq=monthly&day=1&amt=2000000&cur=KRW";
 
 test("RESULT_TABS: 요약·분석·전략 비교·매수 내역 순서이고 요약이 기본", () => {
   assert.deepEqual(RESULT_TABS, ["summary", "analysis", "strategy", "buys"]);
@@ -177,6 +176,41 @@ test("readQuery: 탭이 있어도 나머지 조건은 v1과 같게 읽는다", (
   const { tab, ...rest } = readQuery(`?${V1_QUERY}&tab=buys`);
   assert.equal(tab, "buys");
   assert.deepEqual(rest, readQuery(`?${V1_QUERY}`));
+});
+
+// ---------- 양도세 어림 (F-20) ----------
+
+test("toQuery: 양도세를 켜면 tax=1, 끄면(기본) 뺀다", () => {
+  assert.equal(toQuery({ ...BASE, tax: true }), `${V1_QUERY}&tax=1`);
+  assert.equal(toQuery({ ...BASE, tax: false }), V1_QUERY);
+  assert.equal(toQuery(BASE), V1_QUERY);
+});
+
+test("toQuery: tax는 조건이라 탭보다 앞에 둔다", () => {
+  assert.equal(toQuery({ ...BASE, tax: true, tab: "buys" }), `${V1_QUERY}&tax=1&tab=buys`);
+});
+
+test("toQuery·readQuery: tax=1은 주소로 왕복한다", () => {
+  const cond = { ...BASE, currency: "USD", amount: 1500, tax: true, tab: "analysis" };
+  assert.deepEqual(readQuery(`?${toQuery(cond)}`), {
+    codes: ["QQQ", "QLD"],
+    start: "2021-11-25",
+    end: "2026-11-24",
+    freq: "monthly",
+    monthDay: 1,
+    amount: 1500,
+    currency: "USD",
+    tax: true,
+    tab: "analysis",
+  });
+});
+
+test("readQuery: tax가 1이 아니면 버린다 (꺼짐이 기본)", () => {
+  for (const bad of ["0", "", "true", "2", "yes", " 1"]) {
+    const found = readQuery(`?s=QQQ&tax=${encodeURIComponent(bad)}`);
+    assert.equal("tax" in found, false, JSON.stringify(bad));
+  }
+  assert.equal("tax" in readQuery(`?${V1_QUERY}`), false);
 });
 
 test("nextTab: →는 다음 탭, 마지막에서는 처음으로", () => {

@@ -127,7 +127,7 @@ export function investLabel(currency) {
 /**
  * 접힌 조건 줄의 글 (F-11, 시안 v2): "기간 · 주기 · 종목마다 금액 · 통화".
  * params는 API 응답의 params(요청 그대로)다. "전체"는 상장일부터이고,
- * 정수 주와 수수료는 기본값이 아닐 때만 붙인다.
+ * 정수 주, 수수료, 양도세 어림(F-20)은 기본값이 아닐 때만 붙인다.
  */
 export function condLine(params) {
   const from = params.start <= ALL_START ? "상장일" : params.start;
@@ -138,7 +138,17 @@ export function condLine(params) {
     investLabel(params.currency),
     params.fractional === false ? "정수 주만" : null,
     params.fee_pct > 0 ? `수수료 ${params.fee_pct}%` : null,
+    params.tax ? "양도세 반영" : null,
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+/**
+ * 접힌 고급 설정 제목 옆에 쓰는 지금 값 (F-05, 시안 v2): "· 소수점 · 수수료 0% · 양도세".
+ * cond는 conditions.js의 조건 모양이다. 양도세 어림(F-20)은 켰을 때만 붙인다.
+ */
+export function advancedText({ fractional, fee, tax }) {
+  const feeText = Number.isFinite(fee) ? `${fee}%` : "확인 필요";
+  return `· ${fractional ? "소수점" : "정수 주"} · 수수료 ${feeText}${tax ? " · 양도세" : ""}`;
 }
