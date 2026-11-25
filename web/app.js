@@ -112,13 +112,22 @@ function showErrors(clientErrors) {
   const others = Object.entries(errors).filter(([field]) => !BOXED_FIELDS.has(field));
   const status = $("status");
   if (others.length) {
-    status.textContent = others.map(([, m]) => m).join(" · ");
+    setStatus(others.map(([, m]) => m).join(" · "));
     status.dataset.kind = "errors";
   } else if (status.dataset.kind === "errors") {
-    status.textContent = "";
+    setStatus("");
     delete status.dataset.kind;
   }
   $("run").disabled = state.loading || Object.keys(clientErrors).length > 0;
+}
+
+/**
+ * 계산하기 아래 상태 줄. 보이는 글은 패널 안 #status에, 읽어 주는 글은 패널 밖
+ * #status-live(role=status)에 같이 쓴다. 요약이 아닌 탭에서 패널을 접은 뒤 써도 읽힌다.
+ */
+function setStatus(text) {
+  $("status").textContent = text;
+  $("status-live").textContent = text;
 }
 
 // ---------- 조건 패널 그리기 ----------
@@ -397,9 +406,7 @@ function setLoading(on) {
   $("run").disabled = on || Object.keys(validate()).length > 0;
   $("run").querySelector(".spinner").hidden = !on;
   $("run-label").textContent = on ? "계산 중…" : "계산하기";
-  $("status").textContent = on
-    ? `${state.symbols.length}개 종목 주가를 받고 계산하는 중입니다`
-    : "";
+  setStatus(on ? `${state.symbols.length}개 종목 주가를 받고 계산하는 중입니다` : "");
   $("output").classList.toggle("dim", on);
   if ($("output").hidden) {
     const busy = [
@@ -455,7 +462,7 @@ async function run() {
     state.serverErrors = Object.fromEntries((json?.detail ?? []).map((d) => [d.field, d.message]));
     showErrors(validate());
     if (!$("status").textContent) {
-      $("status").textContent = "입력을 확인해 주세요";
+      setStatus("입력을 확인해 주세요");
       $("status").dataset.kind = "errors";
     }
     return;
@@ -494,9 +501,11 @@ async function run() {
     return;
   }
   const failed = json.errors.length ? `, ${json.errors.length}개 실패` : "";
-  $("status").textContent = json.results.length
-    ? `계산했습니다: ${json.results.length}개 종목${failed}`
-    : `계산하지 못했습니다: ${json.errors.length}개 종목 모두 실패`;
+  setStatus(
+    json.results.length
+      ? `계산했습니다: ${json.results.length}개 종목${failed}`
+      : `계산하지 못했습니다: ${json.errors.length}개 종목 모두 실패`,
+  );
 }
 
 // ---------- 결과 (F-06, F-10) ----------
