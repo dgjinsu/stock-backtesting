@@ -22,6 +22,18 @@ export function pct(value, digits = 2) {
   return withSign(Number(value.toFixed(digits)), text);
 }
 
+/** +는 붙이지 않고 빼기만 붙이는 비율: 28.19 → "28.19%", -1.5 → "−1.50%" (한눈에 요약의 연환산). */
+export function rate(value, digits = 2) {
+  const text = pct(value, digits);
+  return text.startsWith("+") ? text.slice(1) : text;
+}
+
+/** 몇 배인지: 2.0065 → "2.01배". */
+export function times(value) {
+  if (value === null || value === undefined) return "—";
+  return `${two.format(value)}배`;
+}
+
 /** 원을 만 단위로 줄인다. 225824590 → "2억 2,582만원", 123000 → "12만원", 9999 → "9,999원". */
 export function krwShort(value) {
   const n = Math.round(Math.abs(value));
