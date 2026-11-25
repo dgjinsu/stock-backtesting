@@ -1,19 +1,25 @@
-// web/chartdata.js 그래프 데이터·매수 내역·CSV (F-07, F-08). node --test로 돈다.
+// web/chartdata.js 그래프 데이터·매수 내역·CSV (F-07, F-08, F-13). node --test로 돈다.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
   BUY_COLUMNS,
   DASHES,
+  RANGES,
   buysCsv,
   csvFileName,
   dashOf,
   dateTick,
   investedLines,
   lastValue,
+  logFirst,
+  logFirstNote,
   logSafe,
   previewRows,
+  rangeStart,
   sampledNote,
+  splitMarks,
+  splitsOf,
 } from "../../web/chartdata.js";
 
 function buy(n, extra = {}) {
@@ -154,4 +160,129 @@ test("sampledNote: 줄였으면 안내 문장, 아니면 null", () => {
     "기간이 길어 그래프는 2,512일 중 1,000점만 골라 그렸습니다. 첫날·마지막 날·최고·최저 수익률 날은 빠지지 않았고, 계산은 모든 날로 했습니다.",
   );
   assert.equal(sampledNote({ dates: new Array(10), total_days: 10 }), null);
+});
+
+// ---------- 그래프 더하기 (F-13) ----------
+
+test("RANGES: 최근 1년, 3년, 전체 순서이고 전체는 years가 null", () => {
+  assert.deepEqual(
+    RANGES.map((r) => [r.label, r.years]),
+    [
+      ["최근 1년", 1],
+      ["3년", 3],
+      ["전체", null],
+    ],
+  );
+});
+
+const LONG = [
+  "2021-12-01",
+  "2023-11-22",
+  "2023-11-23",
+  "2023-11-24",
+  "2025-11-21",
+  "2025-11-24",
+  "2026-06-22",
+  "2026-11-23",
+];
+
+test("rangeStart: 마지막 날짜의 1년 전 날 이후 첫 위치", () => {
+  // 2026-11-23의 1년 전은 2025-11-23(일), 그 뒤 첫 날짜는 2025-11-24
+  assert.equal(rangeStart(LONG, 1), 5);
+});
+
+test("rangeStart: 3년 전 날 그날이 날짜축에 있으면 그날부터", () => {
+  assert.equal(rangeStart(LONG, 3), 2);
+});
+
+test("rangeStart: 전체(null)이거나 기간이 N년보다 짧으면 0", () => {
+  assert.equal(rangeStart(LONG, null), 0);
+  assert.equal(rangeStart(["2026-03-02", "2026-06-01", "2026-11-23"], 1), 0);
+  assert.equal(rangeStart(["2024-01-02", "2026-11-23"], 3), 0);
+  assert.equal(rangeStart([], 1), 0);
+});
+
+test("rangeStart: 2월 29일의 1년 전은 2월 28일로 본다", () => {
+  assert.equal(rangeStart(["2027-02-26", "2027-02-28", "2027-03-01", "2028-02-29"], 1), 1);
+});
+
+test("logFirst: 가장 큰 최고 평가금이 가장 작은 것의 5배를 넘으면 그 종목", () => {
+  const peaks = [
+    { symbol: "QQQ", value: 228_690_000 },
+    { symbol: "QLD", value: 342_707_723 },
+    { symbol: "SOXL", value: 1_577_680_000 },
+  ];
+  assert.deepEqual(logFirst(peaks), { symbol: "SOXL", value: 1_577_680_000 });
+});
+
+test("logFirst: 정확히 5배면 null, 조금이라도 넘으면 종목", () => {
+  const at = (value) => [
+    { symbol: "A", value: 100 },
+    { symbol: "B", value },
+  ];
+  assert.equal(logFirst(at(500)), null);
+  assert.equal(logFirst(at(500.01))?.symbol, "B");
+});
+
+test("logFirst: 종목이 1개면 null", () => {
+  assert.equal(logFirst([{ symbol: "SOXL", value: 1_577_680_000 }]), null);
+  assert.equal(logFirst([]), null);
+});
+
+test("logFirst: 값이 null인 종목은 건너뛴다", () => {
+  const peaks = [
+    { symbol: "X", value: null },
+    { symbol: "QQQ", value: 100 },
+    { symbol: "SOXL", value: 600 },
+  ];
+  assert.equal(logFirst(peaks)?.symbol, "SOXL");
+  assert.equal(logFirst([peaks[0], peaks[2]]), null);
+});
+
+test("logFirstNote: 이유 한 줄에 종목과 최고 평가금을 적는다 (시안 v2)", () => {
+  assert.equal(
+    logFirstNote({ symbol: "SOXL", value: 1_577_680_000 }, "KRW"),
+    "로그 축: 같은 간격이 같은 배수입니다. SOXL 평가금(최고 15억 7,768만원)이 다른 종목보다 훨씬 커서 로그 축으로 먼저 보여 줍니다.",
+  );
+  assert.ok(logFirstNote({ symbol: "SOXL", value: 1_200_000 }, "USD").includes("(최고 $1,200,000)"));
+});
+
+test("splitsOf: notes에서 분할 날짜와 비율을 읽고 다른 글은 건너뛴다", () => {
+  const notes = ["2025-11-20 2:1 분할 반영", "다른 안내", "2022-01-13 1:10 분할 반영"];
+  assert.deepEqual(splitsOf(notes), [
+    { date: "2025-11-20", ratio: "2:1" },
+    { date: "2022-01-13", ratio: "1:10" },
+  ]);
+  assert.deepEqual(splitsOf([]), []);
+  assert.deepEqual(splitsOf(undefined), []);
+});
+
+test("splitMarks: 날짜축에 그날이 있으면 그 위치에 '2:1 분할'", () => {
+  const dates = ["2021-12-01", "2022-01-12", "2022-01-13", "2022-01-14", "2026-11-23"];
+  assert.deepEqual(splitMarks(["2022-01-13 2:1 분할 반영"], dates), [
+    { index: 2, date: "2022-01-13", ratio: "2:1", label: "2:1 분할" },
+  ]);
+});
+
+test("splitMarks: 줄인 날짜축에서 그날이 없으면 그 뒤 첫 날짜에 그린다", () => {
+  const dates = ["2021-12-01", "2025-11-18", "2025-11-24", "2026-11-23"];
+  const marks = splitMarks(["2025-11-20 2:1 분할 반영"], dates);
+  assert.deepEqual(
+    marks.map((m) => [m.date, m.index]),
+    [["2025-11-20", 2]],
+  );
+});
+
+test("splitMarks: 끝날짜 뒤와 보는 기간 앞의 분할은 빠진다", () => {
+  const dates = ["2025-11-24", "2026-06-22", "2026-11-23"];
+  const notes = [
+    "2022-01-13 2:1 분할 반영",
+    "2026-06-22 3:1 분할 반영",
+    "2026-12-01 2:1 분할 반영",
+  ];
+  assert.deepEqual(
+    splitMarks(notes, dates).map((m) => [m.date, m.index]),
+    [["2026-06-22", 1]],
+  );
+  assert.deepEqual(splitMarks(notes, []), []);
 });
