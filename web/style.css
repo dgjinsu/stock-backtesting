@@ -1019,6 +1019,46 @@ a {
 .legend .lg-label {
   color: var(--muted);
 }
+/* 범례 종목 버튼 (F-13). 누르면 숨긴다 */
+.legend .lg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+}
+.legend .lg-btn:hover {
+  background: var(--sunken);
+}
+/* 숨김은 색만으로 알리지 않는다: 줄 긋기와 "숨김" 글자 */
+.legend .off .lg-label,
+.legend .off strong {
+  text-decoration: line-through;
+}
+.legend .off .swatch,
+.legend .off strong {
+  opacity: 0.45;
+}
+.legend .lg-btn[aria-pressed="false"] {
+  border-style: dashed;
+  background: var(--sunken);
+}
+.legend .lg-off {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+}
+.chart-hints {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
 .tbl tr.gap td {
   text-align: center;
   color: var(--muted);
