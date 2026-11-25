@@ -128,6 +128,25 @@ def yahoo_payload(symbol: str) -> dict[str, Any]:
     return raw
 
 
+def payload_from(symbol: str, first_day: date) -> dict[str, Any]:
+    """저장한 응답에서 first_day(1절 날짜 규칙) 이전 행을 뺀 사본. 데이터가 늦게 시작하는 경우를 만든다."""
+    raw = yahoo_payload(symbol)
+    result = raw["chart"]["result"][0]
+    offset = result["meta"].get("gmtoffset", 0)
+    keep = [
+        i
+        for i, ts in enumerate(result["timestamp"])
+        if (datetime.fromtimestamp(ts, UTC) + timedelta(seconds=offset + 3 * 3600)).date()
+        >= first_day
+    ]
+    result["timestamp"] = [result["timestamp"][i] for i in keep]
+    for blocks in result["indicators"].values():
+        for block in blocks:
+            for name, values in block.items():
+                block[name] = [values[i] for i in keep]
+    return raw
+
+
 def inverted_fx_payload(source: str, target: str) -> dict[str, Any]:
     """저장한 환율 응답의 값을 뒤집어 반대 방향 환율 응답을 만든다 (예: USDKRW=X → KRWUSD=X)."""
     raw = yahoo_payload(source)

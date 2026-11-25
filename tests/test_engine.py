@@ -534,9 +534,10 @@ def test_analyze_longest_underwater_tie_keeps_the_first() -> None:
 RULES = ["none", "ma_dip", "ma_hot", "switch", "lump_sum"]
 
 
-def _strategy(rule: str) -> StrategyResult:
+def _strategy(rule: str, **changes: Any) -> StrategyResult:
+    """9-8 조건(QLD, 기준 종목 QQQ, 200일선)의 전략 하나. changes로 Params 항목을 바꾼다."""
     asset, fx, ref = load_series("QLD"), load_series("USDKRW=X"), load_series(V2["switch_ref"])
-    return simulate_rule(asset, fx, ref, _v2_params(), rule, ma_days=V2["ma_days"])
+    return simulate_rule(asset, fx, ref, _v2_params(**changes), rule, ma_days=V2["ma_days"])
 
 
 @pytest.mark.parametrize("rule", RULES)
@@ -656,6 +657,80 @@ def test_anchor_sweep_anchor_without_buy_day_is_none() -> None:
     got = anchor_sweep(asset, fx, _v2_params(start=date(2026, 10, 5), end=date(2026, 10, 20)))
     assert got[10] is not None
     assert got[25] is None
+
+
+# 전략 그래프 (상세 설계 3절, 기능 명세 F-07·F-15)
+
+MAX_CHART_POINTS = 1000  # 기능 명세 F-07: 최대 약 1,000점
+# 7절 매일 사례(10만원)의 주기·금액으로 9-8 기간을 매일 산다: 거래일이 1,000일을 넘는다
+DAILY_CASE = next(c for c in EXPECTED["cases"] if CASE_IDS[c["name"]] == "daily-krw100k")
+DAILY_CHANGES: dict[str, Any] = {
+    "freq": DAILY_CASE["freq"],
+    "anchor": DAILY_CASE["anchor"],
+    "amount": float(DAILY_CASE["amount"]),
+}
+
+
+def _must_keep_dates(results: list[StrategyResult]) -> set[date]:
+    """줄여도 남아야 하는 날: 첫날, 마지막 날, 전략마다 최고·최저 수익률 날 (같은 값이면 앞의 날)."""
+    days = {results[0].daily[0].date, results[0].daily[-1].date}
+    for result in results:
+        returns = [row.return_pct for row in result.daily]
+        days.add(result.daily[returns.index(max(returns))].date)
+        days.add(result.daily[returns.index(min(returns))].date)
+    return days
+
+
+def test_build_strategy_chart_daily_five_years_keeps_first_last_and_rule_extremes() -> None:
+    """F-07·F-15: 5년 매일은 1,000점 이하로 줄이되 꼭 남길 날은 남기고, 남긴 날의 값은 그날 daily 값이다."""
+    results = [_strategy(rule, **DAILY_CHANGES) for rule in RULES]
+    chart = engine.build_strategy_chart(results)
+    assert chart.total_days == len(results[0].daily)
+    assert chart.total_days > MAX_CHART_POINTS
+    assert len(chart.dates) <= MAX_CHART_POINTS
+    assert _must_keep_dates(results) <= set(chart.dates)
+    assert list(chart.series) == RULES
+    for result in results:
+        series = chart.series[result.rule]
+        assert len(series.value) == len(series.invested) == len(chart.dates), result.rule
+        assert len(series.return_pct) == len(chart.dates), result.rule
+        # 같은 float라 정확히 같다: 마지막 행은 평가 환율로 다시 평가한 값, 최저 수익률 날은 남긴다
+        assert series.value[-1] == result.value, result.rule
+        assert min(series.return_pct) == result.worst_return_pct, result.rule
+        row_on = {row.date: row for row in result.daily}
+        assert series.value == [row_on[d].value for d in chart.dates], result.rule
+        assert series.invested == [row_on[d].invested for d in chart.dates], result.rule
+        assert series.return_pct == [row_on[d].return_pct for d in chart.dates], result.rule
+
+
+def test_build_strategy_chart_up_to_max_points_keeps_every_day() -> None:
+    """9-8 조건을 1년(2025-11-25 ~ 2026-11-24) 매월로 줄이면 거래일이 1,000일 이하라 줄이지 않는다."""
+    results = [_strategy(rule, start=date(2025, 11, 25)) for rule in RULES]
+    chart = engine.build_strategy_chart(results)
+    days = [row.date for row in results[0].daily]
+    assert len(days) <= MAX_CHART_POINTS
+    assert chart.dates == days
+    assert chart.total_days == len(days)
+    assert list(chart.series) == RULES
+    for result in results:
+        series = chart.series[result.rule]
+        assert series.value == [row.value for row in result.daily], result.rule
+        assert series.invested == [row.invested for row in result.daily], result.rule
+        assert series.return_pct == [row.return_pct for row in result.daily], result.rule
+
+
+def test_build_strategy_chart_different_date_axes_raise_value_error() -> None:
+    """다섯 전략은 같은 asset·fx·Params로 불러 날짜축이 같다. 다르면 호출 계약 위반이다."""
+    none, dip = _strategy("none"), _strategy("ma_dip")
+    with pytest.raises(ValueError, match="날짜"):
+        engine.build_strategy_chart([none, replace(dip, daily=dip.daily[1:])])
+
+
+def test_build_strategy_chart_same_rule_twice_raises_value_error() -> None:
+    """같은 rule이 두 번이면 series 키가 겹친다. 호출 계약 위반이다."""
+    none = _strategy("none")
+    with pytest.raises(ValueError, match="두 번"):
+        engine.build_strategy_chart([none, none])
 
 
 # ---------- 결정 d24·d25·d29: 끝난 달, 달러 양도세, 다른 거래소 기준 종목 ----------

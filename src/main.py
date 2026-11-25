@@ -40,6 +40,8 @@ from src.schemas import (
     ResultOut,
     SearchHitOut,
     StrategiesOut,
+    StrategyChartOut,
+    StrategyChartSeriesOut,
     StrategyOut,
     StrategyRequest,
     StrategyResponse,
@@ -274,6 +276,22 @@ def _strategy_out(result: engine.StrategyResult, invest: str) -> StrategyOut:
     )
 
 
+def _strategy_chart_out(chart: engine.StrategyChart, invest: str) -> StrategyChartOut:
+    """전략 그래프를 응답 자리수로 반올림한다 (계산 규칙 5절 끝)."""
+    return StrategyChartOut(
+        dates=chart.dates,
+        series={
+            rule: StrategyChartSeriesOut(
+                value=[_money(v, invest) for v in s.value],
+                invested=[_money(v, invest) for v in s.invested],
+                return_pct=[round(v, 2) for v in s.return_pct],
+            )
+            for rule, s in chart.series.items()
+        },
+        total_days=chart.total_days,
+    )
+
+
 # ---------- 계산하기 ----------
 
 
@@ -363,9 +381,10 @@ async def _fetch_ref(market: Market, request: StrategyRequest) -> PriceHistory |
 async def run_strategy(market: Market, request: StrategyRequest, today: date) -> StrategyResponse:
     """종목(+환율)과 기준 종목을 겹쳐 받고 같은 예산 전략 5개를 계산한다 (계산 규칙 9-6).
 
-    엔진에는 시작일·끝날짜로 자르지 않은 전체 데이터를 넘긴다. 이평선은 시작일 이전 주가를 쓰고(9-6),
-    진행 중인 달은 데이터 마지막 날을 보고 판정한다(2절). 기준 종목만 실패하면 레버리지 전환만 빼고
-    돌려준다 (결정 d31).
+    전략별 평가금 그래프와 매수일·시작 시점 바꿔 보기(9-7)도 같이 만든다. 엔진에는 시작일·끝날짜로
+    자르지 않은 전체 데이터를 넘긴다. 이평선은 시작일 이전 주가를 쓰고(9-6), 진행 중인 달은 데이터 마지막
+    날을 보고 판정한다(2절). 기준 종목만 실패하면 레버리지 전환만 빼고 돌려준다 (결정 d31). 전략이나
+    바꿔 보기에서 EngineError가 나면 result는 null이고 종목 오류다.
     """
     params = _to_params(request, today)
     fetched, ref_fetched = await asyncio.gather(
@@ -402,9 +421,13 @@ async def run_strategy(market: Market, request: StrategyRequest, today: date) ->
             for rule in engine.RULES
             if rule != "switch" or ref is not None
         }
+        # 바꿔 보기(9-7)는 요청의 조건(주기·수수료·소수점 매수) 그대로, 기준 종목 없이 계산한다
+        anchors = engine.anchor_sweep(asset, fx, params)
+        starts = engine.start_sweep(asset, fx, params)
     except engine.EngineError as error:  # 기간 안 매수일 없음 등
         errors.append(SymbolError(symbol=request.symbol, message=str(error)))
         return StrategyResponse(params=request, result=None, errors=errors + ref_errors)
+    chart = engine.build_strategy_chart(list(sims.values()))
 
     invest = request.currency
     switch = sims.get("switch")
@@ -430,6 +453,9 @@ async def run_strategy(market: Market, request: StrategyRequest, today: date) ->
             switch=None if switch is None else _strategy_out(switch, invest),
             lump_sum=_strategy_out(sims["lump_sum"], invest),
         ),
+        chart=_strategy_chart_out(chart, invest),
+        anchor_sweep={str(day): _maybe(avg, 4) for day, avg in anchors.items()},
+        start_sweep={month: round(pct, 2) for month, pct in starts.items()},
     )
     return StrategyResponse(params=request, result=result, errors=ref_errors)
 

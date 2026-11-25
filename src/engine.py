@@ -758,6 +758,60 @@ def simulate_rule(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class StrategyChartSeries:
+    """전략 그래프 하나. value·invested는 투자 통화, return_pct는 %. 날짜축이 같아 빈 값이 없다."""
+
+    value: list[float]
+    invested: list[float]
+    return_pct: list[float]
+
+
+@dataclass(frozen=True, slots=True)
+class StrategyChart:
+    """전략 그래프. dates는 전략의 daily 날짜, total_days는 줄이기 전 날짜 수."""
+
+    dates: list[date]
+    series: dict[Rule, StrategyChartSeries]  # 받은 순서
+    total_days: int
+
+
+def build_strategy_chart(
+    results: Sequence[StrategyResult], max_points: int = 1000
+) -> StrategyChart:
+    """전략별 평가금 추이를 그래프용으로 줄인다 (기능 명세 F-07·F-15, 상세 설계 3절).
+
+    같은 asset·fx·Params로 계산한 전략은 daily 날짜가 모두 같아서, build_chart처럼 날짜를 합치거나
+    직전 값으로 채우지 않는다. max_points보다 길면 일정 간격으로 줄이되 첫날, 마지막 날, 전략마다
+    최고·최저 수익률 날짜(같은 값이면 앞의 날)는 남긴다. 날짜축이 다르거나 같은 전략이 두 번이면 ValueError.
+    """
+    if not results:
+        return StrategyChart(dates=[], series={}, total_days=0)
+    rules = [result.rule for result in results]
+    if len(set(rules)) != len(rules):
+        raise ValueError(f"같은 전략이 두 번 들어 있습니다: {rules}")
+    dates = [row.date for row in results[0].daily]
+    must = {0, len(dates) - 1}
+    for result in results:
+        if [row.date for row in result.daily] != dates:
+            raise ValueError(f"{result.rule}: 전략마다 날짜축이 같아야 합니다")
+        returns = [row.return_pct for row in result.daily]
+        must |= {returns.index(max(returns)), returns.index(min(returns))}
+    keep = _pick_indices(len(dates), max_points, must)
+    return StrategyChart(
+        dates=[dates[i] for i in keep],
+        series={
+            result.rule: StrategyChartSeries(
+                value=[result.daily[i].value for i in keep],
+                invested=[result.daily[i].invested for i in keep],
+                return_pct=[result.daily[i].return_pct for i in keep],
+            )
+            for result in results
+        },
+        total_days=len(dates),
+    )
+
+
 # ---------- v2 바꿔 보기 (계산 규칙 9-7) ----------
 
 
