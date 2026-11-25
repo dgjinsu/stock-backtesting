@@ -707,6 +707,56 @@ a {
   border-radius: 4px;
 }
 
+/* 한눈에 요약 (F-12). 시안 v2: 요약 탭 맨 위에 문장 한 단락과 하이라이트 4칸 */
+.insights {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  container-type: inline-size;
+}
+.insights-text {
+  margin: 0;
+  font-size: 16px;
+  line-height: 1.6;
+}
+.highlights {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+/* 칸이 180px보다 좁아지면(1024px 화면 등) 3+1이 아니라 2×2로 */
+@container (max-width: 780px) {
+  .highlights {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.highlights li {
+  min-width: 0;
+  padding: 10px 14px;
+  border-radius: 12px;
+  background: var(--sunken);
+}
+.hl-value {
+  font-size: 15px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.hl-value .swatch {
+  margin-right: 6px;
+  vertical-align: middle;
+}
+.hl-value .muted {
+  font-weight: 400;
+  white-space: nowrap; /* 날짜·비율은 통째로 다음 줄로 */
+}
+
 /* 접힌 조건 줄 (F-11). 요약이 아닌 탭에서 조건 패널 대신 결과 위에 둔다 */
 .cond-bar {
   display: flex;

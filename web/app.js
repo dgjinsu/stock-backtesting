@@ -33,6 +33,7 @@ import {
   qty,
   signedMoney,
 } from "./format.js";
+import { highlights, summaryParts } from "./insights.js";
 
 const DEFAULT_SYMBOLS = ["QQQ", "QLD"];
 
@@ -934,6 +935,7 @@ function renderResult(data) {
     tabList(),
     tabPanel(
       "summary",
+      insightsSection(data),
       h("div", { class: "cards" }, ...data.results.map((r) => card(r, data.params.currency))),
       compareTable(data),
       chartSection(data, slotOf),
@@ -945,6 +947,45 @@ function renderResult(data) {
   );
   renderCondBar(data);
   showTab();
+}
+
+// ---------- 한눈에 요약 (F-12) ----------
+
+/**
+ * 요약 탭 맨 위(카드 위): 정해진 틀로 만든 문장과 하이라이트 4칸. 문구와 고르는 규칙은 insights.js.
+ * 문장 조각은 굵게(strong)와 손익 색(tone)만 입히고, 값은 모두 textContent로 넣는다.
+ */
+function insightsSection(data) {
+  return h(
+    "section",
+    { class: "insights", "aria-label": "한눈에 요약" },
+    h(
+      "p",
+      { class: "insights-text" },
+      ...summaryParts(data.results).map((part) =>
+        part.strong ? h("strong", { class: part.tone || null, text: part.text }) : part.text,
+      ),
+    ),
+    h(
+      "ul",
+      { class: "highlights" },
+      ...highlights(data.results).map((item) =>
+        h(
+          "li",
+          {},
+          h("div", { class: "lbl", text: item.label }),
+          h(
+            "div",
+            { class: "hl-value" },
+            swatch(slotOf(item.symbol), 18),
+            `${item.symbol} `,
+            h("span", { class: item.tone || null, text: item.value }),
+            item.note ? [" ", h("span", { class: "muted", text: item.note })] : null,
+          ),
+        ),
+      ),
+    ),
+  );
 }
 
 // ---------- 결과 탭과 조건 패널 접기 (F-11) ----------
