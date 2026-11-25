@@ -54,13 +54,13 @@ class Settings:
     """서버 설정. 기본값은 로컬 실행 기준이다 (아키텍처 5절)."""
 
     host: str = "127.0.0.1"
-    port: int = 8000
+    port: int = 8010
     data_dir: Path = Path("data")
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Settings":
         """환경변수에서 설정을 읽는다. PORT가 1~65535 숫자가 아니면 ValueError."""
-        port_text = env.get("PORT", "8000")
+        port_text = env.get("PORT", "8010")
         if not port_text.isdecimal() or not 0 < int(port_text) < 65536:
             raise ValueError(f"PORT는 1~65535 사이 숫자여야 합니다: {port_text!r}")
         return cls(
