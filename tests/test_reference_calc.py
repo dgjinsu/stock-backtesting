@@ -7,12 +7,15 @@
 import json
 import subprocess
 import sys
+from bisect import bisect_right
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from tests.helpers import CASE_IDS
+from tests import reference_calc
+from tests.helpers import CASE_IDS, MONTH_END_CASES
 
 TESTS = Path(__file__).resolve().parent
 EXPECTED: dict[str, Any] = json.loads(
@@ -140,3 +143,90 @@ def test_v2_sweeps_match_rules_table() -> None:
     assert EXPECTED["v2"]["period"] == ["2021-11-25", "2026-11-24"]
     assert min(starts) == "2021-12"
     assert max(starts) == "2026-05"  # 끝날짜 6개월 전까지
+
+
+# ---------- 결정 d24·d25·d29 (2026-11-25) ----------
+
+V2_KEYS_BEFORE_D25_D29 = [
+    "symbol",
+    "invest_currency",
+    "freq",
+    "anchor",
+    "amount",
+    "period",
+    "ma_days",
+    "switch_ref",
+    "metrics",
+    "strategies",
+    "anchor_sweep",
+    "start_sweep",
+]
+
+
+def test_v2_keys_keep_existing_and_append_dollar_tax_and_switch_cross_exchange() -> None:
+    """기존 v2 키는 그대로 두고 새 묶음 두 개만 뒤에 더한다 (기존 값은 위 9-8 표 테스트가 지킨다)."""
+    assert list(EXPECTED["v2"]) == [*V2_KEYS_BEFORE_D25_D29, "dollar_tax", "switch_cross_exchange"]
+
+
+# 9-8 달러 양도세 줄: tax_fx(원), 손익·양도세·세후 손익($, 정수)
+DOLLAR_TAX_ROW = {"tax_fx": 1344.16, "profit": 48_171, "tax": 10_188, "profit_after_tax": 37_982}
+
+
+def test_v2_dollar_tax_matches_rules_table() -> None:
+    """9-8 달러 양도세 줄 (결정 d25): QQQ 매월 1일 $1,500, 9-8 기간, 달러 투자, tax_fx는 7절 평가 환율.
+    손익은 7절 "매월 1일 1,500달러" 줄의 평가금 − 투자금과 같다."""
+    got = EXPECTED["v2"]["dollar_tax"]
+    usd_qqq = next(c for c in EXPECTED["cases"] if c["invest_currency"] == "USD")["results"]["QQQ"]
+    assert set(got) == set(DOLLAR_TAX_ROW)
+    assert got["tax_fx"] == pytest.approx(DOLLAR_TAX_ROW["tax_fx"], abs=0.01)
+    for key in ("profit", "tax", "profit_after_tax"):
+        assert got[key] == pytest.approx(DOLLAR_TAX_ROW[key], abs=1), key
+    assert got["profit"] == pytest.approx(usd_qqq["value"] - usd_qqq["invested"], abs=1)
+    assert got["profit"] - got["tax"] == pytest.approx(got["profit_after_tax"], abs=1)
+
+
+# 9-8 다른 거래소 레버리지 전환 줄: STRATEGY_TABLE과 같은 순서
+CROSS_EXCHANGE_ROW = (298_106_846, 148.42, 37.64, 76_241.12, -26.24, 0, 14)
+
+
+def test_v2_switch_cross_exchange_matches_rules_table() -> None:
+    """9-8 다른 거래소 레버리지 전환 줄 (결정 d29): 005930.KS 매월 1일 200만원, QQQ 200일선.
+    기준 종목은 매수일보다 앞선 마지막 거래일 종가로 본다. 키는 v2.strategies와 같다."""
+    value, ret, xirr, avg, worst, cash, days = CROSS_EXCHANGE_ROW
+    s = EXPECTED["v2"]["switch_cross_exchange"]
+    assert list(s) == list(EXPECTED["v2"]["strategies"]["switch"])
+    assert s["value"] == pytest.approx(value, abs=1)
+    assert s["return_pct"] == pytest.approx(ret, abs=0.01)
+    assert s["xirr_pct"] == pytest.approx(xirr, abs=0.01)
+    assert s["avg_cost_asset"] == pytest.approx(avg, abs=0.01)
+    assert s["worst_return_pct"] == pytest.approx(worst, abs=0.01)
+    assert s["leftover_cash_invest"] == pytest.approx(cash, abs=1)
+    assert s["rule_days"] == days
+
+
+@pytest.fixture(scope="module")
+def reference_qld_fx() -> tuple[dict[str, Any], dict[str, Any]]:
+    """참고 스크립트의 load로 읽은 QLD와 USDKRW=X."""
+    return reference_calc.load("QLD"), reference_calc.load("USDKRW=X")
+
+
+@pytest.mark.parametrize(
+    ("cut", "end", "count"),
+    [(cut, end, count) for cut, end, _, count in MONTH_END_CASES.values()],
+    ids=list(MONTH_END_CASES),
+)
+def test_reference_v2_months_ended_month_matches_engine_rule(
+    reference_qld_fx: tuple[dict[str, Any], dict[str, Any]],
+    cut: date | None,
+    end: date,
+    count: int,
+) -> None:
+    """9-3, 결정 d24: 참고 스크립트 v2_metrics도 끝날짜와 데이터 마지막 날을 둘 다 본다 (엔진 테스트와 같은 사례)."""
+    qld, fx = reference_qld_fx
+    if cut is not None:
+        k = bisect_right(qld["dates"], cut)
+        qld = {**qld, "dates": qld["dates"][:k], "close": qld["close"][:k]}
+    v2 = EXPECTED["v2"]
+    start = date.fromisoformat(v2["period"][0])
+    got = reference_calc.v2_metrics(qld, fx, start, end, v2["anchor"], v2["amount"])
+    assert got["months"]["count"] == count

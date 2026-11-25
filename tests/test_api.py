@@ -10,8 +10,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from src.main import Settings, app, create_app
-from src.market import Market
+from src.main import Settings, _to_series, app, create_app
+from src.market import Market, PriceHistory
 from tests.helpers import FakeYahoo, inverted_fx_payload, load_series
 
 TODAY = date(2026, 11, 24)
@@ -343,3 +343,44 @@ def test_backtest_unexpected_error_is_not_hidden(api: Api, monkeypatch: pytest.M
     monkeypatch.setattr(market, "get_series", broken)
     with pytest.raises(RuntimeError, match="코드 버그"):
         _post(api.client)
+
+
+# ---------- 엔진 입력으로 바꾸기 (결정 d29) ----------
+
+
+def _history(tmp_path: Path, symbol: str, *, stale: bool = False) -> PriceHistory:
+    """가짜 Yahoo에서 받은 PriceHistory. stale이면 한 번 받아 저장한 뒤 7시간 지나 Yahoo가 실패한다."""
+    yahoo, clock = FakeYahoo(), Clock()
+
+    async def fetch() -> PriceHistory:
+        async with httpx.AsyncClient(transport=httpx.MockTransport(yahoo)) as client:
+            market = Market(tmp_path, client, clock=clock)
+            history = await market.get_series(symbol)
+            if stale:
+                clock.now += 7 * 3600
+                yahoo.fail = True
+                history = await market.get_series(symbol)
+            return history
+
+    return asyncio.run(fetch())
+
+
+@pytest.mark.parametrize(
+    ("symbol", "tz"),
+    [("QLD", "America/New_York"), ("005930.KS", "Asia/Seoul")],
+    ids=["QLD", "005930.KS"],
+)
+def test_to_series_fake_yahoo_history_keeps_exchange_tz(
+    tmp_path: Path, symbol: str, tz: str
+) -> None:
+    """레버리지 전환이 거래소를 비교하도록 main이 PriceHistory.exchange_tz를 엔진 Series로 넘긴다."""
+    series = _to_series(_history(tmp_path, symbol))
+    assert series.symbol == symbol
+    assert series.exchange_tz == tz
+
+
+def test_to_series_stale_cache_only_keeps_exchange_tz(tmp_path: Path) -> None:
+    """Yahoo가 실패해 저장본만 쓸 때도 시간대가 남는다 (캐시 파일의 exchange_tz)."""
+    history = _history(tmp_path, "QLD", stale=True)
+    assert history.stale is True
+    assert _to_series(history).exchange_tz == "America/New_York"

@@ -240,7 +240,13 @@ def _chart_out(chart: engine.Chart, invest: str) -> ChartOut:
 
 
 def _to_series(history: PriceHistory) -> engine.Series:
-    return engine.Series(history.symbol, history.currency, history.dates, history.close)
+    return engine.Series(
+        history.symbol,
+        history.currency,
+        history.dates,
+        history.close,
+        exchange_tz=history.exchange_tz,
+    )
 
 
 class FxError(MarketError):

@@ -1,5 +1,6 @@
 """계산 엔진(src/engine.py)을 기준값과 계산 규칙으로 확인한다. 네트워크 없이 fixture만 쓴다."""
 
+from bisect import bisect_right
 from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any
@@ -21,7 +22,7 @@ from src.engine import (
     start_sweep,
     xirr,
 )
-from tests.helpers import CASE_IDS, load_expected, load_series
+from tests.helpers import CASE_IDS, MONTH_END_CASES, load_expected, load_series
 
 EXPECTED = load_expected()
 START = date.fromisoformat(EXPECTED["period"][0])
@@ -654,3 +655,159 @@ def test_anchor_sweep_anchor_without_buy_day_is_none() -> None:
     got = anchor_sweep(asset, fx, _v2_params(start=date(2026, 10, 5), end=date(2026, 10, 20)))
     assert got[10] is not None
     assert got[25] is None
+
+
+# ---------- 결정 d24·d25·d29: 끝난 달, 달러 양도세, 다른 거래소 기준 종목 ----------
+
+
+def _cut(series: Series, last_day: date) -> Series:
+    """last_day까지만 남긴다. replace로 잘라 시간대 같은 다른 필드는 그대로 둔다."""
+    k = bisect_right(series.dates, last_day)
+    return replace(series, dates=series.dates[:k], close=series.close[:k])
+
+
+@pytest.mark.parametrize(
+    ("cut", "end", "last_month", "count"),
+    list(MONTH_END_CASES.values()),
+    ids=list(MONTH_END_CASES),
+)
+def test_analyze_months_month_is_ended_only_when_end_and_data_reach_month_end(
+    cut: date | None, end: date, last_month: str, count: int
+) -> None:
+    """9-3, 결정 d24: 그 달 말일 ≤ 끝날짜이고 데이터 마지막 날 ≥ 그 달 말일이어야 끝난 달이다.
+
+    데이터 9-29·끝날짜 9-30이면 9월 월말 값이 9-29 종가라 9월은 빠진다. 2절 진행 중인 달과 같은 판정이라
+    말일이 토요일(10-31)이고 데이터가 금요일(10-30)까지여도 10월은 빠진다.
+    """
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    if cut is not None:
+        asset = _cut(asset, cut)
+        assert asset.dates[-1] == cut
+    params = _v2_params(end=end)
+    a = analyze(simulate(asset, fx, params), asset, fx, end, tax_fx=1.0)
+    assert (a.months[0].month, a.months[-1].month, len(a.months)) == ("2021-12", last_month, count)
+
+
+def test_analyze_dollar_investment_tax_matches_v2_reference() -> None:
+    """9-5, 결정 d25: QQQ 매월 1일 $1,500 달러 투자, 9-8 기간. tax_fx는 끝날짜 당일 또는 그 이전 마지막
+    USDKRW=X 종가다. 평가금·투자금은 7절 "매월 1일 1,500달러" 줄, tax_fx는 7절 평가 환율과 같다."""
+    want = V2["dollar_tax"]
+    usd_case = next(c for c in EXPECTED["cases"] if c["invest_currency"] == "USD")
+    usd_qqq = usd_case["results"]["QQQ"]
+    krw_eval_fx = EXPECTED["cases"][0]["results"]["QLD"]["eval_fx"]
+    asset, won = load_series("QQQ"), load_series("USDKRW=X")
+    params = _v2_params(amount=1500.0, currency="USD")
+    tax_fx = won.close[bisect_right(won.dates, params.end) - 1]
+    result = simulate(asset, None, params)
+    a = analyze(result, asset, None, params.end, tax_fx=tax_fx)
+    assert result.summary.value == pytest.approx(usd_qqq["value"], abs=1)
+    assert result.summary.invested == pytest.approx(usd_qqq["invested"], abs=1)
+    assert tax_fx == pytest.approx(krw_eval_fx, abs=1e-4)
+    assert tax_fx == pytest.approx(want["tax_fx"], abs=0.01)
+    assert result.summary.profit == pytest.approx(want["profit"], abs=1)
+    assert a.tax == pytest.approx(want["tax"], abs=1)
+    assert a.profit_after_tax == pytest.approx(want["profit_after_tax"], abs=1)
+
+
+def _switch_cross_exchange() -> StrategyResult:
+    """005930.KS(서울)를 QQQ(뉴욕) 200일선으로 레버리지 전환. 9-8 기간, 매월 1일 200만원, 원화."""
+    asset, ref = load_series("005930.KS"), load_series(V2["switch_ref"])
+    return simulate_rule(asset, None, ref, _v2_params(), "switch", ma_days=V2["ma_days"])
+
+
+def test_simulate_rule_switch_cross_exchange_matches_v2_reference() -> None:
+    """9-6, 결정 d29: 거래소 시간대가 다르면 기준 종목 종가·이평선을 매수일보다 앞선 마지막 거래일로 본다.
+    그날 종가를 쓰는 규칙이면 299,148,879원 / 쉰 매수일 15번이 나와 기준값과 다르다."""
+    want = V2["switch_cross_exchange"]
+    got = _switch_cross_exchange()
+    assert got.value == pytest.approx(want["value"], abs=1)
+    assert got.return_pct == pytest.approx(want["return_pct"], abs=0.01)
+    assert got.xirr_pct == pytest.approx(want["xirr_pct"], abs=0.01)
+    assert got.avg_cost_asset == pytest.approx(want["avg_cost_asset"], abs=0.01)
+    assert got.worst_return_pct == pytest.approx(want["worst_return_pct"], abs=0.01)
+    assert got.leftover_cash_invest == pytest.approx(want["leftover_cash_invest"], abs=1)
+    assert got.rule_days == want["rule_days"]
+
+
+def test_simulate_rule_switch_cross_exchange_buys_2022_02_03_on_previous_reference_close() -> None:
+    """결정 d29에서 갈리는 날: 005930.KS 2022-02-03 매수일에 QQQ 2-03 종가(353.55 < 200일선 366.27)는
+    한국 장이 끝난 뒤에 나온다. 2-02 종가(368.49 > 366.19)로 보고 그날 산다 (평단가가 바뀐다)."""
+    rows = _switch_cross_exchange().daily
+    i = next(i for i, row in enumerate(rows) if row.date == date(2022, 2, 3))
+    assert rows[i - 1].date == date(2022, 1, 28)  # 설 연휴 앞 마지막 거래일
+    assert rows[i - 1].avg_cost_asset is not None
+    assert rows[i].avg_cost_asset != pytest.approx(rows[i - 1].avg_cost_asset, abs=1e-9)
+
+
+SYNTH_DAYS = [date(2024, 1, 1) + timedelta(days=i) for i in range(5)]
+# 기준 종목 종가가 매수일(마지막 날)에만 3일 이평선 위: 전날 9 < 11, 매수일 13 > 11.33
+SPIKE_ON_BUY_DAY = [12.0, 12.0, 12.0, 9.0, 13.0]
+
+
+def _switch_last_day(
+    asset_tz: str, ref_tz: str, ref_days: list[date], ref_close: list[float]
+) -> StrategyResult:
+    """SYNTH_DAYS 마지막 날 한 번만 $1,000을 넣는 레버리지 전환 (3일 이평선). 사는 종목 가격은 늘 $100."""
+    asset = Series("BUY", "USD", SYNTH_DAYS, [100.0] * len(SYNTH_DAYS), exchange_tz=asset_tz)
+    ref = Series("REF", "USD", ref_days, ref_close, exchange_tz=ref_tz)
+    last = SYNTH_DAYS[-1]
+    params = Params(last, last + timedelta(days=1), "daily", None, 1000.0, "USD")
+    return simulate_rule(asset, None, ref, params, "switch", ma_days=3)
+
+
+def test_simulate_rule_switch_same_exchange_tz_uses_buy_day_reference_close() -> None:
+    """9-6, 결정 d29: 두 종목 시간대가 같으면 매수일 기준 종목 종가(13 > 이평선 11.33)를 보고 그날 산다."""
+    got = _switch_last_day("America/New_York", "America/New_York", SYNTH_DAYS, SPIKE_ON_BUY_DAY)
+    assert got.rule_days == 0
+    assert got.avg_cost_asset == pytest.approx(100.0, abs=0.01)
+    assert got.leftover_cash_invest == pytest.approx(0.0, abs=1)
+
+
+@pytest.mark.parametrize(
+    ("asset_tz", "ref_tz"),
+    [
+        ("Asia/Seoul", "America/New_York"),
+        ("America/New_York", "Asia/Seoul"),
+        ("", "America/New_York"),
+        ("Asia/Seoul", ""),
+        ("", ""),
+    ],
+    ids=["kr-asset-us-ref", "us-asset-kr-ref", "asset-tz-empty", "ref-tz-empty", "both-tz-empty"],
+)
+def test_simulate_rule_switch_other_or_unknown_exchange_tz_uses_previous_reference_close(
+    asset_tz: str, ref_tz: str
+) -> None:
+    """결정 d29: 시간대가 다르거나(방향 상관없이) 하나라도·둘 다 비면 매수일보다 앞선 마지막 거래일로 본다.
+    전날 종가 9 < 이평선 11이라 그날은 쉬고 (쉰 매수일 1번), 산 돈은 0이다."""
+    got = _switch_last_day(asset_tz, ref_tz, SYNTH_DAYS, SPIKE_ON_BUY_DAY)
+    assert got.rule_days == 1
+    assert got.avg_cost_asset is None  # 산 수량 0
+    assert got.leftover_cash_invest == pytest.approx(1000.0, abs=1)
+
+
+def test_simulate_rule_switch_other_exchange_short_reference_before_buy_day_uses_multiplier_one() -> (
+    None
+):
+    """9-6: 매수일보다 앞선 마지막 거래일까지 기준 종목이 n거래일이 안 되면 배수 1로 산다.
+    기준 종목은 1-03부터 3거래일 (12, 13, 9). 매수일 그날로 보면 9 < 11.33이라 쉬게 된다."""
+    got = _switch_last_day("Asia/Seoul", "America/New_York", SYNTH_DAYS[2:], [12.0, 13.0, 9.0])
+    assert got.rule_days == 0
+    assert got.avg_cost_asset == pytest.approx(100.0, abs=0.01)
+    assert got.leftover_cash_invest == pytest.approx(0.0, abs=1)
+
+
+def test_series_without_exchange_tz_defaults_to_empty() -> None:
+    """시간대 없이 만든 Series는 ""(모름)다. 기존 Series(symbol, currency, dates, close) 호출이 그대로 돈다."""
+    series = Series("X", "KRW", [date(2024, 1, 2)], [100.0])
+    assert series.exchange_tz == ""
+
+
+@pytest.mark.parametrize(
+    ("symbol", "tz"),
+    [("QLD", "America/New_York"), ("QQQ", "America/New_York"), ("005930.KS", "Asia/Seoul")],
+    ids=["QLD", "QQQ", "005930.KS"],
+)
+def test_load_series_reads_exchange_tz_from_fixture_meta(symbol: str, tz: str) -> None:
+    """helpers.load_series가 meta.exchangeTimezoneName을 읽는다. 빠지면 QLD·QQQ가 다른 거래소로 판정된다.
+    v2.strategies.switch는 QLD 매수일 중 그날·전날 판정이 갈리는 날이 없어 값으로는 못 잡으니 여기서 본다."""
+    assert load_series(symbol).exchange_tz == tz

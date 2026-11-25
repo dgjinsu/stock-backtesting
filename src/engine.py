@@ -30,12 +30,17 @@ class EngineError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class Series:
-    """한 종목의 날짜별 종가. 날짜는 거래소 현지 날짜, 오름차순, 중복 없음."""
+    """한 종목의 날짜별 종가. 날짜는 거래소 현지 날짜, 오름차순, 중복 없음.
+
+    exchange_tz는 거래소 시간대 이름(Yahoo exchangeTimezoneName, 예 "America/New_York")이고
+    모르면 빈 문자열이다. 엔진은 두 종목의 값이 같은지만 본다 (계산 규칙 9-6, 결정 d29).
+    """
 
     symbol: str
     currency: str
     dates: list[date]
     close: list[float]
+    exchange_tz: str = ""
 
     def __post_init__(self) -> None:
         if len(self.dates) != len(self.close):
@@ -518,8 +523,10 @@ def _longest_run(rows: Sequence[DailyRow], flags: Sequence[bool]) -> Underwater 
 
 
 def _months(asset: Series, fx: Series | None, first_buy: date, end: date) -> list[MonthResult]:
-    """9-3절: 월말 값 = 그 달 마지막 거래일 종가 × 그날 환율. 첫 매수 달부터 달력상 끝난 달까지.
+    """9-3절: 월말 값 = 그 달 마지막 거래일 종가 × 그날 환율. 첫 매수 달부터 끝난 달까지.
 
+    끝난 달은 말일이 끝날짜 이하이고 종목 데이터도 그 말일까지 있는 달이다. 2절 매수일의 진행 중인 달과
+    같은 판정이다 (결정 d24). asset은 끝날짜로 자르기 전 전체 데이터이고, 환율 데이터의 끝은 보지 않는다.
     첫 매수 달 전의 마지막 거래일부터만 본다 (종목 이력이 환율 이력보다 길 수 있다). 그 앞 달에
     거래가 없었으면 그보다 앞의 월말과 비교한다 (두 달치 변화). 환율이 없는 날은 건너뛴다.
     """
@@ -529,9 +536,12 @@ def _months(asset: Series, fx: Series | None, first_buy: date, end: date) -> lis
     for day, close in zip(asset.dates, asset.close, strict=True):
         if from_day <= day <= end and (fx is None or _asof_index(fx.dates, day) >= 0):
             month_end[(day.year, day.month)] = close * _rate_on(fx, day)
-    last = (end.year, end.month)
-    if (end + timedelta(days=1)).month == end.month:  # 끝날짜가 말일이 아니면 그 달은 진행 중이다
-        last = (end.year, end.month - 1) if end.month > 1 else (end.year - 1, 12)
+    # 말일 ≤ 끝날짜 그리고 말일 ≤ 데이터 마지막 날  ⇔  말일 ≤ cutoff.
+    # cutoff가 말일이 아니면 그 달은 진행 중이다
+    cutoff = min(end, asset.dates[-1])
+    last = (cutoff.year, cutoff.month)
+    if (cutoff + timedelta(days=1)).month == cutoff.month:
+        last = (cutoff.year, cutoff.month - 1) if cutoff.month > 1 else (cutoff.year - 1, 12)
     keys = sorted(month_end)
     return [
         MonthResult(f"{b[0]}-{b[1]:02d}", (month_end[b] / month_end[a] - 1) * 100)
@@ -561,7 +571,9 @@ def analyze(
     """v2 지표. 계산 규칙 9-1 ~ 9-5절.
 
     result는 simulate(asset, fx, params)의 결과이고 end는 params.end다.
-    tax_fx는 투자 통화 1단위의 원화 값이다 (원화 투자면 1, 달러 투자면 평가일 원/달러 환율).
+    asset은 끝날짜로 자르지 않은 전체 데이터다. 9-3 끝난 달은 2절 매수일처럼 데이터 마지막 날을 본다 (결정 d24).
+    tax_fx는 투자 통화 1단위의 원화 값이다 (원화 투자면 1, 달러 투자면 끝날짜 당일 또는 그 이전 마지막
+    USDKRW=X 종가, 9-5절).
     엔진은 투자 통화를 모르므로 기본값을 두지 않는다. 0 이하면 ValueError.
     양도세는 원화로 계산해 투자 통화로 돌려준다. 종목 통화가 원화(한국 종목)면 0이다.
     """
@@ -650,7 +662,9 @@ def simulate_rule(
 
     매수일마다 넣는 돈(A)은 기본 적립과 같고, 살 돈만 규칙대로 정한다. 넣고 안 쓴 돈은 현금(종목 통화)으로
     쌓였다가 다음 매수일에 쓰인다. 소수점 매수로 계산한다 (9-6 공식). 일시금은 첫 매수일에 A × 매수 횟수.
-    ref는 레버리지 전환의 기준 종목(종가와 이평선을 본다).
+    ref는 레버리지 전환의 기준 종목(종가와 이평선을 본다). 두 종목의 exchange_tz가 같으면 매수일의 종가·
+    이평선을, 다르거나 하나라도 비어 있으면 매수일보다 앞선 마지막 거래일 기준을 본다 (결정 d29). 같은 날짜의
+    기준 종목 종가가 사는 종목 장이 끝난 뒤에 나올 수 있어서다.
     """
     _check_params(p)
     if rule not in RULES:
@@ -667,6 +681,8 @@ def simulate_rule(
     if not picked:
         raise EngineError(f"{asset.symbol}: 기간 안에 매수일이 없습니다")
     buy_set = set(picked)
+    ref_tz = ref.exchange_tz if ref is not None else ""
+    same_exchange = ref_tz != "" and ref_tz == asset.exchange_tz  # 모르면 다른 거래소로 본다
     keep = 1 - p.fee
     shares = cash = cost = invested = 0.0
     rule_days = 0
@@ -691,9 +707,11 @@ def simulate_rule(
                         rule_days += hit
                         spend = min(cash, RULE_MULTIPLIER[rule][0 if hit else 1] * unit)
                 elif rule == "switch" and ref is not None:
-                    avg = _moving_average(ref, day, ma_days)
+                    # 날짜에 시각이 없으니 "전날 당일 또는 그 이전" = 매수일보다 앞선 마지막 거래일
+                    ref_day = day if same_exchange else day - timedelta(days=1)
+                    avg = _moving_average(ref, ref_day, ma_days)
                     if avg is not None:
-                        on = ref.close[_asof_index(ref.dates, day)] > avg
+                        on = ref.close[_asof_index(ref.dates, ref_day)] > avg
                         rule_days += not on
                         spend = cash if on else 0.0
                 cash -= spend
