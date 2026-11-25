@@ -16,6 +16,11 @@ export function josa(code, pair) {
   return FINAL_SOUND.test(code) ? withFinal : withoutFinal;
 }
 
+/** 화면에 보이는 자리로 반올림한 값. 판단(빠졌는지, 색, 같은 값인지)은 보이는 값으로 한다. */
+function shown(value, digits) {
+  return Number(value.toFixed(digits));
+}
+
 /** 손익 색 이름: 이익 pos, 손실 neg, 0은 없음. */
 function toneOf(value) {
   if (value > 0) return "pos";
@@ -56,10 +61,20 @@ function countSentence(results) {
   return `${n}개 종목 중 ${n - losses}개는 이익, ${losses}개는 손실입니다.`;
 }
 
-/** 최저 수익률이 0 아래로 내려갔으면 그 날짜와 값. */
+/**
+ * 최저 수익률이 0 아래로 내려갔으면 그 날짜와 값. 화면처럼 소수 1자리로 본다:
+ * −0.04는 "0.0%"로 보이므로 빠지지 않은 것으로 친다.
+ */
 function fall(summary) {
   const worst = summary.worst;
-  return worst && worst.return_pct < 0 ? worst : null;
+  return worst && shown(worst.return_pct, 1) < 0 ? worst : null;
+}
+
+/** 수익률 1위의 XIRR이 XIRR 1위와 화면 값(소수 2자리)으로 같은지. 같으면 문장을 나누지 않는다. */
+function sameXirr(top, xirrTop) {
+  const mine = top.summary.xirr_pct;
+  if (mine === null || mine === undefined) return false;
+  return shown(mine, 2) === shown(xirrTop.summary.xirr_pct, 2);
 }
 
 /** 종목 하나: "QLD는 수익률 +88.19%, 연환산 25.75%입니다. 2022-06-16에는 −39.4%까지 빠졌습니다." */
@@ -91,8 +106,10 @@ function singleParts(result) {
  *  2022-06-16에는 −55.9%까지 빠졌습니다. 가장 덜 흔들린 종목은 QQQ(최저 −19.0%)입니다."
  * - 둘째 문장은 수익률 1위로 쓴다. XIRR 1위가 다른 종목이면 "…로 가장 높았고, 연환산은 B가 x로
  *   가장 높았습니다."로 나누고, 수익률 1위가 빠졌던 것은 "A는 날짜에 −y%까지 빠졌습니다."로 잇는다.
- * - 수익률 1위의 최저 수익률이 0 이상이면 빠졌다는 말을 쓰지 않는다.
- * - 가장 덜 흔들린 종목은 최저 수익률이 가장 높은(덜 빠진) 종목이다.
+ *   수익률 1위의 XIRR이 XIRR 1위와 화면 값으로 같으면 나누지 않는다.
+ * - 수익률 1위의 최저 수익률이 소수 1자리로 0 이상이면 빠졌다는 말을 쓰지 않는다.
+ * - 가장 덜 흔들린 종목은 최저 수익률이 가장 높은(덜 빠진) 종목이다. 수익률 1위와 같은 종목이면
+ *   둘째 문장이 이미 그 종목이 얼마나 빠졌는지(또는 빠지지 않았는지) 말하므로 쓰지 않는다.
  */
 function manyParts(results) {
   const top = pick(results, returnOf, true);
@@ -105,7 +122,7 @@ function manyParts(results) {
     plain(`${josa(top.symbol, "이/가")} 수익률 `),
     strong(pct(s.return_pct), toneOf(s.return_pct)),
   ];
-  if (xirrTop && xirrTop !== top) {
+  if (xirrTop && xirrTop !== top && !sameXirr(top, xirrTop)) {
     parts.push(
       plain("로 가장 높았고, 연환산은 "),
       strong(xirrTop.symbol),
@@ -135,7 +152,7 @@ function manyParts(results) {
     }
   }
   const calm = pick(results, worstOf, true);
-  if (calm) {
+  if (calm && calm !== top) {
     parts.push(
       plain(" 가장 덜 흔들린 종목은 "),
       strong(calm.symbol),
@@ -194,7 +211,7 @@ export function highlights(results) {
     const worst = deepest.summary.worst;
     items.push(
       item("worst", "가장 깊은 손실", deepest, pct(worst.return_pct, 1), {
-        tone: toneOf(worst.return_pct),
+        tone: toneOf(shown(worst.return_pct, 1)), // "0.0%"로 보이면 색을 칠하지 않는다
         note: worst.date,
       }),
     );

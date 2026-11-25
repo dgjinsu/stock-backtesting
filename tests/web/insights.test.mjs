@@ -163,15 +163,15 @@ test("summaryParts: 모두 손실이면 수익률·연환산에 빼기 부호", 
   const tqqq = changed(TQQQ, {
     return_pct: -3.21,
     xirr_pct: -1.5,
-    worst: { date: "2022-12-28", return_pct: -60.12 },
+    worst: { date: "2022-12-28", return_pct: -70.12 },
   });
   const parts = summaryParts([soxl, tqqq]);
   assert.equal(
     sentenceText(parts),
     "2개 종목 모두 손실입니다. " +
       `TQQQ가 수익률 ${MINUS}3.21%, 연환산 ${MINUS}1.50%로 가장 높았지만 ` +
-      `2022-12-28에는 ${MINUS}60.1%까지 빠졌습니다. ` +
-      `가장 덜 흔들린 종목은 TQQQ(최저 ${MINUS}60.1%)입니다.`,
+      `2022-12-28에는 ${MINUS}70.1%까지 빠졌습니다. ` +
+      `가장 덜 흔들린 종목은 SOXL(최저 ${MINUS}65.0%)입니다.`,
   );
   assert.equal(parts.find((part) => part.text === `${MINUS}3.21%`).tone, "neg");
 });
@@ -216,13 +216,13 @@ test("summaryParts: 수익률 1위와 XIRR 1위가 다르면 연환산 1위를 �
 });
 
 test("summaryParts: XIRR 1위가 다르고 최저 수익률이 0 이상이면 빠진 문장 없이 끝낸다", () => {
+  // 수익률 1위(QQQ)가 가장 덜 흔들린 종목이기도 해서 마지막 문장도 없다
   const steady = changed(QQQ, { worst: { date: "2021-12-01", return_pct: 0 } });
   const qqqm = changed(QLD, { return_pct: 40.0, xirr_pct: 19.5 });
   assert.equal(
     sentence([steady, { ...qqqm, symbol: "QQQM" }]),
     "2개 종목 모두 이익입니다. " +
-      "QQQ가 수익률 +54.22%로 가장 높았고, 연환산은 QQQM이 19.50%로 가장 높았습니다. " +
-      "가장 덜 흔들린 종목은 QQQ(최저 0.0%)입니다.",
+      "QQQ가 수익률 +54.22%로 가장 높았고, 연환산은 QQQM이 19.50%로 가장 높았습니다.",
   );
 });
 
@@ -230,9 +230,77 @@ test("summaryParts: 수익률 1위의 최저 수익률이 0 이상이면 '빠졌
   const steady = changed(TQQQ, { worst: { date: "2021-12-01", return_pct: 0 } });
   assert.equal(
     sentence([QQQ, steady]),
+    "2개 종목 모두 이익입니다. TQQQ가 수익률 +99.40%, 연환산 28.19%로 가장 높았습니다.",
+  );
+});
+
+test("summaryParts: 최저 수익률이 1자리로 0.0%면(−0.05와 0 사이) 빠졌다고 쓰지 않는다", () => {
+  const tiny = { date: "2024-01-02", return_pct: -0.04 };
+  const flat = changed(QQQ, { return_pct: 1.23, xirr_pct: 0.8, worst: tiny });
+  assert.equal(sentence([flat]), "QQQ는 수익률 +1.23%, 연환산 0.80%입니다.");
+
+  const steady = changed(TQQQ, { worst: tiny });
+  const parts = summaryParts([QQQ, steady]);
+  assert.equal(
+    sentenceText(parts),
+    "2개 종목 모두 이익입니다. TQQQ가 수익률 +99.40%, 연환산 28.19%로 가장 높았습니다.",
+  );
+  assert.ok(!parts.some((part) => part.tone === "neg"));
+
+  // XIRR 1위가 다를 때도 "TQQQ는 …에 0.0%까지 빠졌습니다"를 붙이지 않는다
+  assert.equal(
+    sentence([QLD, changed(steady, { xirr_pct: null })]),
     "2개 종목 모두 이익입니다. " +
-      "TQQQ가 수익률 +99.40%, 연환산 28.19%로 가장 높았습니다. " +
-      "가장 덜 흔들린 종목은 TQQQ(최저 0.0%)입니다.",
+      "TQQQ가 수익률 +99.40%로 가장 높았고, 연환산은 QLD가 25.75%로 가장 높았습니다.",
+  );
+});
+
+test("summaryParts: 최저 수익률이 1자리로 −0.1%면 빠졌다고 쓴다", () => {
+  const dipped = changed(QQQ, {
+    return_pct: 1.23,
+    xirr_pct: 0.8,
+    worst: { date: "2024-01-02", return_pct: -0.06 },
+  });
+  assert.equal(
+    sentence([dipped]),
+    `QQQ는 수익률 +1.23%, 연환산 0.80%입니다. 2024-01-02에는 ${MINUS}0.1%까지 빠졌습니다.`,
+  );
+});
+
+test("summaryParts: 수익률 1위의 XIRR이 최고 XIRR과 같으면(2자리) 문장을 나누지 않는다", () => {
+  // 앞 종목 QQQ의 XIRR이 같은 값이어도 수익률 1위 QLD로 이어 쓴다
+  const qqq = changed(QQQ, { return_pct: 50.0, xirr_pct: 20.0 });
+  const qld = changed(QLD, { return_pct: 60.0, xirr_pct: 20.0 });
+  const expected =
+    "2개 종목 모두 이익입니다. " +
+    `QLD가 수익률 +60.00%, 연환산 20.00%로 가장 높았지만 2022-06-16에는 ${MINUS}39.4%까지 빠졌습니다. ` +
+    `가장 덜 흔들린 종목은 QQQ(최저 ${MINUS}19.0%)입니다.`;
+  assert.equal(sentence([qqq, qld]), expected);
+  // 원값이 조금 달라도 화면에 보이는 2자리가 같으면 같다고 본다
+  assert.equal(sentence([changed(qqq, { xirr_pct: 20.004 }), qld]), expected);
+});
+
+test("summaryParts: 수익률 1위가 가장 덜 흔들린 종목이면 마지막 문장을 뺀다", () => {
+  const calm = changed(TQQQ, { worst: { date: "2022-06-16", return_pct: -10.0 } });
+  assert.equal(
+    sentence([QQQ, calm]),
+    "2개 종목 모두 이익입니다. " +
+      `TQQQ가 수익률 +99.40%, 연환산 28.19%로 가장 높았지만 2022-06-16에는 ${MINUS}10.0%까지 빠졌습니다.`,
+  );
+  // XIRR 1위가 달라 문장을 나눌 때도 같다
+  const qqqm = result("QQQM", {
+    ret: 40.0,
+    xirr: 19.5,
+    worst: ["2023-01-05", -25.0],
+    price: 210.0,
+    avg: 150.0,
+    under: [120, 900, 13.33],
+  });
+  assert.equal(
+    sentence([QQQ, qqqm]),
+    "2개 종목 모두 이익입니다. " +
+      "QQQ가 수익률 +54.22%로 가장 높았고, 연환산은 QQQM이 19.50%로 가장 높았습니다. " +
+      `QQQ는 2022-12-28에 ${MINUS}19.0%까지 빠졌습니다.`,
   );
 });
 
@@ -260,8 +328,10 @@ test("summaryParts: XIRR이 모두 null이면 연환산을 쓰지 않는다", ()
 test("summaryParts: 수익률·최저 수익률이 같으면 결과 순서가 앞인 종목", () => {
   const twin = { ...QLD, symbol: "QLD2" };
   assert.match(sentence([QLD, twin]), /^2개 종목 모두 이익입니다\. QLD가 /);
-  assert.match(sentence([QLD, twin]), /가장 덜 흔들린 종목은 QLD\(/);
   assert.match(sentence([twin, QLD]), /^2개 종목 모두 이익입니다\. QLD2가 /);
+  // 수익률 1위(TQQQ)와 다른 두 종목의 최저 수익률이 같다
+  assert.match(sentence([TQQQ, QLD, twin]), /가장 덜 흔들린 종목은 QLD\(/);
+  assert.match(sentence([TQQQ, twin, QLD]), /가장 덜 흔들린 종목은 QLD2\(/);
 });
 
 test("summaryParts: 결과가 없으면 빈 목록", () => {
@@ -352,6 +422,14 @@ test("highlights: 가장 깊은 손실은 최저 수익률이 가장 낮은 종�
   assert.equal(item.symbol, "QLD");
   assert.equal(item.value, `${MINUS}70.3%`);
   assert.equal(item.note, "2022-12-28");
+});
+
+test("highlights: 가장 깊은 손실이 1자리로 0.0%면 손익 색을 칠하지 않는다", () => {
+  const tiny = (base, value) => changed(base, { worst: { date: "2024-01-02", return_pct: value } });
+  const item = highlights([tiny(QQQ, -0.04), tiny(QLD, -0.02)]).find((h) => h.key === "worst");
+  assert.equal(item.symbol, "QQQ");
+  assert.equal(item.value, "0.0%");
+  assert.equal(item.tone, "");
 });
 
 test("highlights: 원금 아래였던 날은 일수로 고르고 천 단위 쉼표", () => {
