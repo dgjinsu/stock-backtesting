@@ -12,7 +12,7 @@ from src.main import Settings
 def test_settings_without_env_uses_local_defaults() -> None:
     settings = Settings.from_env({})
     assert settings.host == "127.0.0.1"
-    assert settings.port == 8000
+    assert settings.port == 8010
     assert settings.data_dir == Path("data")
 
 
@@ -53,9 +53,9 @@ def test_open_browser_when_ready_opens_once_after_healthz_answers(
 
     monkeypatch.setattr(main_module.urllib.request, "urlopen", answer)
     monkeypatch.setattr(main_module.webbrowser, "open", opened.append)
-    main_module._open_browser_when_ready("http://127.0.0.1:8000/", timeout_s=1)
-    assert asked == ["http://127.0.0.1:8000/healthz"]
-    assert opened == ["http://127.0.0.1:8000/"]
+    main_module._open_browser_when_ready("http://127.0.0.1:8010/", timeout_s=1)
+    assert asked == ["http://127.0.0.1:8010/healthz"]
+    assert opened == ["http://127.0.0.1:8010/"]
 
 
 def test_open_browser_when_ready_gives_up_after_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,5 +67,5 @@ def test_open_browser_when_ready_gives_up_after_timeout(monkeypatch: pytest.Monk
     monkeypatch.setattr(main_module.urllib.request, "urlopen", refuse)
     monkeypatch.setattr(main_module.webbrowser, "open", opened.append)
     monkeypatch.setattr(main_module.time, "sleep", lambda seconds: None)
-    main_module._open_browser_when_ready("http://127.0.0.1:8000/", timeout_s=0.05)
+    main_module._open_browser_when_ready("http://127.0.0.1:8010/", timeout_s=0.05)
     assert opened == []
