@@ -400,10 +400,23 @@ function wireSearch() {
 
 // ---------- 계산하기 ----------
 
+/** 계산 전에 포커스가 있던 요소. 계산 중 잠근 "계산하기"에서 body로 빠진 포커스를 되돌린다. */
+let focusBeforeLoading = null;
+
 function setLoading(on) {
   state.loading = on;
+  if (on) focusBeforeLoading = document.activeElement;
   renderSymbols(); // 줄마다 "받는 중"을 켜고 끈다
   $("run").disabled = on || Object.keys(validate()).length > 0;
+  if (!on) {
+    // 잠긴 버튼에 있던 포커스는 브라우저가 body로 옮긴다. 다른 곳으로 옮겨 가지 않았으면 되돌린다
+    const lost = !document.activeElement || document.activeElement === document.body;
+    const back = focusBeforeLoading;
+    if (lost && back && back !== document.body && back.isConnected && !back.disabled) {
+      back.focus({ preventScroll: true });
+    }
+    focusBeforeLoading = null;
+  }
   $("run").querySelector(".spinner").hidden = !on;
   $("run-label").textContent = on ? "계산 중…" : "계산하기";
   setStatus(on ? `${state.symbols.length}개 종목 주가를 받고 계산하는 중입니다` : "");
@@ -1022,6 +1035,8 @@ function showTab() {
 /**
  * 요약이 아닌 탭에서는 왼쪽 조건 패널을 결과 위 한 줄로 접고 결과가 전체 폭을 쓴다.
  * "조건 펼치기"를 누르면 그 탭에 머문 채 패널을 열고, 같은 버튼("조건 접기")으로 다시 접는다.
+ * 포커스가 패널 안에 있을 때 접으면(계산을 마치고 보던 탭으로 돌아갈 때) 포커스를
+ * "조건 펼치기"로 옮긴다. 그대로 두면 숨은 요소와 함께 body로 사라진다.
  */
 function layoutPanel() {
   const { bar, collapsed } = panelFold({
@@ -1029,11 +1044,13 @@ function layoutPanel() {
     tab: resultView.tab,
     expanded: resultView.expanded,
   });
-  $("panel").hidden = collapsed;
+  const focusInPanel = $("panel").contains(document.activeElement);
   $("cond-bar").hidden = !bar;
   $("cond-bar").setAttribute("aria-label", collapsed ? "조건 (접힘)" : "조건 (펼침)");
   $("cond-toggle").setAttribute("aria-expanded", String(!collapsed));
   $("cond-toggle-label").textContent = collapsed ? "조건 펼치기" : "조건 접기";
+  $("panel").hidden = collapsed;
+  if (collapsed && focusInPanel) $("cond-toggle").focus(); // 줄을 먼저 보이게 한 뒤에 옮긴다
 }
 
 /** 접힌 줄의 종목과 조건 한 줄. 폼이 아니라 보이는 결과를 계산한 조건(params)으로 만든다. */
