@@ -7,6 +7,7 @@ from typing import Any
 
 import pytest
 
+from src import engine
 from src.engine import (
     Analysis,
     EngineError,
@@ -800,6 +801,27 @@ def test_series_without_exchange_tz_defaults_to_empty() -> None:
     """시간대 없이 만든 Series는 ""(모름)다. 기존 Series(symbol, currency, dates, close) 호출이 그대로 돈다."""
     series = Series("X", "KRW", [date(2024, 1, 2)], [100.0])
     assert series.exchange_tz == ""
+
+
+@pytest.mark.parametrize(
+    ("a_tz", "b_tz", "same"),
+    [
+        ("America/New_York", "America/New_York", True),
+        ("Asia/Seoul", "America/New_York", False),
+        ("", "America/New_York", False),
+        ("", "", False),
+    ],
+    ids=["same-tz", "other-tz", "one-empty", "both-empty"],
+)
+def test_same_exchange_true_only_when_both_tz_known_and_equal(
+    a_tz: str, b_tz: str, same: bool
+) -> None:
+    """9-6, 결정 d29: 시간대가 둘 다 비어 있지 않고 같을 때만 같은 거래소다. 하나라도 모르면 다른 거래소.
+    simulate_rule과 /api/strategy의 basis가 같이 쓰는 판정이라 순서를 바꿔도 같은 값이어야 한다."""
+    a = Series("A", "USD", [date(2024, 1, 2)], [100.0], exchange_tz=a_tz)
+    b = Series("B", "USD", [date(2024, 1, 2)], [100.0], exchange_tz=b_tz)
+    assert engine.same_exchange(a, b) is same
+    assert engine.same_exchange(b, a) is same
 
 
 @pytest.mark.parametrize(

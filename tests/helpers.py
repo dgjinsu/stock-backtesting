@@ -122,9 +122,15 @@ class FakeYahoo:
             self.in_flight -= 1
 
 
+def yahoo_payload(symbol: str) -> dict[str, Any]:
+    """저장한 Yahoo 응답 JSON의 새 사본. 고쳐서 FakeYahoo.extra에 넣어도 fixture 파일은 그대로다."""
+    raw: dict[str, Any] = json.loads((YAHOO / f"{symbol}.json").read_text(encoding="utf-8"))
+    return raw
+
+
 def inverted_fx_payload(source: str, target: str) -> dict[str, Any]:
     """저장한 환율 응답의 값을 뒤집어 반대 방향 환율 응답을 만든다 (예: USDKRW=X → KRWUSD=X)."""
-    raw = json.loads((YAHOO / f"{source}.json").read_text(encoding="utf-8"))
+    raw = yahoo_payload(source)
     result = raw["chart"]["result"][0]
     result["meta"]["currency"] = target
     for key, block in (("quote", "close"), ("adjclose", "adjclose")):
