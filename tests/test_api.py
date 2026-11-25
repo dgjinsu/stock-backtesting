@@ -23,6 +23,7 @@ from tests.helpers import (
     inverted_fx_payload,
     load_expected,
     load_series,
+    payload_from,
     yahoo_payload,
 )
 
@@ -862,6 +863,21 @@ def test_strategy_fee_reaches_both_sweeps(api: Api) -> None:
     assert result["start_sweep"]["2021-12"] == pytest.approx(FEE_QLD["return_pct"], abs=0.01)
 
 
+def test_strategy_whole_shares_reach_both_sweeps(api: Api) -> None:
+    """두 바꿔 보기는 요청의 fractional도 따른다 (9-7 "2·4절 그대로"). QQQ 정수 주의 1일 평단가와 2021-12
+    시작 수익률이 7절 "월1일 200만원 정수주" 사례와 같다. QLD는 두 방식 차이가 허용 오차 안이라 QQQ로 본다."""
+    whole = _v1_result("monthly1-krw2m-whole-shares", "QQQ")
+    fractional = _v1_result("monthly1-krw2m", "QQQ")
+    # 이 테스트가 가려내는지: 소수점 매수 값과는 허용 오차보다 크게 다르다
+    assert whole["avg_cost_asset"] != pytest.approx(fractional["avg_cost_asset"], abs=0.01)
+    assert whole["return_pct"] != pytest.approx(fractional["return_pct"], abs=0.01)
+    body = _strategy(api.client, symbol="QQQ", fractional=False)
+    assert body["errors"] == []
+    result = body["result"]
+    assert result["anchor_sweep"]["1"] == pytest.approx(whole["avg_cost_asset"], abs=0.01)
+    assert result["start_sweep"]["2021-12"] == pytest.approx(whole["return_pct"], abs=0.01)
+
+
 def test_strategy_short_period_has_null_anchor_and_empty_start_sweep(api: Api) -> None:
     """9-7: 그 기준일로 매수일이 없으면 null(25일), 있으면 값(10일). 끝날짜 달의 6개월 전 달이 시작일보다
     앞이면 시작할 달이 없어 {}다. 키 29개는 null이어도 그대로 있다."""
@@ -887,6 +903,18 @@ def test_strategy_unknown_reference_chart_drops_switch_and_keeps_sweeps(api: Api
     assert result["chart"]["total_days"] == V2["metrics"]["trading_days"]
     _assert_anchor_sweep_matches_v2(result["anchor_sweep"])
     _assert_start_sweep_matches_v2(result["start_sweep"])
+
+
+def test_strategy_sweep_engine_error_returns_null_result(api: Api) -> None:
+    """바꿔 보기 한 점이라도 계산할 수 없으면 result는 null이고 종목 오류다 (상세 설계 4절).
+
+    환율이 2021-11-29부터 있으면 요청(매월 1일, 첫 매수 12-01)과 시작 시점은 계산되지만, 매수일 바꿔 보기의
+    25일은 2021-11-26에 사서 그날 환율이 없다."""
+    api.yahoo.extra["USDKRW=X"] = payload_from("USDKRW=X", date(2021, 11, 29))
+    body = _strategy(api.client)
+    assert body["result"] is None
+    assert [e["symbol"] for e in body["errors"]] == ["QLD"]
+    assert "USDKRW=X 환율이 2021-11-26 이전에는 없습니다" in body["errors"][0]["message"]
 
 
 # 로그와 속도

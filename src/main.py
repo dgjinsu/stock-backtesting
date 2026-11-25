@@ -381,9 +381,10 @@ async def _fetch_ref(market: Market, request: StrategyRequest) -> PriceHistory |
 async def run_strategy(market: Market, request: StrategyRequest, today: date) -> StrategyResponse:
     """종목(+환율)과 기준 종목을 겹쳐 받고 같은 예산 전략 5개를 계산한다 (계산 규칙 9-6).
 
-    엔진에는 시작일·끝날짜로 자르지 않은 전체 데이터를 넘긴다. 이평선은 시작일 이전 주가를 쓰고(9-6),
-    진행 중인 달은 데이터 마지막 날을 보고 판정한다(2절). 기준 종목만 실패하면 레버리지 전환만 빼고
-    돌려준다 (결정 d31).
+    전략별 평가금 그래프와 매수일·시작 시점 바꿔 보기(9-7)도 같이 만든다. 엔진에는 시작일·끝날짜로
+    자르지 않은 전체 데이터를 넘긴다. 이평선은 시작일 이전 주가를 쓰고(9-6), 진행 중인 달은 데이터 마지막
+    날을 보고 판정한다(2절). 기준 종목만 실패하면 레버리지 전환만 빼고 돌려준다 (결정 d31). 전략이나
+    바꿔 보기에서 EngineError가 나면 result는 null이고 종목 오류다.
     """
     params = _to_params(request, today)
     fetched, ref_fetched = await asyncio.gather(
