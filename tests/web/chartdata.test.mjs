@@ -19,6 +19,7 @@ import {
   rangeFrom,
   rangeStart,
   sampledNote,
+  sparkline,
   splitMarks,
   splitsOf,
 } from "../../web/chartdata.js";
@@ -324,4 +325,70 @@ test("splitMarks: 줄인 축의 최근 1년에서 첫 점보다 앞이어도 보
   ]);
   // 보는 기간(1년 전 날) 앞의 분할은 여전히 빠진다
   assert.deepEqual(splitMarks(["2025-11-20 2:1 분할 반영"], labels, from), []);
+});
+
+// ---------- 카드의 작은 수익률 그래프 (F-12) ----------
+
+const BOX = { width: 40, height: 22, pad: 1 };
+
+test("sparkline: x는 날짜축 위치, y는 값이 클수록 위. 0%가 범위에 들어간다", () => {
+  // 값 0~20: y = 1 + (20 − v) / 20 × 20. x = 위치 × 40 / 4
+  assert.deepEqual(sparkline([0, 5, 10, 15, 20], BOX), {
+    path: "M0 21L10 16L20 11L30 6L40 1",
+    zeroY: 21,
+    last: 20,
+    min: 0,
+    max: 20,
+  });
+});
+
+test("sparkline: null은 건너뛰고, 빈 자리 뒤에서 선을 새로 시작한다", () => {
+  const line = sparkline([null, 0, 10, null, 20], BOX);
+  assert.equal(line.path, "M10 21L20 11M40 1");
+  assert.equal(line.last, 20);
+});
+
+test("sparkline: 첫 매수 전 null은 그리지 않고 x 자리는 날짜축 그대로", () => {
+  assert.equal(sparkline([null, null, 10, 20, 20], BOX).path, "M20 11L30 1L40 1");
+});
+
+test("sparkline: 손실과 이익이 섞이면 0% 선이 가운데쯤", () => {
+  const line = sparkline([-10, 10], BOX);
+  assert.equal(line.path, "M0 21L40 1");
+  assert.equal(line.zeroY, 11);
+  assert.deepEqual([line.min, line.max], [-10, 10]);
+});
+
+test("sparkline: 모두 0보다 크면 0% 선은 맨 아래, 모두 작으면 맨 위", () => {
+  assert.equal(sparkline([10, 20], BOX).zeroY, 21);
+  assert.equal(sparkline([-10, -20], BOX).zeroY, 1);
+});
+
+test("sparkline: 값이 모두 같으면(모두 0) 가운데 가로선", () => {
+  const line = sparkline([0, 0, 0], BOX);
+  assert.equal(line.path, "M0 11L20 11L40 11");
+  assert.equal(line.zeroY, 11);
+});
+
+test("sparkline: 날짜가 하나면 가운데에 둔다", () => {
+  assert.equal(sparkline([5], BOX).path, "M20 1");
+  assert.equal(sparkline([null, 5], BOX).path, "M40 1"); // 날짜가 둘이면 그 자리
+});
+
+test("sparkline: 좌표는 소수 1자리로 줄인다", () => {
+  const line = sparkline([0, 1, 3], { width: 10, height: 10, pad: 0 });
+  // y(1) = (3 − 1) / 3 × 10 = 6.666… → 6.7
+  assert.equal(line.path, "M0 10L5 6.7L10 0");
+});
+
+test("sparkline: 그릴 값이 없으면 null", () => {
+  assert.equal(sparkline([], BOX), null);
+  assert.equal(sparkline([null, null], BOX), null);
+  assert.equal(sparkline(undefined, BOX), null);
+});
+
+test("sparkline: 기본 상자는 300×48 (카드 SVG viewBox)", () => {
+  const line = sparkline([0, 100]);
+  assert.equal(line.path, "M0 46L300 2");
+  assert.equal(line.zeroY, 46);
 });
