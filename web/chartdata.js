@@ -1,4 +1,6 @@
-// 그래프 데이터, 매수 내역 미리보기, CSV를 만드는 순수 함수 (F-07, F-08). DOM 없음.
+// 그래프 데이터, 매수 내역 미리보기, CSV를 만드는 순수 함수 (F-07, F-08, F-13). DOM 없음.
+
+import { money } from "./format.js";
 
 /** 종목 선 모양. 색(--c1~--c8)과 함께 종목에 붙는다 (상세 설계 5절). */
 export const DASHES = ["", "7 4", "2 3", "10 3 2 3", "12 4", "4 4", "1 4", "8 3 1 3"];
@@ -113,4 +115,86 @@ export function sampledNote(chart) {
     `기간이 길어 그래프는 ${n(chart.total_days)}일 중 ${n(chart.dates.length)}점만 골라 그렸습니다. ` +
     "첫날·마지막 날·최고·최저 수익률 날은 빠지지 않았고, 계산은 모든 날로 했습니다."
   );
+}
+
+// ---------- 그래프 더하기 (F-13) ----------
+
+/** 보는 기간. years가 null이면 전체. 계산은 그대로고 그리는 구간만 바뀐다. */
+export const RANGES = [
+  { key: "1y", label: "최근 1년", years: 1 },
+  { key: "3y", label: "3년", years: 3 },
+  { key: "all", label: "전체", years: null },
+];
+
+/** iso의 years년 전 날. 그해에 2월 29일이 없으면 2월 28일. */
+function yearsBefore(iso, years) {
+  const [y, m, d] = iso.split("-").map(Number);
+  const lastDay = new Date(Date.UTC(y - years, m, 0)).getUTCDate();
+  return new Date(Date.UTC(y - years, m - 1, Math.min(d, lastDay))).toISOString().slice(0, 10);
+}
+
+/**
+ * 보는 기간 시작 날짜: 마지막 날짜의 years년 전 날(그날 포함). 날짜축에 없는 날일 수 있다.
+ * 전체(null)이거나 날짜축이 years년보다 짧으면 첫 날짜, 날짜가 없으면 null.
+ */
+export function rangeFrom(dates, years) {
+  if (!dates.length) return null;
+  if (!years) return dates[0];
+  const from = yearsBefore(dates.at(-1), years);
+  return from > dates[0] ? from : dates[0];
+}
+
+/** 보는 기간의 첫 위치: rangeFrom 이후 첫 날짜. 전체이거나 날짜축이 years년보다 짧으면 0. */
+export function rangeStart(dates, years) {
+  const from = rangeFrom(dates, years);
+  return from === null ? 0 : Math.max(dates.findIndex((d) => d >= from), 0);
+}
+
+/** 가장 큰 최고 평가금이 가장 작은 것의 이 배수를 넘으면 로그 축으로 먼저 연다. */
+const LOG_FIRST_RATIO = 5;
+
+/**
+ * 로그 축 먼저: peaks([{symbol, value}], value는 종목의 최고 평가금)에서 가장 큰 값이
+ * 가장 작은 값의 5배를 넘으면 가장 큰 종목 {symbol, value}, 아니면 null.
+ * 값이 없거나(null) 0 이하인 종목은 건너뛴다 (로그 축에 못 그린다). 종목이 하나면 null.
+ */
+export function logFirst(peaks) {
+  const valid = peaks.filter((p) => p.value !== null && p.value !== undefined && p.value > 0);
+  if (valid.length < 2) return null;
+  const top = valid.reduce((a, b) => (b.value > a.value ? b : a));
+  const low = Math.min(...valid.map((p) => p.value));
+  return top.value > low * LOG_FIRST_RATIO ? { symbol: top.symbol, value: top.value } : null;
+}
+
+/** 로그 축으로 먼저 연 이유 한 줄 (시안 v2). currency는 투자 통화. */
+export function logFirstNote(pick, currency) {
+  return (
+    "로그 축: 같은 간격이 같은 배수입니다. " +
+    `${pick.symbol} 평가금(최고 ${money(pick.value, currency)})이 다른 종목보다 훨씬 커서 ` +
+    "로그 축으로 먼저 보여 줍니다."
+  );
+}
+
+const SPLIT_NOTE = /^(\d{4}-\d{2}-\d{2}) (\S+) 분할 반영$/;
+
+/** results[].notes("2025-11-20 2:1 분할 반영", 상세 설계 4절)에서 분할만 읽는다. */
+export function splitsOf(notes) {
+  return (notes ?? []).flatMap((note) => {
+    const match = SPLIT_NOTE.exec(note);
+    return match ? [{ date: match[1], ratio: match[2] }] : [];
+  });
+}
+
+/**
+ * 분할일 세로선: dates(지금 그리는 날짜축)에서 그날, 점을 줄여 그날이 없으면 그 뒤 첫 날짜의
+ * 위치. from(보는 기간 시작 날짜, rangeFrom) 앞이나 날짜축 뒤(끝날짜 뒤 분할)는 뺀다.
+ * 줄인 축에서는 from과 첫 점 사이의 분할도 보는 기간 안이라 첫 점에 그린다.
+ */
+export function splitMarks(notes, dates, from = dates[0]) {
+  if (!dates.length) return [];
+  return splitsOf(notes).flatMap((split) => {
+    if (split.date < from || split.date > dates.at(-1)) return [];
+    const index = dates.findIndex((d) => d >= split.date);
+    return [{ index, ...split, label: `${split.ratio} 분할` }];
+  });
 }

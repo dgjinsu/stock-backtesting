@@ -1,16 +1,22 @@
-// 결과 아래쪽: 그래프 3개(F-07)와 매수 내역·CSV(F-08). Chart.js 4는 index.html에서 불러온다.
+// 결과 아래쪽: 그래프 4개(F-07, F-13)와 매수 내역·CSV(F-08). Chart.js 4는 index.html에서 불러온다.
 
 import {
   BUY_COLUMNS,
+  RANGES,
   buysCsv,
   csvFileName,
   dashOf,
   dateTick,
   investedLines,
   lastValue,
+  logFirst,
+  logFirstNote,
   logSafe,
   previewRows,
+  rangeFrom,
+  rangeStart,
   sampledNote,
+  splitMarks,
 } from "./chartdata.js";
 import { h, icon, swatch } from "./dom.js";
 import { fx, money, pct, price, qty } from "./format.js";
@@ -18,12 +24,30 @@ import { fx, money, pct, price, qty } from "./format.js";
 const TABS = [
   { key: "value", label: "평가금·투자금" },
   { key: "return", label: "수익률" },
+  { key: "drawdown", label: "낙폭" },
   { key: "price", label: "주가·평단가" },
 ];
 
-/** 다시 계산해도 유지하는 보기 상태. */
-const view = { tab: "value", log: false, priceSymbol: null, buySymbol: null, expanded: false };
-let current = null; // { data, slotOf, chart, wrap, legend }
+const DRAWDOWN_HINT =
+  "낙폭: 그날 평가금이 그때까지의 최고 평가금보다 얼마나 낮은지. 적립 중이라 넣은 돈도 평가금에 들어갑니다.";
+const SPLIT_HINT =
+  "세로선은 주식 분할일입니다. 과거 가격은 분할을 반영해 지금 주식 수 기준으로 바뀌어 있습니다.";
+
+/**
+ * 다시 계산해도 유지하는 보기 상태. logPicked는 사용자가 마지막으로 고른 축이고, log는 지금 축이다
+ * (새 결과가 로그 축 먼저에 걸리면 log만 켠다). hidden(범례로 숨긴 종목)은 새 결과마다 비운다.
+ */
+const view = {
+  tab: "value",
+  log: false,
+  logPicked: false,
+  range: "all",
+  hidden: new Set(),
+  priceSymbol: null,
+  buySymbol: null,
+  expanded: false,
+};
+let current = null; // { data, slotOf, chart, wrap, legend, hints, logFirst }
 
 const cssVar = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 
@@ -50,6 +74,47 @@ const crosshair = {
     ctx.restore();
   },
 };
+
+/** 주식 분할일 세로 점선과 "2:1 분할 2025-11-20" 글자 (F-13). marks는 splitMarks 결과. */
+function splitLines(marks) {
+  const xOf = (chart, mark) => chart.scales.x.getPixelForValue(mark.index);
+  return {
+    id: "splitLines",
+    // 선은 주가 선 아래에, 글자는 위에 그린다
+    beforeDatasetsDraw(chart) {
+      const { ctx, chartArea } = chart;
+      ctx.save();
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 3]);
+      ctx.strokeStyle = cssVar("--muted");
+      for (const mark of marks) {
+        const x = Math.round(xOf(chart, mark)) + 0.5;
+        ctx.beginPath();
+        ctx.moveTo(x, chartArea.top);
+        ctx.lineTo(x, chartArea.bottom);
+        ctx.stroke();
+      }
+      ctx.restore();
+    },
+    afterDatasetsDraw(chart) {
+      const { ctx, chartArea } = chart;
+      ctx.save();
+      ctx.font = `11px ${getComputedStyle(document.body).fontFamily}`;
+      ctx.textBaseline = "middle";
+      for (const mark of marks) {
+        const x = xOf(chart, mark);
+        const text = `${mark.label} ${mark.date}`;
+        const width = ctx.measureText(text).width + 8;
+        const left = x + 4 + width > chartArea.right ? x - 4 - width : x + 4;
+        ctx.fillStyle = cssVar("--surface");
+        ctx.fillRect(left, chartArea.top + 2, width, 16);
+        ctx.fillStyle = cssVar("--muted");
+        ctx.fillText(text, left + 4, chartArea.top + 10);
+      }
+      ctx.restore();
+    },
+  };
+}
 
 // ---------- 그래프 데이터 ----------
 
@@ -81,39 +146,70 @@ function refLine(label, values, dash = []) {
   };
 }
 
-/** 지금 탭의 datasets, 값 형식, 범례 항목. */
+/**
+ * 종목마다 선 하나인 그래프(수익률, 낙폭). 범례로 숨긴 종목은 datasets에서 빼서
+ * 세로축이 남은 종목에 맞춰진다. 범례 값은 보는 기간과 상관없이 마지막 값이다.
+ */
+function perSymbolModel(data, slotOf, cut, key, format) {
+  const series = data.chart.series;
+  const symbols = data.results.map((r) => r.symbol);
+  return {
+    format,
+    tick: (v) => `${v}%`,
+    datasets: symbols
+      .filter((s) => !view.hidden.has(s))
+      .map((s) => symbolLine(s, cut(series[s][key]), slotOf(s))),
+    legend: symbols.map((s) => ({
+      slot: slotOf(s),
+      label: s,
+      value: format(lastValue(series[s][key])),
+      toggle: s,
+      hidden: view.hidden.has(s),
+    })),
+    zeroLine: true,
+  };
+}
+
+/**
+ * 지금 탭의 날짜축, datasets, 값 형식, 범례 항목, 그래프 아래 안내.
+ * 보는 기간(F-13)은 날짜축과 선을 같은 위치에서 자른다 (범례 마지막 값과 툴팁 값은 그대로).
+ */
 function tabModel(data, slotOf) {
   const chart = data.chart;
   const invest = data.params.currency;
   const symbols = data.results.map((r) => r.symbol);
+  const years = RANGES.find((r) => r.key === view.range)?.years ?? null;
+  const from = rangeFrom(chart.dates, years); // 분할일은 잘린 축의 첫 점이 아니라 이 날짜로 거른다
+  const start = rangeStart(chart.dates, years);
+  const cut = (values) => values.slice(start);
+  const labels = cut(chart.dates);
   if (view.tab === "return") {
-    return {
-      format: (v) => pct(v),
-      tick: (v) => `${v}%`,
-      datasets: symbols.map((s) => symbolLine(s, chart.series[s].return_pct, slotOf(s))),
-      legend: symbols.map((s) => ({
-        slot: slotOf(s),
-        label: s,
-        value: pct(lastValue(chart.series[s].return_pct)),
-      })),
-      zeroLine: true,
-    };
+    const model = perSymbolModel(data, slotOf, cut, "return_pct", (v) => pct(v));
+    return { labels, ...model, hints: [] };
+  }
+  if (view.tab === "drawdown") {
+    // 범례 마지막 값은 카드의 "평가금 최고점 대비"와 같은 자리수
+    const model = perSymbolModel(data, slotOf, cut, "drawdown", (v) => pct(v, 1));
+    return { labels, ...model, hints: [DRAWDOWN_HINT] };
   }
   if (view.tab === "price") {
     const symbol = symbols.includes(view.priceSymbol) ? view.priceSymbol : symbols[0];
     view.priceSymbol = symbol;
-    const cur = data.results.find((r) => r.symbol === symbol).currency;
+    const result = data.results.find((r) => r.symbol === symbol);
+    const cur = result.currency;
     const series = chart.series[symbol];
     const pos = cssVar("--pos");
     const neg = cssVar("--neg");
+    const marks = splitMarks(result.notes, labels, from);
     return {
+      labels,
       format: (v) => price(v, cur),
       tick: (v) => (v === 0 ? "0" : price(v, cur)),
       datasets: [
-        symbolLine(`${symbol} 주가`, series.price, slotOf(symbol), {
+        symbolLine(`${symbol} 주가`, cut(series.price), slotOf(symbol), {
           fill: { target: 1, above: withAlpha(pos, 0.12), below: withAlpha(neg, 0.12) },
         }),
-        refLine("평단가", series.avg_cost),
+        refLine("평단가", cut(series.avg_cost)),
       ],
       legend: [
         {
@@ -123,53 +219,102 @@ function tabModel(data, slotOf) {
         },
         { ref: true, slot: 0, label: "평단가", value: price(lastValue(series.avg_cost), cur) },
       ],
-      hint: "주가가 평단가 위인 구간(초록)은 이익, 아래(빨강)는 손실입니다.",
+      marks,
+      hints: [
+        "주가가 평단가 위인 구간(초록)은 이익, 아래(빨강)는 손실입니다.",
+        marks.length ? SPLIT_HINT : null,
+      ],
     };
   }
   const invested = investedLines(chart, symbols);
-  const prep = (values) => (view.log ? logSafe(values) : values);
+  const prep = (values) => cut(view.log ? logSafe(values) : values);
+  // 종목마다 나뉜 투자금 선은 그 종목과 같이 숨긴다. 하나로 합친 선(symbol null)은 늘 보인다
+  const off = (symbol) => symbol !== null && view.hidden.has(symbol);
   return {
+    labels,
     format: (v) => money(v, invest),
     tick: (v) => money(v, invest),
     datasets: [
-      ...symbols.map((s) => symbolLine(s, prep(chart.series[s].value), slotOf(s))),
-      ...invested.map((line) =>
-        refLine(
-          line.symbol ? `투자금 ${line.symbol}` : "투자금",
-          prep(line.values),
-          line.symbol ? dashOf(slotOf(line.symbol)) : [],
+      ...symbols
+        .filter((s) => !off(s))
+        .map((s) => symbolLine(s, prep(chart.series[s].value), slotOf(s))),
+      ...invested
+        .filter((line) => !off(line.symbol))
+        .map((line) =>
+          refLine(
+            line.symbol ? `투자금 ${line.symbol}` : "투자금",
+            prep(line.values),
+            line.symbol ? dashOf(slotOf(line.symbol)) : [],
+          ),
         ),
-      ),
     ],
     legend: [
       ...symbols.map((s) => ({
         slot: slotOf(s),
         label: s,
         value: money(lastValue(chart.series[s].value), invest),
+        toggle: s,
+        hidden: off(s),
       })),
       ...invested.map((line) => ({
         ref: true,
         slot: line.symbol ? slotOf(line.symbol) : 0, // 종목마다 나뉘면 회색 선을 선 모양으로 가른다
         label: line.symbol ? `투자금 ${line.symbol}` : "투자금",
         value: money(lastValue(line.values), invest),
+        hidden: off(line.symbol),
       })),
     ],
     log: view.log,
+    hints: [view.log && current.logFirst ? logFirstNote(current.logFirst, invest) : null],
   };
 }
 
 // ---------- 그리기 ----------
 
+/**
+ * 범례. 종목 항목(toggle)은 누르면 숨기고 다시 누르면 보이는 버튼이다 (aria-pressed: 보이면 true).
+ * 숨김은 색만으로 알리지 않고 줄 긋기와 "숨김" 글자로 알린다. 투자금·평단가는 버튼이 아니다.
+ */
 function legendItems(items) {
-  return items.map((item) =>
-    h(
-      "li",
-      {},
+  return items.map((item) => {
+    const content = [
       swatch(item.slot, 22, item.ref ? { color: "var(--ref)" } : {}),
       h("span", { class: "lg-label", text: item.label }),
       h("strong", { text: item.value }),
-    ),
-  );
+      // 버튼 안에서는 aria-pressed가 상태를 알리므로 이름이 바뀌지 않게 읽지 않는다 (APG 토글
+      // 버튼). 버튼이 아닌 투자금 항목은 상태를 알릴 다른 수단이 없어 읽게 둔다
+      item.hidden
+        ? h("span", {
+            class: "lg-off",
+            text: "숨김",
+            "aria-hidden": item.toggle ? "true" : null,
+          })
+        : null,
+    ];
+    const li = (...children) => h("li", { class: item.hidden ? "off" : null }, ...children);
+    if (!item.toggle) return li(...content);
+    return li(
+      h(
+        "button",
+        {
+          type: "button",
+          class: "lg-btn",
+          "aria-pressed": String(!item.hidden),
+          "data-focus": `legend:${item.toggle}`,
+          title: "누르면 그래프에서 숨기거나 다시 보입니다", // 상태와 상관없이 같은 글
+          onclick: () => toggleSymbol(item.toggle),
+        },
+        ...content,
+      ),
+    );
+  });
+}
+
+/** 범례로 종목을 숨기거나 다시 보인다. 그래프 종류를 바꿔도 유지하고, 새 결과에서 모두 보인다. */
+function toggleSymbol(symbol) {
+  if (view.hidden.has(symbol)) view.hidden.delete(symbol);
+  else view.hidden.add(symbol);
+  keepFocus(current.legend, draw);
 }
 
 const MISSING =
@@ -220,34 +365,43 @@ function draw() {
 function drawNow() {
   current.chart?.destroy();
   current.chart = null;
-  const { data, slotOf, wrap, legend, hint } = current;
+  const { data, slotOf, wrap, legend, hints } = current;
   const model = tabModel(data, slotOf);
   legend.replaceChildren(...legendItems(model.legend));
-  hint.textContent = model.hint ?? "";
-  hint.hidden = !model.hint;
+  const lines = model.hints.filter(Boolean);
+  hints.replaceChildren(...lines.map((text) => h("p", { class: "hint", text })));
+  hints.hidden = !lines.length;
   const ChartJs = globalThis.Chart;
   if (!ChartJs) {
     waitForChartJs(wrap);
     return;
   }
-  current.chart = newChart(ChartJs, wrap, data, model);
+  current.chart = newChart(ChartJs, wrap, model);
 }
 
-function newChart(ChartJs, wrap, data, model) {
-  const values = model.legend.map((i) => `${i.label} 마지막 ${i.value}`).join(", ");
+function newChart(ChartJs, wrap, model) {
+  const values = model.legend
+    .map((i) => `${i.label} 마지막 ${i.value}${i.hidden ? " (숨김)" : ""}`)
+    .join(", ");
+  const range = RANGES.find((r) => r.key === view.range);
+  const span = range?.years ? `(${range.label})` : "";
+  const marks = model.marks ?? [];
+  const splits = marks.length
+    ? ` 세로 점선: ${marks.map((m) => `${m.date} ${m.label}`).join(", ")}.`
+    : "";
   const canvas = h("canvas", {
     role: "img",
-    "aria-label": `${TABS.find((t) => t.key === view.tab).label} 그래프. ${values}`,
+    "aria-label": `${TABS.find((t) => t.key === view.tab).label} 그래프${span}. ${values}.${splits}`,
   });
   wrap.replaceChildren(canvas);
   const axis = cssVar("--axis");
   const grid = cssVar("--grid");
   ChartJs.defaults.font.family = getComputedStyle(document.body).fontFamily;
-  const tickText = dateTick(data.chart.dates);
+  const tickText = dateTick(model.labels);
   return new ChartJs(canvas, {
     type: "line",
-    data: { labels: data.chart.dates, datasets: model.datasets },
-    plugins: [crosshair],
+    data: { labels: model.labels, datasets: model.datasets },
+    plugins: marks.length ? [crosshair, splitLines(marks)] : [crosshair],
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -359,6 +513,7 @@ function chartToolsChildren(data, slotOf, rebuild) {
         (o) => o.key === view.log,
         (o) => {
           view.log = o.key;
+          view.logPicked = o.key;
           rebuild();
         },
         "세로축",
@@ -380,16 +535,38 @@ function chartToolsChildren(data, slotOf, rebuild) {
       ),
     );
   }
+  children.push(
+    segButtons(
+      RANGES,
+      (r) => r.key === view.range,
+      (r) => {
+        view.range = r.key;
+        rebuild();
+      },
+      "보는 기간",
+    ),
+  );
   return children;
 }
 
-/** 그래프 상자. 요소를 문서에 붙인 뒤(같은 작업 안) 그린다. */
+/**
+ * 그래프 상자. 요소를 문서에 붙인 뒤(같은 작업 안) 그린다. 새 결과마다 불리므로 여기서
+ * 숨긴 종목을 비우고, 로그 축 먼저(F-13)에 걸리면 평가금 그래프를 로그 축으로 연다.
+ * 걸리지 않으면 사용자가 마지막으로 고른 축을 둔다.
+ */
 export function chartSection(data, slotOf) {
   clearCharts();
   const wrap = h("div", { class: "chart-wrap" });
   const legend = h("ul", { class: "legend", "aria-label": "범례와 마지막 값" });
-  const hint = h("p", { class: "hint", hidden: true });
-  current = { data, slotOf, chart: null, wrap, legend, hint };
+  const hints = h("div", { class: "chart-hints", hidden: true });
+  const peaks = data.results.map((r) => ({
+    symbol: r.symbol,
+    value: r.summary.peak_value?.value ?? null,
+  }));
+  const pick = logFirst(peaks);
+  view.hidden = new Set();
+  view.log = pick ? true : view.logPicked;
+  current = { data, slotOf, chart: null, wrap, legend, hints, logFirst: pick };
   const note = sampledNote(data.chart);
   queueMicrotask(draw);
   return h(
@@ -406,7 +583,7 @@ export function chartSection(data, slotOf) {
       { class: "box-body" },
       legend,
       wrap,
-      hint,
+      hints,
       note ? h("p", { class: "hint", text: note }) : null,
     ),
   );
