@@ -25,36 +25,34 @@ FIELD_MESSAGES = {
     "fractional": "소수점 매수 여부는 true 또는 false입니다",
     "fee_pct": "수수료는 0~10% 사이 숫자입니다",
     "q": "검색어는 50자까지 넣어 주세요",
+    "symbol": "종목 코드 하나를 문자열로 넣어 주세요",
+    "ma_days": "이평선 기간은 20, 60, 120, 200일 중 하나입니다",
+    "switch_ref": "기준 종목 코드는 문자열로 넣어 주세요",
 }
 
 
-class BacktestRequest(BaseModel):
-    """POST /api/backtest 요청. 한 항목만 보고 알 수 있는 검사는 여기서, 항목끼리 맞추는 검사는 main에서."""
+def _clean_symbol(raw: str) -> str:
+    """종목 코드 하나를 다듬는다 (앞뒤 공백 제거, 대문자). 형식이 틀리면 ValueError."""
+    code = raw.strip().upper()
+    if not SYMBOL_PATTERN.fullmatch(code):
+        raise ValueError(f"종목 코드 형식이 올바르지 않습니다: '{raw}'")
+    return code
 
-    symbols: list[str]
+
+class Conditions(BaseModel):
+    """두 요청(/api/backtest, /api/strategy)이 같이 쓰는 조건 (조건 패널, F-09).
+
+    한 항목만 보고 알 수 있는 검사는 여기서, 항목끼리 맞추는 검사는 main에서 한다.
+    """
+
     start: date
     end: date
     freq: Literal["daily", "weekly", "monthly"]
     anchor: int | None = None
-    amount: float
+    amount: float  # 투자 통화
     currency: Literal["KRW", "USD"]
     fractional: bool = True
-    fee_pct: float = 0.0
-
-    @field_validator("symbols")
-    @classmethod
-    def _check_symbols(cls, symbols: list[str]) -> list[str]:
-        if not 1 <= len(symbols) <= MAX_SYMBOLS:
-            raise ValueError(FIELD_MESSAGES["symbols"])
-        cleaned: list[str] = []
-        for raw in symbols:
-            code = raw.strip().upper()
-            if not SYMBOL_PATTERN.fullmatch(code):
-                raise ValueError(f"종목 코드 형식이 올바르지 않습니다: '{raw}'")
-            if code in cleaned:
-                raise ValueError(f"같은 종목이 두 번 들어 있습니다: {code}")
-            cleaned.append(code)
-        return cleaned
+    fee_pct: float = 0.0  # %
 
     @field_validator("amount")
     @classmethod
@@ -69,6 +67,38 @@ class BacktestRequest(BaseModel):
         if not (math.isfinite(fee) and 0 <= fee <= 10):
             raise ValueError("수수료는 0~10%입니다")
         return fee
+
+
+class BacktestRequest(Conditions):
+    """POST /api/backtest 요청."""
+
+    symbols: list[str]
+
+    @field_validator("symbols")
+    @classmethod
+    def _check_symbols(cls, symbols: list[str]) -> list[str]:
+        if not 1 <= len(symbols) <= MAX_SYMBOLS:
+            raise ValueError(FIELD_MESSAGES["symbols"])
+        cleaned: list[str] = []
+        for raw in symbols:
+            code = _clean_symbol(raw)
+            if code in cleaned:
+                raise ValueError(f"같은 종목이 두 번 들어 있습니다: {code}")
+            cleaned.append(code)
+        return cleaned
+
+
+class StrategyRequest(Conditions):
+    """POST /api/strategy 요청 (F-15). 종목 하나를 전략 5개로 계산한다."""
+
+    symbol: str
+    ma_days: Literal[20, 60, 120, 200] = 200  # 이평선 기간 (거래일)
+    switch_ref: str = "QQQ"  # 레버리지 전환의 기준 종목
+
+    @field_validator("symbol", "switch_ref")
+    @classmethod
+    def _check_code(cls, raw: str) -> str:
+        return _clean_symbol(raw)
 
 
 class FieldError(BaseModel):
@@ -162,6 +192,61 @@ class BacktestResponse(BaseModel):
     params: BacktestRequest
     results: list[ResultOut]
     chart: ChartOut
+    errors: list[SymbolError]
+
+
+class StrategyOut(BaseModel):
+    """같은 예산 전략 하나의 결과 (계산 규칙 9-6). 금액은 투자 통화, 평단가는 종목 통화."""
+
+    value: float
+    invested: float  # 5개 전략이 모두 같다
+    return_pct: float
+    xirr_pct: float | None
+    avg_cost_asset: float | None
+    worst_return_pct: float
+    leftover_cash_invest: float
+    rule_days: int  # 규칙이 걸린 매수일 수 (이평선 아래·과열·쉰 날)
+
+
+class StrategiesOut(BaseModel):
+    """전략 5개. 키와 순서는 engine.RULES와 같다. switch는 기준 종목을 못 받으면 null (결정 d31)."""
+
+    none: StrategyOut
+    ma_dip: StrategyOut
+    ma_hot: StrategyOut
+    switch: StrategyOut | None
+    lump_sum: StrategyOut
+
+
+class SwitchRefOut(BaseModel):
+    """레버리지 전환의 기준 종목. basis는 기준 종목의 어느 날 종가·이평선을 봤는지다 (결정 d29).
+
+    same_day: 같은 거래소라 매수일 것을 봤다. previous_day: 다른 거래소이거나 시간대를 몰라
+    매수일보다 앞선 마지막 거래일 것을 봤다.
+    """
+
+    symbol: str
+    basis: Literal["same_day", "previous_day"]
+    stale: bool
+
+
+class StrategyResultOut(BaseModel):
+    """종목 하나의 전략 비교. 종목 정보 필드는 ResultOut과 같은 뜻이다."""
+
+    symbol: str
+    name: str
+    currency: str
+    notes: list[str]
+    data_through: date
+    stale: bool  # 종목이나 환율을 저장본으로 계산했다
+    listed_from: date | None
+    switch_ref: SwitchRefOut | None  # 기준 종목을 못 받으면 null
+    strategies: StrategiesOut
+
+
+class StrategyResponse(BaseModel):
+    params: StrategyRequest
+    result: StrategyResultOut | None
     errors: list[SymbolError]
 
 
