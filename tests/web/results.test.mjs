@@ -134,7 +134,10 @@ test("compareColumns: 칸 글자는 카드와 같은 형식이다", () => {
   assert.equal(text("profit_after_tax", QLD), "+8,309만원");
   assert.equal(text("eval_price", QLD), "$20.00");
   assert.equal(text("underwater_days", QLD), "331일");
-  assert.equal(text("xirr_pct", { ...QLD, summary: { ...QLD.summary, xirr_pct: null } }), "계산 불가");
+  assert.equal(
+    text("xirr_pct", { ...QLD, summary: { ...QLD.summary, xirr_pct: null } }),
+    "계산 불가",
+  );
 });
 
 test("compareColumns: 손익 색을 칠하는 열은 손익·세후 손익·수익률·최저 수익률·고점 대비", () => {
@@ -198,7 +201,10 @@ test("sortRows: null(계산 불가 등)은 오름·내림 모두 맨 아래", ()
   for (const dir of ["asc", "desc"]) {
     const tail = values(sortRows(rows, valueOf, dir)).slice(3);
     assert.equal(tail.length, 3);
-    assert.ok(tail.every((v) => v === null || v === undefined || Number.isNaN(v)), dir);
+    assert.ok(
+      tail.every((v) => v === null || v === undefined || Number.isNaN(v)),
+      dir,
+    );
   }
 });
 
@@ -349,10 +355,7 @@ test("fxNote: 바꿀 환율이 없으면 null", () => {
 });
 
 test("fxNote: 양도세를 켠 달러 투자는 양도세용 USDKRW=X도 적는다 (#39)", () => {
-  assert.equal(
-    fxNote([QQQ], { currency: "USD", tax: true }),
-    "환율은 USDKRW=X(양도세 원화 환산).",
-  );
+  assert.equal(fxNote([QQQ], { currency: "USD", tax: true }), "환율은 USDKRW=X(양도세 원화 환산).");
   const samsung = { ...QQQ, symbol: "005930.KS", currency: "KRW" };
   assert.equal(
     fxNote([samsung, QQQ], { currency: "USD", tax: true }),

@@ -21,6 +21,26 @@ export function h(tag, props = {}, ...children) {
   return el;
 }
 
+/** SVG 요소를 만든다. attrs는 속성 이름 → 값 (null·undefined는 건너뛴다). */
+export function svgEl(tag, attrs = {}) {
+  const el = document.createElementNS(SVG, tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value !== null && value !== undefined) el.setAttribute(key, String(value));
+  }
+  return el;
+}
+
+/**
+ * 다시 그려도 누르던 버튼에 포커스를 둔다. container 안에서 포커스가 있던 요소의
+ * data-focus 이름으로 다시 찾는다 (그래프 도구, 범례, 매수 내역, 비교 표 정렬).
+ */
+export function keepFocus(container, render) {
+  const active = document.activeElement;
+  const key = container.contains(active) ? active.dataset.focus : undefined;
+  render();
+  if (key) container.querySelector(`[data-focus="${CSS.escape(key)}"]`)?.focus();
+}
+
 /** 종목 선 모양 견본 (색 + 점선). slot은 0~7. color를 주면 그 색(투자금·평단가는 var(--ref)). */
 export function swatch(slot, width = 20, { color = `var(--c${slot + 1})` } = {}) {
   const svg = document.createElementNS(SVG, "svg");

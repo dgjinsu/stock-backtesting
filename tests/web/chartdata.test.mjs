@@ -271,7 +271,9 @@ test("logFirstNote: 이유 한 줄에 종목과 최고 평가금을 적는다 (�
     logFirstNote({ symbol: "SOXL", value: 1_577_680_000 }, "KRW"),
     "로그 축: 같은 간격이 같은 배수입니다. SOXL 평가금(최고 15억 7,768만원)이 다른 종목보다 훨씬 커서 로그 축으로 먼저 보여 줍니다.",
   );
-  assert.ok(logFirstNote({ symbol: "SOXL", value: 1_200_000 }, "USD").includes("(최고 $1,200,000)"));
+  assert.ok(
+    logFirstNote({ symbol: "SOXL", value: 1_200_000 }, "USD").includes("(최고 $1,200,000)"),
+  );
 });
 
 test("splitsOf: notes에서 분할 날짜와 비율을 읽고 다른 글은 건너뛴다", () => {

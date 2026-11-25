@@ -121,8 +121,7 @@ test("readQuery: 잘못된 값은 버린다", () => {
 
 // ---------- 결과 탭 (F-11) ----------
 
-const V1_QUERY =
-  "s=QQQ,QLD&from=2021-11-25&to=2026-11-24&freq=monthly&day=1&amt=2000000&cur=KRW";
+const V1_QUERY = "s=QQQ,QLD&from=2021-11-25&to=2026-11-24&freq=monthly&day=1&amt=2000000&cur=KRW";
 
 test("RESULT_TABS: 요약·분석·전략 비교·매수 내역 순서이고 요약이 기본", () => {
   assert.deepEqual(RESULT_TABS, ["summary", "analysis", "strategy", "buys"]);

@@ -18,7 +18,7 @@ import {
   sampledNote,
   splitMarks,
 } from "./chartdata.js";
-import { h, icon, swatch } from "./dom.js";
+import { h, icon, keepFocus, swatch } from "./dom.js";
 import { fx, money, pct, price, qty } from "./format.js";
 
 const TABS = [
@@ -449,14 +449,6 @@ function newChart(ChartJs, wrap, model) {
       },
     },
   });
-}
-
-/** 다시 그려도 누르던 버튼에 포커스를 둔다 (data-focus 이름으로 다시 찾는다). */
-function keepFocus(container, render) {
-  const active = document.activeElement;
-  const key = container.contains(active) ? active.dataset.focus : undefined;
-  render();
-  if (key) container.querySelector(`[data-focus="${CSS.escape(key)}"]`)?.focus();
 }
 
 function segButtons(items, isOn, onPick, label) {

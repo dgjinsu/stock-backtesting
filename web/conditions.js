@@ -1,5 +1,6 @@
 // 조건(종목·기간·주기·금액)을 다루는 순수 함수. DOM을 쓰지 않아 node --test로 시험한다.
-// cond 모양: { codes, start, end, freq, monthDay, weekDay, amount, currency, fractional, fee }
+// cond 모양: { codes, start, end, freq, monthDay, weekDay, amount, currency, fractional, fee, tax }
+// tax는 해외주식 양도세 어림(F-20) 스위치다.
 // 주소에는 보고 있는 결과 탭(tab)도 같이 담는다 (F-11). 조건이 아니라 계산에는 쓰지 않는다.
 
 export const MAX_SYMBOLS = 8;
@@ -41,7 +42,7 @@ export function anchorOf(cond) {
   return null;
 }
 
-/** 조건을 주소 쿼리로 (F-09). 기본값인 항목(정수 주가 아님, 수수료 0, 요약 탭)은 뺀다.
+/** 조건을 주소 쿼리로 (F-09). 기본값인 항목(정수 주가 아님, 수수료 0, 양도세 꺼짐, 요약 탭)은 뺀다.
  * cond.tab이 있으면 맨 뒤에 붙인다 (F-11). 모르는 탭 값은 넣지 않는다.
  * 종목 사이 쉼표는 읽기 쉽게 그대로 둔다 (s=QQQ,QLD). 쿼리 키는 상세 설계 5절 표. */
 export function toQuery(cond) {
@@ -55,6 +56,7 @@ export function toQuery(cond) {
   params.set("cur", cond.currency);
   if (!cond.fractional) params.set("frac", "0");
   if (cond.fee) params.set("fee", String(cond.fee));
+  if (cond.tax) params.set("tax", "1");
   if (RESULT_TABS.includes(cond.tab) && cond.tab !== DEFAULT_TAB) params.set("tab", cond.tab);
   return params.toString().replaceAll("%2C", ",");
 }
@@ -84,6 +86,7 @@ export function readQuery(search) {
   const feeText = params.get("fee");
   const fee = Number(feeText);
   if (feeText !== null && feeText !== "" && fee >= 0 && fee <= 10) found.fee = fee;
+  if (params.get("tax") === "1") found.tax = true; // 그 밖의 값은 버리고 꺼짐(기본)으로 둔다
   if (RESULT_TABS.includes(params.get("tab"))) found.tab = params.get("tab");
   return found;
 }
