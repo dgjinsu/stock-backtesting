@@ -1,6 +1,9 @@
 """HTTP 진입점(src/main.py)을 확인한다. Yahoo는 fixture를 물린 가짜로 바꿔 네트워크 없이 부른다."""
 
 import asyncio
+import logging
+import re
+import time
 from collections import Counter
 from collections.abc import Iterator
 from datetime import date
@@ -765,3 +768,158 @@ def test_strategy_krw_qld_fetches_each_symbol_once_two_at_most(api: Api) -> None
     assert body["errors"] == []
     assert _called(api.yahoo) == Counter({"QLD": 1, "USDKRW=X": 1, "QQQ": 1})
     assert api.yahoo.max_in_flight <= 2
+
+
+# ---------- POST /api/strategy 그래프와 바꿔 보기 (계산 규칙 9-7, 결정 d30) ----------
+
+MAX_CHART_POINTS = 1000  # 기능 명세 F-07: 최대 약 1,000점
+CHART_COLUMNS = ("value", "invested", "return_pct")
+# 9-8: 매수일은 7절과 같다. 첫 매수일 2021-12-01이 전략 그래프의 첫 날이다
+V2_FIRST_BUY = _v1_result("monthly1-krw2m", "QLD")["first_buy"]
+# 7절 "월15일 수수료 0.25%" 사례. 9-8 기간(11-25부터)으로 불러도 첫 매수일이 2021-12-15라 매수일 60번이 같다
+FEE_CASE = next(
+    c for c in load_expected()["cases"] if CASE_IDS[c["name"]] == "monthly15-krw2m-fee0.25"
+)
+FEE_QLD = FEE_CASE["results"]["QLD"]
+# 결정 d30: 7절 매일 사례 = 6단계 조건(4종목 5년 매일 10만원, 원화). 요청 하나가 2초 안
+DAILY_CASE = next(c for c in load_expected()["cases"] if CASE_IDS[c["name"]] == "daily-krw100k")
+SPEED_SYMBOLS = list(DAILY_CASE["results"])  # QQQ, QLD, TQQQ, SOXL
+SPEED_LIMIT_S = 2.0  # 기능 명세 비기능 요구 "속도", 결정 d30
+
+
+def _assert_anchor_sweep_matches_v2(got: dict[str, Any]) -> None:
+    """9-8 매수일 바꿔 보기: 키 "1"~"28", "31" 순서가 같고 평단가는 ±0.01 안."""
+    assert list(got) == list(V2["anchor_sweep"])
+    for anchor, avg in V2["anchor_sweep"].items():
+        assert got[anchor] == pytest.approx(avg, abs=0.01), anchor
+
+
+def _assert_start_sweep_matches_v2(got: dict[str, Any]) -> None:
+    """9-8 시작 시점 바꿔 보기: 키 "YYYY-MM" 순서가 같고 수익률은 ±0.01%p 안."""
+    assert list(got) == list(V2["start_sweep"])
+    for month, ret in V2["start_sweep"].items():
+        assert got[month] == pytest.approx(ret, abs=0.01), month
+
+
+# 기준값과 응답 모양
+
+
+def test_strategy_reference_case_anchor_sweep_matches_v2(api: Api) -> None:
+    """9-8 조건(매월 1일 요청)의 anchor_sweep. 예: 24일 37.5742, 15일 38.2687."""
+    _assert_anchor_sweep_matches_v2(_strategy(api.client)["result"]["anchor_sweep"])
+
+
+def test_strategy_reference_case_start_sweep_matches_v2(api: Api) -> None:
+    """9-8 조건의 start_sweep: 2021-12 ~ 2026-05. 예: 2025-03 +0.82, 2025-04 −0.71."""
+    _assert_start_sweep_matches_v2(_strategy(api.client)["result"]["start_sweep"])
+
+
+def test_strategy_reference_case_chart_covers_trading_days(api: Api) -> None:
+    """날짜축은 첫 매수일부터 data_through까지의 거래일(9-8 1,250일)이고, 1,000점 이하로 줄여 보낸다."""
+    result = _strategy(api.client)["result"]
+    chart = result["chart"]
+    assert chart["total_days"] == V2["metrics"]["trading_days"]
+    assert len(chart["dates"]) <= MAX_CHART_POINTS
+    assert chart["dates"][0] == V2_FIRST_BUY
+    assert chart["dates"][-1] == result["data_through"]
+    assert list(chart["series"]) == list(engine.RULES)
+    for rule, series in chart["series"].items():
+        for column in CHART_COLUMNS:
+            assert len(series[column]) == len(chart["dates"]), (rule, column)
+
+
+@pytest.mark.parametrize("rule", list(V2["strategies"]), ids=list(V2["strategies"]))
+def test_strategy_reference_case_chart_end_and_worst_match_strategies(api: Api, rule: str) -> None:
+    """그래프 끝값은 요약 평가금(±1원), 최저 수익률은 요약 worst_return_pct(±0.01%p)와 같다.
+    줄여도 최저 수익률 날짜가 남는다는 확인이다."""
+    result = _strategy(api.client)["result"]
+    series, summary = result["chart"]["series"][rule], result["strategies"][rule]
+    assert series["value"][-1] == pytest.approx(summary["value"], abs=1)
+    assert min(series["return_pct"]) == pytest.approx(summary["worst_return_pct"], abs=0.01)
+
+
+# 바꿔 보기에 넘기는 데이터와 조건
+
+
+def test_strategy_month_end_until_saturday_anchor_sweep_uses_uncut_data(api: Api) -> None:
+    """끝날짜 10-31(토)이어도 자르지 않은 데이터를 넘기면 10월은 끝난 달이라 말일 매수가 2021-11-30 ~
+    2026-10-30 60번으로 9-8 기준값의 31일과 같다. 끝날짜로 잘라 넘기면 10-30 매수가 빠져 값이 달라진다."""
+    body = _strategy(api.client, anchor=31, end="2026-10-31")
+    assert body["errors"] == []
+    sweep = body["result"]["anchor_sweep"]
+    assert sweep["31"] == pytest.approx(V2["anchor_sweep"]["31"], abs=0.01)
+
+
+def test_strategy_fee_reaches_both_sweeps(api: Api) -> None:
+    """두 바꿔 보기는 요청의 수수료를 담은 같은 Params로 계산한다 (9-7 "2·4절 그대로").
+    15일 평단가와 2021-12 시작 수익률이 7절 "월15일 수수료 0.25%" 사례와 같다."""
+    # 이 테스트가 가려내는지: 수수료 없는 15일 값(9-8)과는 허용 오차보다 크게 다르다
+    assert FEE_QLD["avg_cost_asset"] != pytest.approx(V2["anchor_sweep"]["15"], abs=0.01)
+    body = _strategy(api.client, anchor=FEE_CASE["anchor"], fee_pct=FEE_CASE["fee"] * 100)
+    assert body["errors"] == []
+    result = body["result"]
+    assert result["anchor_sweep"]["15"] == pytest.approx(FEE_QLD["avg_cost_asset"], abs=0.01)
+    assert result["start_sweep"]["2021-12"] == pytest.approx(FEE_QLD["return_pct"], abs=0.01)
+
+
+def test_strategy_short_period_has_null_anchor_and_empty_start_sweep(api: Api) -> None:
+    """9-7: 그 기준일로 매수일이 없으면 null(25일), 있으면 값(10일). 끝날짜 달의 6개월 전 달이 시작일보다
+    앞이면 시작할 달이 없어 {}다. 키 29개는 null이어도 그대로 있다."""
+    body = _strategy(api.client, start="2026-10-05", end="2026-10-20", anchor=10)
+    assert body["errors"] == []
+    result = body["result"]
+    assert list(result["anchor_sweep"]) == list(V2["anchor_sweep"])
+    assert result["anchor_sweep"]["25"] is None
+    assert result["anchor_sweep"]["10"] is not None
+    assert result["start_sweep"] == {}
+
+
+# 실패 경로
+
+
+def test_strategy_unknown_reference_chart_drops_switch_and_keeps_sweeps(api: Api) -> None:
+    """결정 d31: 기준 종목을 못 받으면 chart.series에도 switch 키가 없다. 바꿔 보기는 기준 종목을 쓰지 않아
+    v2 기준값 그대로다."""
+    body = _strategy(api.client, switch_ref="XXXX")
+    assert body["errors"] == [{"symbol": "XXXX", "message": "'XXXX' 종목을 찾을 수 없습니다."}]
+    result = body["result"]
+    assert list(result["chart"]["series"]) == OTHER_RULES
+    assert result["chart"]["total_days"] == V2["metrics"]["trading_days"]
+    _assert_anchor_sweep_matches_v2(result["anchor_sweep"])
+    _assert_start_sweep_matches_v2(result["start_sweep"])
+
+
+# 로그와 속도
+
+
+def test_strategy_logs_symbol_freq_and_elapsed(api: Api, caplog: pytest.LogCaptureFixture) -> None:
+    """코드 컨벤션 2절: 로그에 종목, 주기, 걸린 시간을 남긴다."""
+    with caplog.at_level(logging.INFO, logger="src.main"):
+        _strategy(api.client)
+    lines = [r.getMessage() for r in caplog.records if r.name == "src.main"]
+    assert any(
+        "QLD" in line and "monthly" in line and re.search(r"\d+\.\d+s", line) for line in lines
+    ), lines
+
+
+@pytest.mark.parametrize("symbol", SPEED_SYMBOLS, ids=SPEED_SYMBOLS)
+def test_strategy_five_years_daily_from_saved_data_within_two_seconds(
+    api: Api, symbol: str
+) -> None:
+    """결정 d30: 저장본으로 4종목 각각 POST /api/strategy 한 번(전략 5개, 그래프, 두 바꿔 보기)이 2초 안.
+
+    첫 요청은 저장본을 채우고 첫 호출 준비를 떠맡으므로 재지 않는다. client.post 앞뒤만 잰다.
+    """
+    changes = {"symbol": symbol, "freq": "daily", "anchor": None, "amount": DAILY_CASE["amount"]}
+    assert _strategy(api.client, **changes)["errors"] == []  # 저장본을 채운다. 재지 않는다
+    calls = len(api.yahoo.calls)
+    started = time.perf_counter()
+    response = api.client.post("/api/strategy", json={**STRATEGY_EXAMPLE, **changes})
+    elapsed = time.perf_counter() - started
+    assert response.status_code == 200, response.text
+    result = response.json()["result"]
+    assert result is not None
+    # 잰 응답이 F-15가 쓰는 값을 다 담았는지: 전략 5개만 재면 기준보다 가볍다
+    assert {"strategies", "chart", "anchor_sweep", "start_sweep"} <= set(result), list(result)
+    assert len(api.yahoo.calls) == calls  # 저장본만 썼다
+    assert elapsed < SPEED_LIMIT_S, f"{symbol}: {elapsed:.2f}s"
