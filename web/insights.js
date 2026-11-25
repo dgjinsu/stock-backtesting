@@ -28,13 +28,17 @@ function toneOf(value) {
   return "";
 }
 
-/** key가 가장 큰(more) 또는 작은(!more) 결과. 같으면 앞의 것. key가 null이면 뺀다. */
-function pick(results, key, more) {
+/**
+ * key가 가장 큰(more) 또는 작은(!more) 결과. 같으면 앞의 것. key가 null이면 뺀다.
+ * 비교는 화면에 보이는 자리(digits)로 반올림한 값으로 한다. 같아 보이면 앞의 것을 고른다.
+ */
+function pick(results, key, more, digits) {
   let best = null;
   let bestValue = null;
   for (const result of results) {
-    const value = key(result.summary);
-    if (value === null || value === undefined || Number.isNaN(value)) continue;
+    const raw = key(result.summary);
+    if (raw === null || raw === undefined || Number.isNaN(raw)) continue;
+    const value = shown(raw, digits);
     if (best === null || (more ? value > bestValue : value < bestValue)) {
       best = result;
       bestValue = value;
@@ -112,8 +116,8 @@ function singleParts(result) {
  *   둘째 문장이 이미 그 종목이 얼마나 빠졌는지(또는 빠지지 않았는지) 말하므로 쓰지 않는다.
  */
 function manyParts(results) {
-  const top = pick(results, returnOf, true);
-  const xirrTop = pick(results, xirrOf, true);
+  const top = pick(results, returnOf, true, 2);
+  const xirrTop = pick(results, xirrOf, true, 2);
   const s = top.summary;
   const worst = fall(s);
   const parts = [
@@ -151,7 +155,7 @@ function manyParts(results) {
       parts.push(plain("로 가장 높았습니다."));
     }
   }
-  const calm = pick(results, worstOf, true);
+  const calm = pick(results, worstOf, true, 1);
   if (calm && calm !== top) {
     parts.push(
       plain(" 가장 덜 흔들린 종목은 "),
@@ -196,17 +200,17 @@ function ratioOf(s) {
  */
 export function highlights(results) {
   const items = [];
-  const xirrTop = pick(results, xirrOf, true);
+  const xirrTop = pick(results, xirrOf, true, 2);
   if (xirrTop) {
     items.push(item("xirr", "가장 높은 XIRR", xirrTop, rate(xirrTop.summary.xirr_pct)));
   }
-  const ratioTop = pick(results, ratioOf, true);
+  const ratioTop = pick(results, ratioOf, true, 2);
   if (ratioTop) {
     items.push(
       item("ratio", "현재가가 평단가의 몇 배 (최고)", ratioTop, times(ratioOf(ratioTop.summary))),
     );
   }
-  const deepest = pick(results, worstOf, false);
+  const deepest = pick(results, worstOf, false, 1);
   if (deepest) {
     const worst = deepest.summary.worst;
     items.push(
@@ -216,7 +220,7 @@ export function highlights(results) {
       }),
     );
   }
-  const steady = pick(results, (s) => s.underwater_days, false);
+  const steady = pick(results, (s) => s.underwater_days, false, 0);
   if (steady) {
     const s = steady.summary;
     items.push(

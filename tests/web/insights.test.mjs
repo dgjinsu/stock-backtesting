@@ -454,3 +454,13 @@ test("highlights: 원금 아래였던 적이 없으면 0일", () => {
 test("highlights: 결과가 없으면 빈 목록", () => {
   assert.deepEqual(highlights([]), []);
 });
+
+test("highlights: 화면에서 같아 보이면(1자리) 앞 종목을 가장 깊은 손실로 고른다", () => {
+  const base = { ret: 10, xirr: 5, price: 100, avg: 90, under: [10, 100, 10] };
+  const results = [
+    result("AAA", { ...base, worst: ["2022-01-03", -55.92] }),
+    result("BBB", { ...base, worst: ["2022-02-03", -55.94] }),
+  ];
+  const deepest = highlights(results).find((h) => h.key === "worst");
+  assert.equal(deepest.symbol, "AAA");
+});
