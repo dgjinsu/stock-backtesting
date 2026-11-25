@@ -50,7 +50,8 @@ class MarketError(Exception):
 class PriceHistory:
     """한 종목의 일별 종가. dates는 거래소 현지 날짜, 오름차순, 중복 없음.
 
-    close는 분할 반영, adjclose는 배당까지 반영(v2). stale이면 받기에 실패해 저장본을 쓴 것이다.
+    close는 분할 반영, adjclose는 배당까지 반영(저장만 하고 계산에는 쓰지 않는다, 결정 d36).
+    stale이면 받기에 실패해 저장본을 쓴 것이다.
     """
 
     symbol: str
