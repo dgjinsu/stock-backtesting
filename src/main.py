@@ -28,12 +28,14 @@ from src import engine
 from src.market import Market, MarketError, PriceHistory
 from src.schemas import (
     FIELD_MESSAGES,
+    AnalysisOut,
     BacktestRequest,
     BacktestResponse,
     BuyOut,
     ChartOut,
     ChartSeriesOut,
     Conditions,
+    DrawdownOut,
     Extreme,
     FieldError,
     Peak,
@@ -49,6 +51,8 @@ from src.schemas import (
     SummaryOut,
     SwitchRefOut,
     SymbolError,
+    UnderwaterOut,
+    YearOut,
 )
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -181,7 +185,10 @@ def _fx(value: float) -> float:
     return float(f"{value:.6g}")
 
 
-def _summary_out(s: engine.Summary, invest: str, asset: str) -> SummaryOut:
+def _summary_out(
+    s: engine.Summary, a: engine.Analysis, invest: str, asset: str, *, tax: bool
+) -> SummaryOut:
+    deepest, longest = a.max_drawdown, a.longest_underwater
     return SummaryOut(
         buys=s.buys,
         first_buy=s.first_buy,
@@ -202,6 +209,36 @@ def _summary_out(s: engine.Summary, invest: str, asset: str) -> SummaryOut:
         worst=Extreme(date=s.worst.date, return_pct=round(s.worst.value, 2)),
         peak_value=Peak(date=s.peak_value.date, value=_money(s.peak_value.value, invest)),
         from_peak_pct=round(s.from_peak_pct, 2),
+        max_drawdown=None
+        if deepest is None
+        else DrawdownOut(date=deepest.date, pct=round(deepest.value, 2)),
+        underwater_days=a.underwater_days,
+        trading_days=a.trading_days,
+        underwater_pct=round(a.underwater_pct, 2),
+        longest_underwater=None
+        if longest is None
+        else UnderwaterOut(days=longest.days, start=longest.start, recovered=longest.recovered),
+        last_underwater=a.last_underwater,
+        price_effect=_money(a.price_effect, invest),
+        fx_effect=_money(a.fx_effect, invest),
+        avg_buy_fx=None if a.avg_buy_fx is None else _fx(a.avg_buy_fx),
+        tax=_money(a.tax, invest) if tax else None,
+        profit_after_tax=_money(a.profit_after_tax, invest) if tax else None,
+    )
+
+
+def _analysis_out(a: engine.Analysis) -> AnalysisOut:
+    """9-1·9-2·9-3 분석을 응답 자리수로 반올림한다. 엔진이 오름차순으로 주므로 그 순서대로 넣는다."""
+    return AnalysisOut(
+        years={
+            str(y.year): YearOut(
+                return_pct=round(y.return_pct, 2), price_change_pct=_maybe(y.price_change_pct, 2)
+            )
+            for y in a.years
+        },
+        months={m.month: round(m.return_pct, 2) for m in a.months},
+        buys_below_eval_price=a.buys_below_eval_price,
+        buys_below_avg_cost=a.buys_below_avg_cost,
     )
 
 
@@ -211,7 +248,13 @@ def _split_notes(history: PriceHistory, start: date) -> list[str]:
 
 
 def _result_out(
-    history: PriceHistory, sim: engine.SimResult, params: engine.Params, fx_stale: bool
+    history: PriceHistory,
+    sim: engine.SimResult,
+    analysis: engine.Analysis,
+    params: engine.Params,
+    fx_stale: bool,
+    *,
+    tax: bool,
 ) -> ResultOut:
     invest, asset = params.currency, history.currency
     return ResultOut(
@@ -222,7 +265,8 @@ def _result_out(
         data_through=sim.summary.eval_date,
         stale=history.stale or fx_stale,
         listed_from=history.dates[0] if sim.summary.listed_after_start else None,
-        summary=_summary_out(sim.summary, invest, asset),
+        summary=_summary_out(sim.summary, analysis, invest, asset, tax=tax),
+        analysis=_analysis_out(analysis),
         buys=[
             BuyOut(
                 date=b.date,
@@ -255,6 +299,7 @@ def _chart_out(chart: engine.Chart, invest: str) -> ChartOut:
                 return_pct=digits(s.return_pct, 2),
                 price=digits(s.price, 4),
                 avg_cost=digits(s.avg_cost, 4),
+                drawdown=digits(s.drawdown, 2),
             )
             for symbol, s in chart.series.items()
         },
@@ -322,21 +367,49 @@ async def _fetch(
     history = await market.get_series(symbol)
     if history.currency == currency:
         return history, None
-    pair = f"{history.currency}{currency}=X"
+    return history, await _fetch_fx(market, f"{history.currency}{currency}=X", fx_tasks)
+
+
+async def _fetch_fx(
+    market: Market, pair: str, fx_tasks: dict[str, "asyncio.Task[PriceHistory]"]
+) -> PriceHistory:
+    """환율 하나. 같은 코드는 fx_tasks에 작업 하나만 만들어 나눠 기다린다 (실패해도 한 번만 부른다)."""
     if pair not in fx_tasks:
         fx_tasks[pair] = asyncio.create_task(market.get_series(pair))
     try:
-        return history, await asyncio.shield(fx_tasks[pair])
+        return await asyncio.shield(fx_tasks[pair])
     except MarketError as error:
         raise FxError(f"{pair} 환율을 받지 못해 계산하지 못했습니다.") from error
 
 
+async def _fetch_with_tax_fx(
+    market: Market,
+    symbol: str,
+    request: BacktestRequest,
+    fx_tasks: dict[str, "asyncio.Task[PriceHistory]"],
+) -> tuple[PriceHistory, PriceHistory | None, PriceHistory | None]:
+    """_fetch에 더해, 9-5 양도세에 원화 환율이 필요한 종목이면 {투자통화}KRW=X도 받는다.
+
+    필요한 때: tax가 켜졌고, 투자 통화가 원화가 아니고, 종목 통화도 원화가 아니다 (한국 종목은 세금 0).
+    fx_tasks를 _fetch와 같이 써서 요청 하나에 한 번만 받는다. 받지 못하면 FxError (결정 d40).
+    """
+    history, fx_history = await _fetch(market, symbol, request.currency, fx_tasks)
+    if not request.tax or request.currency == "KRW" or history.currency == "KRW":
+        return history, fx_history, None
+    won = await _fetch_fx(market, f"{request.currency}KRW=X", fx_tasks)
+    return history, fx_history, won
+
+
 async def run_backtest(market: Market, request: BacktestRequest, today: date) -> BacktestResponse:
-    """종목과 환율을 받고(동시에), 종목마다 계산하고, 그래프 날짜축을 맞춘다 (아키텍처 1절)."""
+    """종목과 환율을 받고(동시에), 종목마다 계산하고, 그래프 날짜축을 맞춘다 (아키텍처 1절).
+
+    엔진에는 끝날짜로 자르지 않은 전체 데이터를 넘긴다 (결정 d32). tax가 켜진 달러 투자면
+    양도세용 USDKRW=X를 요청 하나에 한 번 받는다 (9-5).
+    """
     params = _to_params(request, today)
     fx_tasks: dict[str, asyncio.Task[PriceHistory]] = {}
     fetched = await asyncio.gather(
-        *(_fetch(market, s, request.currency, fx_tasks) for s in request.symbols),
+        *(_fetch_with_tax_fx(market, s, request, fx_tasks) for s in request.symbols),
         return_exceptions=True,
     )
 
@@ -349,16 +422,21 @@ async def run_backtest(market: Market, request: BacktestRequest, today: date) ->
             continue
         if isinstance(outcome, BaseException):
             raise outcome
-        history, fx_history = outcome
+        history, fx_history, won_history = outcome
+        asset = _to_series(history)
         fx = None if fx_history is None else _to_series(fx_history)
+        won = None if won_history is None else _to_series(won_history)
         try:
-            sim = engine.simulate(_to_series(history), fx, params)
+            sim = engine.simulate(asset, fx, params)
+            # 양도세 환율이 필요 없으면(원화 투자, tax 꺼짐, 한국 종목) 세금이 0이거나 응답에서 버리는 값이라 1
+            tax_fx = engine.rate_on(won, params.end)
+            analysis = engine.analyze(sim, asset, fx, params.end, tax_fx=tax_fx)
         except engine.EngineError as error:  # 데이터 때문에 계산할 수 없음: 기간 안 매수일 없음 등
             errors.append(SymbolError(symbol=symbol, message=str(error)))
             continue
         simulated[symbol] = sim
-        fx_stale = fx_history is not None and fx_history.stale
-        results.append(_result_out(history, sim, params, fx_stale))
+        fx_stale = any(h is not None and h.stale for h in (fx_history, won_history))
+        results.append(_result_out(history, sim, analysis, params, fx_stale, tax=request.tax))
 
     return BacktestResponse(
         params=request,

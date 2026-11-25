@@ -28,6 +28,7 @@ FIELD_MESSAGES = {
     "symbol": "종목 코드 하나를 문자열로 넣어 주세요",
     "ma_days": "이평선 기간은 20, 60, 120, 200일 중 하나입니다",
     "switch_ref": "기준 종목 코드는 문자열로 넣어 주세요",
+    "tax": "양도세 어림 여부는 true 또는 false입니다",
 }
 
 
@@ -73,6 +74,7 @@ class BacktestRequest(Conditions):
     """POST /api/backtest 요청."""
 
     symbols: list[str]
+    tax: bool = False  # 양도세 어림 (F-20). 켜면 summary.tax·profit_after_tax를 채운다
 
     @field_validator("symbols")
     @classmethod
@@ -118,8 +120,22 @@ class Peak(BaseModel):
     value: float
 
 
+class DrawdownOut(BaseModel):
+    date: date
+    pct: float  # %, 0 아래
+
+
+class UnderwaterOut(BaseModel):
+    days: int  # 거래일 수
+    start: date
+    recovered: date | None  # 끝까지 원금 위로 못 올라왔으면 null
+
+
 class SummaryOut(BaseModel):
-    """종목 하나의 결과 지표 (계산 규칙 5절). 금액은 투자 통화, 평단가(종목)와 가격은 종목 통화."""
+    """종목 하나의 결과 지표 (계산 규칙 5절, v2 지표는 9-1·9-4·9-5절).
+
+    금액은 투자 통화, 평단가(종목)와 가격은 종목 통화, 비율은 %.
+    """
 
     buys: int
     first_buy: date
@@ -140,6 +156,31 @@ class SummaryOut(BaseModel):
     worst: Extreme
     peak_value: Peak
     from_peak_pct: float
+    max_drawdown: DrawdownOut | None  # 낙폭이 없으면 null
+    underwater_days: int
+    trading_days: int  # 첫 매수일 ~ data_through 거래일 수
+    underwater_pct: float
+    longest_underwater: UnderwaterOut | None
+    last_underwater: date | None
+    price_effect: float
+    fx_effect: float  # 통화가 같으면 0
+    avg_buy_fx: float | None  # 통화가 같으면 null
+    tax: float | None  # 요청의 tax가 꺼져 있으면 null. 한국 종목은 0
+    profit_after_tax: float | None  # 요청의 tax가 꺼져 있으면 null
+
+
+class YearOut(BaseModel):
+    return_pct: float  # 그해 마지막 거래일의 수익률 추이 값
+    price_change_pct: float | None  # 종목 통화. 전해 데이터가 없으면 null
+
+
+class AnalysisOut(BaseModel):
+    """v2 분석 (계산 규칙 9-1·9-2·9-3). 매수 가격 목록은 같은 응답의 buys[].price다."""
+
+    years: dict[str, YearOut]  # "YYYY" 오름차순
+    months: dict[str, float]  # "YYYY-MM" 오름차순 → 월 수익률(%)
+    buys_below_eval_price: int
+    buys_below_avg_cost: int
 
 
 class BuyOut(BaseModel):
@@ -164,6 +205,7 @@ class ResultOut(BaseModel):
     stale: bool
     listed_from: date | None
     summary: SummaryOut
+    analysis: AnalysisOut
     buys: list[BuyOut]
 
 
@@ -173,6 +215,7 @@ class ChartSeriesOut(BaseModel):
     return_pct: list[float | None]
     price: list[float | None]
     avg_cost: list[float | None]
+    drawdown: list[float | None]  # 평가금 낙폭(%), 첫 매수 전 null
 
 
 class ChartOut(BaseModel):
