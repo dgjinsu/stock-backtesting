@@ -1,9 +1,12 @@
-// 적립식 백테스트 화면: 조건 패널, 검색, 입력 검사, 주소 공유, 결과(카드·비교 표·알림·안내).
+// 적립식 백테스트 화면: 조건 패널, 검색, 입력 검사, 주소 공유, 결과(카드·비교 표·알림·안내),
+// 결과 탭과 조건 패널 접기(F-11).
 // 계산은 서버(/api/backtest)가 하고 여기서는 입력을 받고 결과를 그린다 (아키텍처 1절).
 
 import {
   ALL_START,
+  DEFAULT_TAB,
   MAX_SYMBOLS,
+  RESULT_TABS,
   SYMBOL_PATTERN,
   anchorOf,
   estimateBuys,
@@ -40,6 +43,15 @@ const state = {
   staleSymbols: new Map(), // code → 저장본 기준일 (data_through)
   sending: new Set(), // 계산 중인 요청에 담은 종목
 };
+
+/**
+ * 결과 탭과 조건 패널 접기 (F-11).
+ * - tab: 보는 탭. 처음 계산은 요약(주소에 s와 tab이 있으면 그 탭)이고, 다시 계산해도 그대로 둔다.
+ * - expanded: 요약이 아닌 탭에서 "조건 펼치기"를 눌렀는지. 탭을 바꾸면 접는다. 주소에 담지 않는다.
+ * - shown: 보이는 결과를 계산한 조건(보낸 때의 cond). 탭만 바꿀 때 이 조건으로 주소를 쓴다.
+ *   결과가 없거나 실패를 보이는 중이면 null이고, 그때는 탭도 접힌 줄도 없다.
+ */
+const resultView = { tab: DEFAULT_TAB, expanded: false, shown: null };
 
 // ---------- 작은 도우미 ----------
 
@@ -467,8 +479,10 @@ async function run() {
     const entry = state.symbols.find((s) => s.code === result.symbol);
     if (entry) entry.name = result.name;
   }
-  history.replaceState(null, "", `?${toQuery(sent)}`);
+  // 다시 계산하면 보던 탭을 그대로 두므로 주소에도 그 탭을 남긴다
+  history.replaceState(null, "", `?${toQuery({ ...sent, tab: resultView.tab })}`);
   shownSlots = slots;
+  resultView.shown = sent;
   renderForm();
   showErrors(validate());
   try {
@@ -501,6 +515,8 @@ function signClass(value) {
 
 function renderFailure(message, retry = true) {
   clearCharts();
+  resultView.shown = null; // 탭이 없으니 조건 패널을 편다 (보던 탭은 다음 결과에 쓴다)
+  layoutPanel();
   $("empty").hidden = true;
   const output = $("output");
   output.hidden = false;
@@ -888,15 +904,152 @@ function renderResult(data) {
   $("empty").hidden = true;
   const output = $("output");
   output.hidden = false;
+  // 머리 줄과 알림은 탭 위, 고정 안내는 탭 아래라 어느 탭에서나 보인다. 탭 내용은 한 번에 다 그린다
   output.replaceChildren(
     header(data),
     ...alerts(data),
-    h("div", { class: "cards" }, ...data.results.map((r) => card(r, data.params.currency))),
-    compareTable(data),
-    chartSection(data, slotOf),
-    buysSection(data, slotOf),
+    tabList(),
+    tabPanel(
+      "summary",
+      h("div", { class: "cards" }, ...data.results.map((r) => card(r, data.params.currency))),
+      compareTable(data),
+      chartSection(data, slotOf),
+    ),
+    tabPanel("analysis", comingSoon("analysis")),
+    tabPanel("strategy", comingSoon("strategy")),
+    tabPanel("buys", buysSection(data, slotOf)),
     notice(data),
   );
+  renderCondBar(data);
+  showTab();
+}
+
+// ---------- 결과 탭과 조건 패널 접기 (F-11) ----------
+
+const TAB_LABELS = { summary: "요약", analysis: "분석", strategy: "전략 비교", buys: "매수 내역" };
+
+/** 아직 만들지 않은 탭의 안내 (결정 d41). 분석은 F-14, 전략 비교는 F-15에서 채운다. */
+const COMING = {
+  analysis:
+    "분석 탭에는 얼마나 흔들렸나, 연도별 결과, 달마다 수익률, 수익의 출처, 매수 가격 분포가 들어갑니다.",
+  strategy: "전략 비교 탭에서는 같은 돈을 넣되 사는 규칙만 다른 전략 5가지를 나란히 비교합니다.",
+};
+
+function comingSoon(key) {
+  return h(
+    "div",
+    { class: "empty" },
+    h("p", { class: "empty-title", text: "다음 단계에서 채웁니다" }),
+    h("p", { class: "muted", text: COMING[key] }),
+  );
+}
+
+/** WAI-ARIA 탭 목록. 고른 탭만 Tab 키로 가고, ←/→(Home/End)로 옮기면 바로 그 탭을 연다. */
+function tabList() {
+  return h(
+    "div",
+    { class: "tabs", role: "tablist", "aria-label": "결과 보기", onkeydown: onTabKey },
+    ...RESULT_TABS.map((key) =>
+      h("button", {
+        type: "button",
+        role: "tab",
+        id: `tab-${key}`,
+        "aria-controls": `tabpanel-${key}`,
+        "data-tab": key,
+        text: TAB_LABELS[key],
+        onclick: () => selectTab(key),
+      }),
+    ),
+  );
+}
+
+function tabPanel(key, ...children) {
+  return h(
+    "div",
+    {
+      class: "tabpanel",
+      role: "tabpanel",
+      id: `tabpanel-${key}`,
+      "aria-labelledby": `tab-${key}`,
+      tabindex: "0",
+    },
+    ...children,
+  );
+}
+
+function onTabKey(event) {
+  const from = RESULT_TABS.indexOf(event.target.dataset?.tab);
+  if (from < 0) return;
+  const last = RESULT_TABS.length - 1;
+  const to = {
+    ArrowRight: from === last ? 0 : from + 1,
+    ArrowLeft: from === 0 ? last : from - 1,
+    Home: 0,
+    End: last,
+  }[event.key];
+  if (to === undefined) return;
+  event.preventDefault();
+  selectTab(RESULT_TABS[to]);
+  $(`tab-${RESULT_TABS[to]}`).focus();
+}
+
+/** 탭을 바꾼다. 다시 계산하지 않고, 주소는 보이는 결과의 조건에서 tab만 바꾼다. */
+function selectTab(key) {
+  if (key === resultView.tab) return;
+  resultView.tab = key;
+  resultView.expanded = false; // 탭을 바꾸면 다시 규칙대로: 요약은 펼침, 그 밖은 접힘
+  showTab();
+  if (resultView.shown) {
+    history.replaceState(null, "", `?${toQuery({ ...resultView.shown, tab: key })}`);
+  }
+}
+
+/** 고른 탭과 그 패널만 보이게 하고, 조건 패널을 접거나 편다. */
+function showTab() {
+  for (const key of RESULT_TABS) {
+    const tab = $(`tab-${key}`);
+    if (!tab) continue;
+    const on = key === resultView.tab;
+    tab.setAttribute("aria-selected", String(on));
+    tab.tabIndex = on ? 0 : -1;
+    $(`tabpanel-${key}`).hidden = !on;
+  }
+  layoutPanel();
+}
+
+/**
+ * 요약이 아닌 탭에서는 왼쪽 조건 패널을 결과 위 한 줄로 접고 결과가 전체 폭을 쓴다.
+ * "조건 펼치기"를 누르면 그 탭에 머문 채 패널을 열고, 같은 버튼("조건 접기")으로 다시 접는다.
+ */
+function layoutPanel() {
+  const folding = resultView.shown !== null && resultView.tab !== DEFAULT_TAB;
+  const collapsed = folding && !resultView.expanded;
+  $("panel").hidden = collapsed;
+  $("cond-bar").hidden = !folding;
+  $("cond-bar").setAttribute("aria-label", collapsed ? "조건 (접힘)" : "조건 (펼침)");
+  $("cond-toggle").setAttribute("aria-expanded", String(!collapsed));
+  $("cond-toggle-label").textContent = collapsed ? "조건 펼치기" : "조건 접기";
+}
+
+/** 접힌 줄의 조건 한 줄. 폼이 아니라 보이는 결과를 계산한 조건(params)으로 만든다. */
+function renderCondBar(data) {
+  const params = data.params;
+  $("cond-syms").replaceChildren(
+    ...data.results.map((r) =>
+      h("span", { class: "cond-sym" }, swatch(slotOf(r.symbol), 14), r.symbol),
+    ),
+  );
+  const from = params.start <= ALL_START ? "상장일" : params.start;
+  $("cond-text").textContent = [
+    `${from} ~ ${params.end}`,
+    freqText(params.freq, params.anchor),
+    `종목마다 ${money(params.amount, params.currency)}`,
+    investLabel(params.currency),
+    params.fractional === false ? "정수 주만" : null,
+    params.fee_pct > 0 ? `수수료 ${params.fee_pct}%` : null,
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 // ---------- 시작 ----------
@@ -971,6 +1124,13 @@ function wireForm() {
   $("fee").addEventListener("blur", changed);
 }
 
+function wireCondBar() {
+  $("cond-toggle").addEventListener("click", () => {
+    resultView.expanded = !resultView.expanded;
+    layoutPanel(); // 포커스는 이 버튼에 그대로 둔다 (펼침 버튼 패턴)
+  });
+}
+
 function wireTheme() {
   const button = $("theme-toggle");
   const sync = () => {
@@ -1003,8 +1163,11 @@ function init() {
   }
   const codes = fromUrl.codes.length ? fromUrl.codes : DEFAULT_SYMBOLS;
   for (const code of codes) addSymbol(code);
+  // 주소에 종목과 탭이 있으면 계산이 끝난 뒤 그 탭을 연다 (없으면 처음 계산은 요약)
+  if (fromUrl.codes.length && fromUrl.tab) resultView.tab = fromUrl.tab;
   wireForm();
   wireSearch();
+  wireCondBar();
   wireTheme();
   changed();
   if (fromUrl.codes.length) run();
