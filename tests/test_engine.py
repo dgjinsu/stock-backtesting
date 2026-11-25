@@ -908,3 +908,106 @@ def test_load_series_reads_exchange_tz_from_fixture_meta(symbol: str, tz: str) -
     """helpers.load_series가 meta.exchangeTimezoneName을 읽는다. 빠지면 QLD·QQQ가 다른 거래소로 판정된다.
     v2.strategies.switch는 QLD 매수일 중 그날·전날 판정이 갈리는 날이 없어 값으로는 못 잡으니 여기서 본다."""
     assert load_series(symbol).exchange_tz == tz
+
+
+# ---------- 이슈 #35: 공개 환율 함수, 낙폭 그래프, 결정 d35 ----------
+
+# 목·금·월. 토요일(1-06)과 일요일에는 환율이 없다
+RATE_DAYS = [date(2024, 1, 4), date(2024, 1, 5), date(2024, 1, 8)]
+RATE_FX = Series("USDKRW=X", "KRW", RATE_DAYS, [1300.0, 1310.0, 1320.0])
+
+
+@pytest.mark.parametrize(
+    ("fx", "day", "want"),
+    [
+        (RATE_FX, date(2024, 1, 5), 1310.0),
+        (RATE_FX, date(2024, 1, 6), 1310.0),
+        (load_series("USDKRW=X"), date.fromisoformat(V2["period"][1]), V2["dollar_tax"]["tax_fx"]),
+        (None, date(2024, 1, 6), 1.0),
+    ],
+    ids=["same-day", "saturday-uses-friday", "dollar-tax-end", "same-currency-is-one"],
+)
+def test_rate_on_day_returns_close_on_or_before_day(
+    fx: Series | None, day: date, want: float
+) -> None:
+    """계산 규칙 3절: day 당일 또는 그 이전 마지막 종가. 통화가 같으면(fx None) 1이다.
+    9-5 양도세 환율도 같은 규칙이라 main이 이 함수로 찾는다: 9-8 끝날짜 2026-11-24의 USDKRW=X는 1,344.16원."""
+    assert engine.rate_on(fx, day) == pytest.approx(want, abs=0.01)
+
+
+def test_rate_on_before_first_rate_raises_engine_error() -> None:
+    """3절: day 이전 환율이 없으면 계산할 수 없다. simulate의 "환율 없는 날"과 같은 EngineError다."""
+    with pytest.raises(EngineError, match="USDKRW=X 환율이 2024-01-03 이전에는 없습니다"):
+        engine.rate_on(RATE_FX, date(2024, 1, 3))
+
+
+def test_build_chart_drawdown_is_none_before_first_buy_and_ends_at_from_peak() -> None:
+    """9-1 평가금 낙폭 열. B는 1-03에 처음 사고 1-05에 값이 크게 떨어진 뒤, 1-08에는 거래가 없다.
+
+    첫 매수 전(1-02)은 None, 거래가 없는 날은 직전 값, 마지막 값은 요약의 최고점 대비(from_peak_pct)와 같은
+    float다. 가장 낮은 점은 analyze의 평가금 최대 낙폭과 같은 날·같은 값이다 (같은 공식을 나눠 쓴다).
+    """
+    a_days = [date(2024, 1, d) for d in (2, 3, 4, 5, 8)]
+    b_days = [date(2024, 1, d) for d in (3, 4, 5)]
+    params = Params(date(2024, 1, 1), date(2024, 1, 8), "daily", None, 100.0, "KRW")
+    b_asset = Series("B", "KRW", b_days, [10.0, 20.0, 1.0])
+    a = simulate(Series("A", "KRW", a_days, [10.0, 11.0, 12.0, 13.0, 14.0]), None, params)
+    b = simulate(b_asset, None, params)
+    chart = build_chart({"A": a, "B": b})
+    assert chart.dates == a_days
+    drawdown = chart.series["B"].drawdown
+    assert len(drawdown) == len(chart.dates)
+    assert drawdown[0] is None
+    assert None not in drawdown[1:]
+    assert drawdown[-1] == drawdown[-2]  # 1-08: B는 거래가 없어 1-05 값
+    assert drawdown[-1] == b.summary.from_peak_pct
+    worst = analyze(b, b_asset, None, params.end, tax_fx=1.0).max_drawdown
+    assert worst is not None
+    assert min(v for v in drawdown if v is not None) == worst.value
+    assert chart.dates[drawdown.index(worst.value)] == worst.date
+    assert chart.series["A"].drawdown[-1] == a.summary.from_peak_pct
+
+
+@pytest.mark.parametrize("max_points", [100, MAX_CHART_POINTS], ids=["100-points", "1000-points"])
+def test_build_chart_downsampling_keeps_max_drawdown_date(max_points: int) -> None:
+    """줄여도 종목마다 평가금 최대 낙폭 날짜를 남긴다. 9-8 QLD(1,250 거래일)의 2026-11-20 −42.2%.
+
+    그날은 첫날·마지막 날·최고·최저 수익률 날이 아니라 따로 남겨야 한다. 1,000점은 지금 일정 간격으로도
+    우연히 남고, 100점이면 빠진다. 그래프의 가장 낮은 점은 analyze 값과 정확히 같다.
+    """
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    params = _v2_params()
+    result = simulate(asset, fx, params)
+    worst = analyze(result, asset, fx, params.end, tax_fx=1.0).max_drawdown
+    assert worst is not None
+    assert worst.date.isoformat() == V2["metrics"]["max_drawdown"]["date"]
+    assert len(result.daily) == V2["metrics"]["trading_days"]
+    s = result.summary
+    # 이 테스트가 가려내는지: 다른 규칙으로 이미 남기는 날이 아니다
+    assert worst.date not in {
+        result.daily[0].date,
+        result.daily[-1].date,
+        s.best.date,
+        s.worst.date,
+    }
+    chart = build_chart({"QLD": result}, max_points=max_points)
+    assert len(chart.dates) <= max_points
+    assert worst.date in chart.dates
+    drawdown = chart.series["QLD"].drawdown
+    assert len(drawdown) == len(chart.dates)
+    assert drawdown[chart.dates.index(worst.date)] == worst.value
+    assert min(v for v in drawdown if v is not None) == worst.value
+
+
+def test_anchor_sweep_whole_shares_without_one_share_is_none() -> None:
+    """9-7, 결정 d35: 정수 주만 살 때 한 주도 사지 못하면 보유 수량이 0이라 평단가가 없어 None이다.
+
+    _rising()은 100원부터 하루 1원씩 오른다. 매월 1일 50원씩 세 번(1-01, 2-01, 3-01) 넣어도 150원이라
+    3-01 종가 160원짜리 한 주를 사지 못한다. 같은 조건을 소수점 매수로 하면 값이 있다.
+    """
+    asset = _rising()
+    params = Params(
+        date(2024, 1, 1), date(2024, 3, 10), "monthly", 1, 50.0, "KRW", fractional=False
+    )
+    assert anchor_sweep(asset, None, params)[1] is None
+    assert anchor_sweep(asset, None, replace(params, fractional=True))[1] is not None

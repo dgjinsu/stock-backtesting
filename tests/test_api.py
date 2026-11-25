@@ -19,6 +19,7 @@ from src.main import Settings, _to_series, app, create_app
 from src.market import Market, PriceHistory
 from tests.helpers import (
     CASE_IDS,
+    MONTH_END_CASES,
     FakeYahoo,
     inverted_fx_payload,
     load_expected,
@@ -951,3 +952,372 @@ def test_strategy_five_years_daily_from_saved_data_within_two_seconds(
     assert {"strategies", "chart", "anchor_sweep", "start_sweep"} <= set(result), list(result)
     assert len(api.yahoo.calls) == calls  # 저장본만 썼다
     assert elapsed < SPEED_LIMIT_S, f"{symbol}: {elapsed:.2f}s"
+
+
+# ---------- POST /api/backtest v2 지표 (계산 규칙 9-1 ~ 9-5, 9-8, 이슈 #35) ----------
+
+# 9-8 기준값 조건에 양도세 어림(F-20)을 켠다: QLD, 매월 1일 200만원, 2021-11-25 ~ 2026-11-24, 원화
+V2_BACKTEST: dict[str, Any] = {
+    "symbols": [V2["symbol"]],
+    "start": V2["period"][0],
+    "end": V2["period"][1],
+    "freq": V2["freq"],
+    "anchor": V2["anchor"],
+    "amount": V2["amount"],
+    "currency": V2["invest_currency"],
+    "fractional": True,
+    "fee_pct": 0,
+    "tax": True,
+}
+METRICS = V2["metrics"]
+DOLLAR_TAX = V2["dollar_tax"]
+# 9-8 달러 양도세: 같은 기간·기준일로 7절 "매월 1일 1,500달러" 사례의 금액·통화를 쓴다
+USD_CASE = next(c for c in load_expected()["cases"] if CASE_IDS[c["name"]] == "monthly1-usd1500")
+USD_REQUEST: dict[str, Any] = {
+    "amount": USD_CASE["amount"],
+    "currency": USD_CASE["invest_currency"],
+}
+# summary에 더하는 v2 필드 11개 (9-1·9-4·9-5). 이름은 expected.json v2.metrics와 같다
+V2_SUMMARY_FIELDS = (
+    "max_drawdown",
+    "underwater_days",
+    "trading_days",
+    "underwater_pct",
+    "longest_underwater",
+    "last_underwater",
+    "price_effect",
+    "fx_effect",
+    "avg_buy_fx",
+    "tax",
+    "profit_after_tax",
+)
+# analysis 묶음 (9-1·9-2·9-3). "매수 가격 목록"은 따로 두지 않고 buys[].price를 쓴다
+V2_ANALYSIS_FIELDS = ("years", "months", "buys_below_eval_price", "buys_below_avg_cost")
+TAX_FIELDS = ("tax", "profit_after_tax")
+FX_FAILED = "USDKRW=X 환율을 받지 못해 계산하지 못했습니다."
+V2_FROM_PEAK_PCT = -34.11  # 상세 설계 4절 응답 예: 9-8 조건의 평가금 최고점 대비
+# 결정 d32: 9-8에서 끝날짜만 2026-10-31(토). 데이터를 10-30(금)에서 자르면 9월까지 58개다
+_, D32_END, D32_CUT_LAST_MONTH, D32_CUT_COUNT = MONTH_END_CASES[
+    "data-1030fri-end-1031sat-skips-oct"
+]
+LATE_FIRST_DAY = date(2023, 3, 1)  # 늦게 시작한 종목: payload_from으로 이날부터만 남긴다
+BACKTEST_SPEED_LIMIT_S = 1.0  # 기능 명세 비기능 요구 "속도", 이슈 #35
+
+
+def _backtest(client: TestClient, **changes: Any) -> dict[str, Any]:
+    """9-8 조건(양도세 켬)으로 POST /api/backtest를 부르고 200인지 본 뒤 본문을 돌려준다."""
+    response = client.post("/api/backtest", json={**V2_BACKTEST, **changes})
+    assert response.status_code == 200, response.text
+    body: dict[str, Any] = response.json()
+    return body
+
+
+# 응답 모양과 9-8 기준값
+
+
+def test_backtest_v2_reference_case_adds_v2_fields_named_like_v2_metrics(api: Api) -> None:
+    """summary에 v2 필드 11개, 결과에 analysis 4개, 그래프에 drawdown을 더한다. 이름은 v2.metrics와 같다."""
+    assert set(V2_SUMMARY_FIELDS) <= set(METRICS)
+    assert set(V2_ANALYSIS_FIELDS) <= set(METRICS)
+    body = _backtest(api.client)
+    assert body["errors"] == []
+    assert body["params"]["tax"] is True
+    qld = _result(body, "QLD")
+    assert set(V2_SUMMARY_FIELDS) <= set(qld["summary"])
+    assert set(qld["analysis"]) == set(V2_ANALYSIS_FIELDS)
+    assert "drawdown" in body["chart"]["series"]["QLD"]
+
+
+def test_backtest_v2_reference_case_summary_drawdown_and_underwater_match_v2_metrics(
+    api: Api,
+) -> None:
+    """9-1, 9-8: 최대 낙폭 −42.2% (2026-11-20), 원금 아래 331일 / 1,250 거래일 (26.48%),
+    가장 길게 253 거래일 (2022-03-30 ~ 2023-04-03 회복), 마지막으로 원금 아래 2023-05-04."""
+    summary = _result(_backtest(api.client), "QLD")["summary"]
+    want = METRICS["max_drawdown"]
+    assert summary["max_drawdown"] == {
+        "date": want["date"],
+        "pct": pytest.approx(want["pct"], abs=0.01),
+    }
+    assert summary["underwater_days"] == METRICS["underwater_days"]
+    assert summary["trading_days"] == METRICS["trading_days"]
+    assert summary["underwater_pct"] == pytest.approx(METRICS["underwater_pct"], abs=0.01)
+    assert summary["longest_underwater"] == METRICS["longest_underwater"]
+    assert summary["last_underwater"] == METRICS["last_underwater"]
+
+
+def test_backtest_v2_reference_case_summary_profit_split_and_tax_match_v2_metrics(
+    api: Api,
+) -> None:
+    """9-4·9-5, 9-8: 주가 효과 +106,570,957원, 환율 효과 −746,367원, 평균 매수 환율 1,352.57원,
+    양도세 22,731,410원, 세후 손익 83,093,180원 (금액 ±1원)."""
+    summary = _result(_backtest(api.client), "QLD")["summary"]
+    for field in ("price_effect", "fx_effect", "tax", "profit_after_tax"):
+        assert summary[field] == pytest.approx(METRICS[field], abs=1), field
+    assert summary["avg_buy_fx"] == pytest.approx(METRICS["avg_buy_fx"], abs=0.01)
+    assert summary["profit"] == pytest.approx(METRICS["profit"], abs=1)
+
+
+def test_backtest_v2_reference_case_analysis_years_match_v2_metrics(api: Api) -> None:
+    """9-2, 9-8: 연도별 6개가 "YYYY" 오름차순이고 값이 v2.metrics.years와 같다 (2022: −35.72 / −60.64)."""
+    years = _result(_backtest(api.client), "QLD")["analysis"]["years"]
+    assert list(years) == list(METRICS["years"])
+    for year, want in METRICS["years"].items():
+        assert years[year]["return_pct"] == pytest.approx(want["return_pct"], abs=0.01), year
+        if want["price_change_pct"] is None:
+            assert years[year]["price_change_pct"] is None, year
+        else:
+            change = pytest.approx(want["price_change_pct"], abs=0.01)
+            assert years[year]["price_change_pct"] == change, year
+
+
+def test_backtest_v2_reference_case_analysis_months_match_v2_metrics(api: Api) -> None:
+    """9-3, 9-8: 월 수익률(%)이 "YYYY-MM" 오름차순으로 59개, 오른 달 36개, 최고 2026-04 +30.35,
+    최저 2022-12 −22.33. v2.metrics.months는 요약이라 응답에서 요약을 만들어 비교한다."""
+    months = _result(_backtest(api.client), "QLD")["analysis"]["months"]
+    want = METRICS["months"]
+    assert list(months) == sorted(months)
+    assert len(months) == want["count"]
+    assert sum(1 for pct in months.values() if pct > 0) == want["up"]
+    best, worst = max(months, key=months.__getitem__), min(months, key=months.__getitem__)
+    assert (best, worst) == (want["best"]["month"], want["worst"]["month"])
+    assert months[best] == pytest.approx(want["best"]["return_pct"], abs=0.01)
+    assert months[worst] == pytest.approx(want["worst"]["return_pct"], abs=0.01)
+
+
+def test_backtest_v2_reference_case_analysis_buy_counts_match_v2_metrics(api: Api) -> None:
+    """9-1, 9-8: 매수 60번 중 지금 가격보다 싸게 산 51번, 평단가보다 싸게 산 24번.
+    매수 가격 목록은 같은 응답의 buys[].price(줄이지 않은 60줄)다."""
+    qld = _result(_backtest(api.client), "QLD")
+    assert qld["analysis"]["buys_below_eval_price"] == METRICS["buys_below_eval_price"]
+    assert qld["analysis"]["buys_below_avg_cost"] == METRICS["buys_below_avg_cost"]
+    assert len(qld["buys"]) == METRICS["buys"]
+
+
+# 엔진에 넘기는 데이터 (결정 d32)
+
+
+def test_backtest_month_end_saturday_end_date_keeps_october_from_uncut_data(api: Api) -> None:
+    """결정 d32, 9-3: 엔진에 끝날짜로 자르지 않은 전체 데이터를 넘긴다. 끝날짜 10-31(토)이어도 데이터가 그 뒤까지
+    있어 10월은 끝난 달이다: 2021-12 ~ 2026-10 59개 (9-8 v2.metrics.months와 같은 수).
+
+    끝날짜로 잘라 넘기면 데이터가 10-30(금)에서 끝나 10월이 빠진다 (MONTH_END_CASES
+    "data-1030fri-end-1031sat-skips-oct": 2026-09·58개). 그러면 이 테스트가 깨진다.
+    """
+    body = _backtest(api.client, end=D32_END.isoformat())
+    assert body["errors"] == []
+    months = _result(body, "QLD")["analysis"]["months"]
+    assert (list(months)[-1], len(months)) == ("2026-10", METRICS["months"]["count"])
+    assert (list(months)[-1], len(months)) != (D32_CUT_LAST_MONTH, D32_CUT_COUNT)
+
+
+# 양도세 어림 (F-20, 계산 규칙 9-5)
+
+
+def test_backtest_dollar_investment_tax_matches_v2_dollar_tax_and_fetches_usdkrw_once(
+    api: Api,
+) -> None:
+    """9-5, 9-8 달러 양도세 (결정 d25): QQQ 매월 1일 $1,500 달러 투자, 손익 $48,171, 양도세 $10,188,
+    세후 손익 $37,982 (±1). 원화가 아닌 종목이 둘이어도 USDKRW=X는 한 번만 받는다."""
+    body = _backtest(api.client, symbols=["QQQ", "QLD"], **USD_REQUEST)
+    assert body["errors"] == []
+    summary = _result(body, "QQQ")["summary"]
+    assert summary["profit"] == pytest.approx(DOLLAR_TAX["profit"], abs=1)
+    assert summary["tax"] == pytest.approx(DOLLAR_TAX["tax"], abs=1)
+    assert summary["profit_after_tax"] == pytest.approx(DOLLAR_TAX["profit_after_tax"], abs=1)
+    # 달러 종목을 달러로 샀다: 환율 효과 0, 평균 매수 환율 없음 (9-4, 결정 d25)
+    assert summary["fx_effect"] == 0
+    assert summary["avg_buy_fx"] is None
+    assert _called(api.yahoo) == Counter({"QQQ": 1, "QLD": 1, "USDKRW=X": 1})
+
+
+def test_backtest_dollar_investment_without_tax_has_null_tax_and_skips_usdkrw(api: Api) -> None:
+    """F-20: tax가 꺼져 있으면 tax·profit_after_tax는 null이고, 달러 투자에 USDKRW=X를 부르지 않는다."""
+    body = _backtest(api.client, symbols=["QQQ"], tax=False, **USD_REQUEST)
+    assert body["errors"] == []
+    summary = _result(body, "QQQ")["summary"]
+    assert (summary["tax"], summary["profit_after_tax"]) == (None, None)
+    assert "USDKRW=X" not in _called(api.yahoo)
+
+
+def test_backtest_dollar_tax_without_usdkrw_fails_non_krw_symbols_only(api: Api) -> None:
+    """결정 d40: 달러 투자 tax에서 USDKRW=X를 받지 못하면 원화가 아닌 종목은 그 종목 오류다 (환율 실패와 같은
+    메시지). 한국 종목은 세금이 0이라 양도세 환율이 필요 없어 결과가 나온다. USDKRW=X는 한 번만 부른다."""
+    api.yahoo.extra["KRWUSD=X"] = inverted_fx_payload("USDKRW=X", "USD")
+    api.yahoo.missing.add("USDKRW=X")
+    body = _backtest(api.client, symbols=["QQQ", "QLD", "005930.KS"], **USD_REQUEST)
+    assert [r["symbol"] for r in body["results"]] == ["005930.KS"]
+    assert body["errors"] == [
+        {"symbol": "QQQ", "message": FX_FAILED},
+        {"symbol": "QLD", "message": FX_FAILED},
+    ]
+    samsung = _result(body, "005930.KS")["summary"]
+    assert samsung["tax"] == 0
+    assert samsung["profit_after_tax"] == samsung["profit"]
+    assert list(body["chart"]["series"]) == ["005930.KS"]
+    assert _called(api.yahoo)["USDKRW=X"] == 1
+
+
+def test_backtest_saved_usdkrw_for_tax_marks_stale_only_when_tax_is_on(api: Api) -> None:
+    """stale의 "환율"에는 양도세용 USDKRW=X도 들어간다. 달러 종목을 달러로 사면 종목은 새로 받았어도 양도세
+    환율이 저장본이면 stale이다. tax가 꺼져 있으면 USDKRW=X를 쓰지 않으니 stale이 아니다."""
+    usd: dict[str, Any] = {"symbols": ["QQQ"], **USD_REQUEST}
+    assert _backtest(api.client, **usd)["errors"] == []  # 종목과 USDKRW=X 저장본을 채운다
+    api.clock.now += 7 * 3600
+    api.yahoo.missing.add("USDKRW=X")
+    taxed = _backtest(api.client, **usd)
+    assert taxed["errors"] == []
+    assert _result(taxed, "QQQ")["stale"] is True
+    untaxed = _backtest(api.client, **usd, tax=False)
+    assert _result(untaxed, "QQQ")["stale"] is False
+
+
+def test_backtest_korean_stock_with_tax_has_zero_tax(api: Api) -> None:
+    """9-5: 한국 종목(005930.KS)을 원화로 사면 양도세 0, 세후 손익 = 손익. 통화가 같아 환율 효과 0,
+    평균 매수 환율 null (9-4, 결정 d25). 환율은 받지 않는다."""
+    body = _backtest(api.client, symbols=["005930.KS"])
+    assert body["errors"] == []
+    summary = _result(body, "005930.KS")["summary"]
+    assert summary["tax"] == 0
+    assert summary["profit_after_tax"] == summary["profit"]
+    assert summary["fx_effect"] == 0
+    assert summary["avg_buy_fx"] is None
+    assert _called(api.yahoo) == Counter({"005930.KS": 1})
+
+
+def test_backtest_krw_with_tax_fetches_each_symbol_and_usdkrw_once(api: Api) -> None:
+    """원화 투자는 양도세에 환율을 따로 받지 않는다 (tax_fx 1). 변환 환율 USDKRW=X는 종목끼리 나눠 한 번,
+    Yahoo 동시 요청은 2개 이하."""
+    body = _backtest(api.client, symbols=["QQQ", "QLD"])
+    assert body["errors"] == []
+    assert _called(api.yahoo) == Counter({"QQQ": 1, "QLD": 1, "USDKRW=X": 1})
+    assert api.yahoo.max_in_flight <= 2
+
+
+def test_backtest_tax_flag_changes_only_tax_fields(api: Api) -> None:
+    """F-20: tax는 summary의 tax·profit_after_tax만 바꾼다 (켜면 값, 끄면 null). 나머지 지표·분석·그래프·
+    매수 내역은 같다."""
+    on, off = _backtest(api.client), _backtest(api.client, tax=False)
+    assert (on["params"]["tax"], off["params"]["tax"]) == (True, False)
+    result_on, result_off = _result(on, "QLD"), _result(off, "QLD")
+    summary_on, summary_off = result_on.pop("summary"), result_off.pop("summary")
+    assert summary_on["tax"] == pytest.approx(METRICS["tax"], abs=1)
+    assert summary_on["profit_after_tax"] == pytest.approx(METRICS["profit_after_tax"], abs=1)
+    assert (summary_off["tax"], summary_off["profit_after_tax"]) == (None, None)
+
+    def without_tax(summary: dict[str, Any]) -> dict[str, Any]:
+        return {k: v for k, v in summary.items() if k not in TAX_FIELDS}
+
+    assert without_tax(summary_on) == without_tax(summary_off)
+    assert result_on == result_off
+    assert on["chart"] == off["chart"]
+
+
+def test_backtest_without_tax_field_defaults_to_false(api: Api) -> None:
+    """tax를 빼면 false다: params에 false를 채우고 세금 두 필드는 null이다. 기존 요청(EXAMPLE)이 그대로 돈다."""
+    response = _post(api.client)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["params"]["tax"] is False
+    for result in body["results"]:
+        summary = result["summary"]
+        assert (summary["tax"], summary["profit_after_tax"]) == (None, None), result["symbol"]
+
+
+def test_backtest_non_boolean_tax_returns_422_with_korean_message(api: Api) -> None:
+    """tax는 true 또는 false다. 아니면 422, 항목 tax에 한국어 메시지, Yahoo는 부르지 않는다."""
+    response = _post(api.client, tax="maybe")
+    assert response.status_code == 422, response.text
+    details = response.json()["detail"]
+    assert any(d["field"] == "tax" and "양도세" in d["message"] for d in details), details
+    assert api.yahoo.calls == []
+
+
+# 낙폭 그래프 (F-13, 계산 규칙 9-1)
+
+
+def test_backtest_v2_reference_case_drawdown_series_bottoms_at_max_drawdown_and_ends_at_from_peak(
+    api: Api,
+) -> None:
+    """chart.series.QLD.drawdown은 그날 평가금 낙폭(%)이다. 1,250일을 1,000점 이하로 줄여도 가장 낮은 점이
+    summary.max_drawdown과 같은 날(2026-11-20)·같은 값(−42.2)이고, 마지막 값은 from_peak_pct(−34.11)다."""
+    body = _backtest(api.client)
+    chart, summary = body["chart"], _result(body, "QLD")["summary"]
+    assert chart["total_days"] == METRICS["trading_days"]
+    assert len(chart["dates"]) <= MAX_CHART_POINTS
+    drawdown = chart["series"]["QLD"]["drawdown"]
+    assert len(drawdown) == len(chart["dates"])
+    assert None not in drawdown  # 종목 하나라 날짜축이 첫 매수일부터다
+    assert METRICS["max_drawdown"]["date"] in chart["dates"]
+    lowest = min(drawdown)
+    assert lowest == pytest.approx(METRICS["max_drawdown"]["pct"], abs=0.01)
+    assert chart["dates"][drawdown.index(lowest)] == METRICS["max_drawdown"]["date"]
+    assert lowest == summary["max_drawdown"]["pct"]
+    assert drawdown[-1] == pytest.approx(V2_FROM_PEAK_PCT, abs=0.01)
+    assert drawdown[-1] == summary["from_peak_pct"]
+
+
+def test_backtest_late_symbol_drawdown_is_null_only_before_first_buy(api: Api) -> None:
+    """chart.series 값은 그 종목 첫 매수 전 날짜에서 null이다 (상세 설계 4절). QQQ 데이터가 2023-03부터면
+    QLD와 섞은 그래프에서 QQQ drawdown은 첫 매수일 전 날짜에서만 null이고 QLD에는 null이 없다."""
+    api.yahoo.extra["QQQ"] = payload_from("QQQ", LATE_FIRST_DAY)
+    body = _backtest(api.client, symbols=["QQQ", "QLD"])
+    assert body["errors"] == []
+    first_buy = _result(body, "QQQ")["summary"]["first_buy"]
+    assert first_buy >= LATE_FIRST_DAY.isoformat()
+    dates, series = body["chart"]["dates"], body["chart"]["series"]
+    assert any(
+        d < first_buy for d in dates
+    )  # 이 테스트가 가려내는지: 첫 매수 전 날짜가 그래프에 있다
+    assert len(series["QQQ"]["drawdown"]) == len(dates)
+    assert [v is None for v in series["QQQ"]["drawdown"]] == [d < first_buy for d in dates]
+    assert None not in series["QLD"]["drawdown"]
+
+
+def test_backtest_late_symbol_first_year_has_null_price_change(api: Api) -> None:
+    """9-2, 결정 d25: 전해 데이터가 없으면(2023-03부터 데이터) 그해 주가 등락은 null, 다음 해는 값이 있다."""
+    api.yahoo.extra["QQQ"] = payload_from("QQQ", LATE_FIRST_DAY)
+    years = _result(_backtest(api.client, symbols=["QQQ"]), "QQQ")["analysis"]["years"]
+    first_year = str(LATE_FIRST_DAY.year)
+    assert next(iter(years)) == first_year
+    assert years[first_year]["price_change_pct"] is None
+    assert years[str(LATE_FIRST_DAY.year + 1)]["price_change_pct"] is not None
+
+
+# 속도
+
+
+def test_backtest_four_symbols_five_years_daily_with_tax_from_saved_data_within_one_second(
+    api: Api,
+) -> None:
+    """비기능 "속도" (이슈 #35): 저장본으로 4종목 5년 매일 10만원, 원화, 양도세 켬 요청 하나가 1초 안.
+
+    v2 지표·분석·낙폭 열을 다 담은 응답을 잰다. 첫 요청은 저장본을 채우고 첫 호출 준비를 떠맡으므로 재지 않고,
+    client.post 앞뒤만 잰다. 재는 동안 Yahoo를 부르지 않는다.
+    """
+    request = {
+        **EXAMPLE,
+        "symbols": SPEED_SYMBOLS,
+        "freq": DAILY_CASE["freq"],
+        "anchor": DAILY_CASE["anchor"],
+        "amount": DAILY_CASE["amount"],
+        "tax": True,
+    }
+    first = api.client.post("/api/backtest", json=request)  # 저장본을 채운다. 재지 않는다
+    assert first.status_code == 200, first.text
+    assert first.json()["errors"] == []
+    calls = len(api.yahoo.calls)
+    started = time.perf_counter()
+    response = api.client.post("/api/backtest", json=request)
+    elapsed = time.perf_counter() - started
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert [r["symbol"] for r in body["results"]] == SPEED_SYMBOLS
+    # 잰 응답이 이슈 #35에서 더한 값을 다 담았는지: v1 응답만 재면 기준보다 가볍다
+    for result in body["results"]:
+        assert "analysis" in result, result["symbol"]
+        assert result["summary"].get("tax") is not None, result["symbol"]
+    for symbol, series in body["chart"]["series"].items():
+        assert "drawdown" in series, symbol
+    assert len(api.yahoo.calls) == calls  # 저장본만 썼다
+    assert elapsed < BACKTEST_SPEED_LIMIT_S, f"{elapsed:.2f}s"
