@@ -63,7 +63,10 @@ class Params:
 
 @dataclass(frozen=True, slots=True)
 class BuyRow:
-    """매수 1회. 평단가는 이번 매수까지의 값이고, 아직 산 수량이 없으면 None."""
+    """매수 1회. 평단가는 이번 매수까지의 값이고, 아직 산 수량이 없으면 None.
+
+    매수 규칙(simulate_with_rule)이면 쉰 날은 qty 0이고 avg_cost_invest는 None이다 (결정 d39).
+    """
 
     date: date
     price: float
@@ -99,7 +102,11 @@ class Extreme:
 
 @dataclass(frozen=True, slots=True)
 class Summary:
-    """결과 지표 (계산 규칙 5절)."""
+    """결과 지표 (계산 규칙 5절).
+
+    simulate_with_rule 결과면 avg_cost_invest는 None(결정 d39), leftover_cash는 9-6에서 쓰지 않고 쌓인
+    현금(종목 통화), invested는 A × 매수 횟수다.
+    """
 
     buys: int
     first_buy: date
@@ -603,7 +610,7 @@ def analyze(
 ) -> Analysis:
     """v2 지표. 계산 규칙 9-1 ~ 9-5절.
 
-    result는 simulate(asset, fx, params)의 결과이고 end는 params.end다.
+    result는 simulate(asset, fx, params) 또는 simulate_with_rule(...)의 결과이고 end는 params.end다.
     asset은 끝날짜로 자르지 않은 전체 데이터다. 9-3 끝난 달은 2절 매수일처럼 데이터 마지막 날을 본다 (결정 d24).
     tax_fx는 투자 통화 1단위의 원화 값이다 (원화 투자면 1, 달러 투자면 끝날짜 당일 또는 그 이전 마지막
     USDKRW=X 종가, 9-5절).
@@ -697,8 +704,42 @@ def simulate_rule(
     쌓였다가 다음 매수일에 쓰인다. 소수점 매수로 계산한다 (9-6 공식). 일시금은 첫 매수일에 A × 매수 횟수.
     ref는 레버리지 전환의 기준 종목(종가와 이평선을 본다). 두 종목의 exchange_tz가 같으면 매수일의 종가·
     이평선을, 다르거나 하나라도 비어 있으면 매수일보다 앞선 마지막 거래일 기준을 본다 (결정 d29). 같은 날짜의
-    기준 종목 종가가 사는 종목 장이 끝난 뒤에 나올 수 있어서다.
+    기준 종목 종가가 사는 종목 장이 끝난 뒤에 나올 수 있어서다. simulate_with_rule과 같은 계산 루프를 쓴다.
     """
+    sim, rule_days = _run_rule(asset, fx, ref, p, rule, ma_days)
+    s = sim.summary
+    return StrategyResult(
+        rule=rule,
+        value=s.value,
+        invested=s.invested,
+        return_pct=s.return_pct,
+        xirr_pct=s.xirr_pct,
+        avg_cost_asset=s.avg_cost_asset,
+        worst_return_pct=s.worst.value,
+        leftover_cash_invest=s.leftover_cash * s.eval_fx,
+        rule_days=rule_days,
+        daily=sim.daily,
+    )
+
+
+def simulate_with_rule(
+    asset: Series, fx: Series | None, ref: Series | None, p: Params, rule: Rule, ma_days: int = 200
+) -> SimResult:
+    """매수 규칙(F-17)으로 산 결과를 simulate와 같은 모양으로 돌려준다. 계산 규칙 9-6절.
+
+    rule은 none·ma_dip·ma_hot·switch이고, lump_sum(전략 비교 전용)이면 ValueError다. 소수점 매수로 계산하고
+    p.fractional은 보지 않는다. buys는 매수일마다 한 줄이고, 레버리지 전환에서 쉰 날은 qty 0이다.
+    cash는 남은 현금(종목 통화), avg_cost_invest는 None이다 (결정 d39). ref는 switch에서만 쓴다.
+    """
+    if rule == "lump_sum":
+        raise ValueError("일시금은 매수 규칙으로 쓸 수 없습니다 (전략 비교 전용)")
+    return _run_rule(asset, fx, ref, p, rule, ma_days)[0]
+
+
+def _run_rule(
+    asset: Series, fx: Series | None, ref: Series | None, p: Params, rule: Rule, ma_days: int
+) -> tuple[SimResult, int]:
+    """9-6 계산 루프 하나. simulate_rule·simulate_with_rule이 같이 부른다. int는 rule_days."""
     _check_params(p)
     if rule not in RULES:
         raise ValueError(f"알 수 없는 전략입니다: {rule}")
@@ -719,6 +760,7 @@ def simulate_rule(
     shares = cash = cost = invested = 0.0
     rule_days = 0
     flows: list[tuple[date, float]] = []
+    buys: list[BuyRow] = []
     daily: list[DailyRow] = []
     for i in range(_asof_index(asset.dates, picked[0]), _asof_index(asset.dates, p.end) + 1):
         day, price = asset.dates[i], asset.close[i]
@@ -750,8 +792,22 @@ def simulate_rule(
             if put:
                 invested += put
                 flows.append((day, -put))
-            shares += spend / price
+            qty = spend / price
+            shares += qty
             cost += spend / keep
+            buys.append(
+                BuyRow(
+                    date=day,
+                    price=price,
+                    fx=fx_rate,
+                    qty=qty,
+                    cum_qty=shares,
+                    avg_cost_asset=cost / shares if shares > 0 else None,
+                    avg_cost_invest=None,  # 같은 예산 규칙은 넣은 돈과 쓴 돈이 달라 정하지 않는다 (결정 d39)
+                    invested=invested,
+                    cash=cash,
+                )
+            )
         value = (shares * price + cash) * fx_rate
         daily.append(
             DailyRow(
@@ -764,7 +820,8 @@ def simulate_rule(
                 avg_cost_asset=cost / shares if shares > 0 else None,
             )
         )
-    eval_price = asset.close[_asof_index(asset.dates, p.end)]
+    eval_index = _asof_index(asset.dates, p.end)
+    eval_price = asset.close[eval_index]
     eval_fx = rate_on(fx, p.end)
     value = (shares * eval_price + cash) * eval_fx
     total = p.amount * len(picked)
@@ -772,18 +829,34 @@ def simulate_rule(
     annual_rate = xirr(flows)
     # 마지막 거래일은 평가 환율로 다시 평가한다 (5절 끝, simulate와 같다)
     daily[-1] = replace(daily[-1], fx=eval_fx, value=value, return_pct=(value / total - 1) * 100)
-    return StrategyResult(
-        rule=rule,
-        value=value,
+    best = max(daily, key=lambda r: r.return_pct)
+    worst = min(daily, key=lambda r: r.return_pct)
+    peak = max(daily, key=lambda r: r.value)
+    summary = Summary(
+        buys=len(picked),
+        first_buy=picked[0],
+        last_buy=picked[-1],
         invested=total,
+        shares=shares,
+        leftover_cash=cash,
+        avg_cost_asset=cost / shares if shares > 0 else None,
+        avg_cost_invest=None,  # 결정 d39
+        eval_date=asset.dates[eval_index],
+        eval_price=eval_price,
+        eval_fx=eval_fx,
+        value=value,
+        profit=value - total,
         return_pct=(value / total - 1) * 100,
         xirr_pct=None if annual_rate is None else annual_rate * 100,
-        avg_cost_asset=cost / shares if shares > 0 else None,
-        worst_return_pct=min(row.return_pct for row in daily),
-        leftover_cash_invest=cash * eval_fx,
-        rule_days=rule_days,
-        daily=daily,
+        best=Extreme(best.date, best.return_pct),
+        worst=Extreme(worst.date, worst.return_pct),
+        peak_value=Extreme(peak.date, peak.value),
+        listed_after_start=asset.dates[0] > p.start,
     )
+    result = SimResult(
+        symbol=asset.symbol, currency=asset.currency, summary=summary, buys=buys, daily=daily
+    )
+    return result, rule_days
 
 
 @dataclass(frozen=True, slots=True)

@@ -8,7 +8,7 @@ from collections import Counter
 from collections.abc import Iterator
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 import httpx
 import pytest
@@ -192,6 +192,12 @@ def test_backtest_all_symbols_failing_returns_only_errors(
         ({"anchor": 0}, "anchor", "날짜"),
         ({"currency": "JPY"}, "currency", "통화"),
         ({"fee_pct": 11}, "fee_pct", "수수료"),
+        # 이슈 #36: 매수 규칙 (F-17). 일시금은 전략 비교 전용이라 받지 않는다
+        ({"rule": "lump_sum"}, "rule", "매수 규칙"),
+        ({"rule": "abc"}, "rule", "매수 규칙"),
+        ({"ma_days": 50}, "ma_days", "이평선"),
+        ({"switch_ref": "QQ Q"}, "switch_ref", "종목 코드"),
+        ({"switch_ref": 1}, "switch_ref", "문자열"),
     ],
     ids=[
         "amount-zero",
@@ -206,6 +212,11 @@ def test_backtest_all_symbols_failing_returns_only_errors(
         "monthly-anchor",
         "currency",
         "fee",
+        "rule-lump-sum",
+        "rule-unknown",
+        "ma-days-50",
+        "switch-ref-format",
+        "switch-ref-not-text",
     ],
 )
 def test_backtest_bad_input_returns_422_with_korean_message(
@@ -1287,10 +1298,12 @@ def test_backtest_late_symbol_first_year_has_null_price_change(api: Api) -> None
 # 속도
 
 
+@pytest.mark.parametrize("rule", ["none", "switch"], ids=["none", "switch"])
 def test_backtest_four_symbols_five_years_daily_with_tax_from_saved_data_within_one_second(
-    api: Api,
+    api: Api, rule: str
 ) -> None:
-    """비기능 "속도" (이슈 #35): 저장본으로 4종목 5년 매일 10만원, 원화, 양도세 켬 요청 하나가 1초 안.
+    """비기능 "속도" (이슈 #35·#36): 저장본으로 4종목 5년 매일 10만원, 원화, 양도세 켬 요청 하나가 1초 안.
+    매수 규칙은 기본(none)과 레버리지 전환(switch, 기준 종목 QQQ) 둘 다 잰다.
 
     v2 지표·분석·낙폭 열을 다 담은 응답을 잰다. 첫 요청은 저장본을 채우고 첫 호출 준비를 떠맡으므로 재지 않고,
     client.post 앞뒤만 잰다. 재는 동안 Yahoo를 부르지 않는다.
@@ -1302,6 +1315,7 @@ def test_backtest_four_symbols_five_years_daily_with_tax_from_saved_data_within_
         "anchor": DAILY_CASE["anchor"],
         "amount": DAILY_CASE["amount"],
         "tax": True,
+        "rule": rule,
     }
     first = api.client.post("/api/backtest", json=request)  # 저장본을 채운다. 재지 않는다
     assert first.status_code == 200, first.text
@@ -1317,7 +1331,308 @@ def test_backtest_four_symbols_five_years_daily_with_tax_from_saved_data_within_
     for result in body["results"]:
         assert "analysis" in result, result["symbol"]
         assert result["summary"].get("tax") is not None, result["symbol"]
+        if rule == "switch":  # 잰 응답이 레버리지 전환으로 계산한 것인지
+            assert result["switch_ref"] is not None, result["symbol"]
     for symbol, series in body["chart"]["series"].items():
         assert "drawdown" in series, symbol
     assert len(api.yahoo.calls) == calls  # 저장본만 썼다
     assert elapsed < BACKTEST_SPEED_LIMIT_S, f"{elapsed:.2f}s"
+
+
+# ---------- POST /api/backtest 매수 규칙 (F-17, 계산 규칙 9-6, 이슈 #36) ----------
+
+# F-17 매수 규칙 4개: 9-8 전략 표에서 일시금(전략 비교 전용)을 뺀 것
+BACKTEST_RULES = [rule for rule in V2["strategies"] if rule != "lump_sum"]
+CHOSEN_RULES = [rule for rule in BACKTEST_RULES if rule != "none"]  # 9-6 규칙 매수로 계산한다
+NON_SWITCH_RULES = [rule for rule in BACKTEST_RULES if rule != "switch"]  # 기준 종목을 받지 않는다
+# 9-8 끝날짜는 7절과 같아 평가 환율도 같다 (1,344.16원). 남은 현금(원) 기준값을 종목 통화로 바꿀 때 쓴다
+V2_EVAL_FX = _v1_result("monthly1-krw2m", "QLD")["eval_fx"]
+SAME_DAY_QQQ = {"symbol": V2["switch_ref"], "basis": "same_day", "stale": False}
+PREVIOUS_DAY_QQQ = {"symbol": V2["switch_ref"], "basis": "previous_day", "stale": False}
+REF_QQQ_FAILED = "기준 종목 QQQ를 받지 못해 계산하지 못했습니다."
+
+
+def _rest_rows(result: dict[str, Any]) -> int:
+    """레버리지 전환에서 쉰 매수일(qty 0) 줄 수."""
+    return sum(1 for row in result["buys"] if row["qty"] == 0)
+
+
+def _count_get_series(api: Api, monkeypatch: pytest.MonkeyPatch) -> Counter[str]:
+    """market.get_series 호출을 종목별로 센다. 성공한 두 번째 호출은 저장본에서 나와 Yahoo 호출 수로는
+    가려내지 못해서 래퍼로 센다 (설계 메모)."""
+    market = api.client.app.state.market  # type: ignore[attr-defined]
+    original = market.get_series
+    counts: Counter[str] = Counter()
+
+    async def counting(symbol: str) -> PriceHistory:
+        counts[symbol] += 1
+        history: PriceHistory = await original(symbol)
+        return history
+
+    monkeypatch.setattr(market, "get_series", counting)
+    return counts
+
+
+# 요청 모양 (schemas)
+
+
+def test_backtest_rule_type_is_engine_rules_without_lump_sum() -> None:
+    """F-17: 매수 규칙은 none·ma_dip·ma_hot·switch다. engine.RULES에서 lump_sum만 뺀 것과 같은 순서다."""
+    assert get_args(schemas.BacktestRule) == tuple(r for r in engine.RULES if r != "lump_sum")
+    assert list(get_args(schemas.BacktestRule)) == BACKTEST_RULES
+
+
+def test_backtest_request_without_rule_fields_fills_none_200_qqq() -> None:
+    """rule·ma_days·switch_ref를 빼면 기본값 none, 200, QQQ다 (F-15·F-17). 기존 요청이 그대로 돈다."""
+    request = schemas.BacktestRequest.model_validate(V2_BACKTEST)
+    assert (request.rule, request.ma_days, request.switch_ref) == ("none", 200, "QQQ")
+
+
+def test_backtest_request_lowercase_switch_ref_is_uppercased() -> None:
+    request = schemas.BacktestRequest.model_validate({**V2_BACKTEST, "switch_ref": " qqq "})
+    assert request.switch_ref == "QQQ"
+
+
+@pytest.mark.parametrize("ma_days", [20, 60, 120, 200], ids=["ma20", "ma60", "ma120", "ma200"])
+def test_backtest_request_allowed_ma_days_is_kept(ma_days: int) -> None:
+    """F-15: 이평선은 20·60·120·200일 중 하나. 화면은 200만 보내지만 API는 다 받는다 (결정 d43)."""
+    request = schemas.BacktestRequest.model_validate({**V2_BACKTEST, "ma_days": ma_days})
+    assert request.ma_days == ma_days
+
+
+# 9-8 기준값
+
+
+@pytest.mark.parametrize("rule", BACKTEST_RULES, ids=BACKTEST_RULES)
+def test_backtest_rule_reference_case_summary_matches_v2_strategies(api: Api, rule: str) -> None:
+    """9-8 조건에 rule을 주면 summary가 전략 표 그 줄과 같다 (금액 ±1원, % ±0.01%p, 평단가 ±0.01).
+
+    남은 현금은 종목 통화(달러 2자리)로 온다. 원화 기준값을 평가 환율로 나눠 ±0.01달러로 본다. 달러 2자리에
+    평가 환율을 곱해 원화로 비교하면 ma_dip이 약 4원 어긋난다 (설계 메모).
+    """
+    body = _backtest(api.client, rule=rule)
+    assert body["errors"] == []
+    assert body["params"]["rule"] == rule
+    qld = _result(body, "QLD")
+    summary, want = qld["summary"], V2["strategies"][rule]
+    assert summary["value"] == pytest.approx(want["value"], abs=1)
+    assert summary["return_pct"] == pytest.approx(want["return_pct"], abs=0.01)
+    assert summary["xirr_pct"] == pytest.approx(want["xirr_pct"], abs=0.01)
+    assert summary["avg_cost_asset"] == pytest.approx(want["avg_cost_asset"], abs=0.01)
+    assert summary["worst"]["return_pct"] == pytest.approx(want["worst_return_pct"], abs=0.01)
+    leftover_asset = want["leftover_cash_invest"] / V2_EVAL_FX
+    assert summary["leftover_cash"] == pytest.approx(leftover_asset, abs=0.01)
+    assert summary["invested"] == pytest.approx(V2_INVESTED, abs=1)
+    assert summary["buys"] == len(qld["buys"]) == METRICS["buys"]
+
+
+@pytest.mark.parametrize("rule", BACKTEST_RULES, ids=BACKTEST_RULES)
+def test_backtest_rule_fx_effect_and_avg_buy_fx_match_v2_metrics(api: Api, rule: str) -> None:
+    """9-4: 환율 효과 −746,367원, 평균 매수 환율 1,352.57원은 매수 방식과 상관없다. 주가 효과 + 환율 효과는
+    그 규칙의 손익이다."""
+    summary = _result(_backtest(api.client, rule=rule), "QLD")["summary"]
+    # 이 테스트가 가려내는지: 그 규칙으로 계산한 결과다 (환율 효과만으로는 규칙을 무시해도 같다)
+    assert summary["value"] == pytest.approx(V2["strategies"][rule]["value"], abs=1)
+    assert summary["fx_effect"] == pytest.approx(METRICS["fx_effect"], abs=1)
+    assert summary["avg_buy_fx"] == pytest.approx(METRICS["avg_buy_fx"], abs=0.01)
+    assert summary["price_effect"] + summary["fx_effect"] == pytest.approx(summary["profit"], abs=1)
+
+
+@pytest.mark.parametrize("rule", CHOSEN_RULES, ids=CHOSEN_RULES)
+def test_backtest_rule_avg_cost_invest_is_null_in_summary_and_buys(api: Api, rule: str) -> None:
+    """결정 d39: 규칙 매수 결과에는 평단가(투자 통화)가 없다. summary와 buys 모두 null."""
+    qld = _result(_backtest(api.client, rule=rule), "QLD")
+    assert qld["summary"]["avg_cost_invest"] is None
+    assert [row["avg_cost_invest"] for row in qld["buys"]] == [None] * len(qld["buys"])
+
+
+def test_backtest_switch_buys_keep_rest_days_with_zero_qty_and_same_day_reference(
+    api: Api,
+) -> None:
+    """레버리지 전환: buys는 매수일마다 60줄이고 쉰 날 15줄은 qty 0 (v2.strategies.switch.rule_days).
+    QLD와 QQQ는 둘 다 America/New_York이라 매수일 종가를 본다. 기준 종목은 환율 없이 한 번 받는다."""
+    body = _backtest(api.client, rule="switch")
+    assert body["errors"] == []
+    qld = _result(body, "QLD")
+    assert len(qld["buys"]) == METRICS["buys"]
+    assert _rest_rows(qld) == V2["strategies"]["switch"]["rule_days"]
+    assert qld["switch_ref"] == SAME_DAY_QQQ
+    assert _called(api.yahoo) == Counter({"QLD": 1, "USDKRW=X": 1, "QQQ": 1})
+
+
+def test_backtest_switch_cross_exchange_matches_v2_and_uses_previous_day(api: Api) -> None:
+    """9-8 다른 거래소 레버리지 전환 (결정 d29): 005930.KS, 원화. 평가금 298,106,846원, +148.42%,
+    XIRR 37.64%, 평단가 76,241.12원, 쉰 매수일 14줄, 기준 종목은 전날 종가로 본다."""
+    body = _backtest(api.client, symbols=["005930.KS"], rule="switch")
+    assert body["errors"] == []
+    samsung = _result(body, "005930.KS")
+    summary, want = samsung["summary"], V2["switch_cross_exchange"]
+    assert summary["value"] == pytest.approx(want["value"], abs=1)
+    assert summary["return_pct"] == pytest.approx(want["return_pct"], abs=0.01)
+    assert summary["xirr_pct"] == pytest.approx(want["xirr_pct"], abs=0.01)
+    assert summary["avg_cost_asset"] == pytest.approx(want["avg_cost_asset"], abs=0.01)
+    assert summary["worst"]["return_pct"] == pytest.approx(want["worst_return_pct"], abs=0.01)
+    assert summary["leftover_cash"] == pytest.approx(want["leftover_cash_invest"], abs=1)
+    assert _rest_rows(samsung) == want["rule_days"]
+    assert samsung["switch_ref"] == PREVIOUS_DAY_QQQ
+    assert _called(api.yahoo) == Counter({"005930.KS": 1, "QQQ": 1})
+
+
+# 요청 값이 엔진까지 가는지
+
+
+def test_backtest_rule_none_response_equals_response_without_rule(api: Api) -> None:
+    """rule을 빼면 none이다: 응답 전체가 같고, params에 기본값(none, 200, QQQ)을 채운다. none은 지금처럼
+    simulate로 계산하므로 원화 평단가가 있고 switch_ref는 null이다."""
+    without = _backtest(api.client, symbols=["QQQ", "QLD"])
+    with_none = _backtest(api.client, symbols=["QQQ", "QLD"], rule="none")
+    assert with_none == without
+    params = with_none["params"]
+    assert (params["rule"], params["ma_days"], params["switch_ref"]) == ("none", 200, "QQQ")
+    for result in with_none["results"]:
+        assert result["switch_ref"] is None, result["symbol"]
+        assert result["summary"]["avg_cost_invest"] is not None, result["symbol"]
+
+
+def test_backtest_ma_dip_whole_shares_flag_keeps_values(api: Api) -> None:
+    """9-6, 결정 d28: 규칙 매수는 소수점 매수로 계산하므로 fractional=false여도 결과가 true일 때와 같다."""
+    fractional = _backtest(api.client, rule="ma_dip")
+    whole = _backtest(api.client, rule="ma_dip", fractional=False)
+    assert whole["params"]["fractional"] is False
+    summary = _result(whole, "QLD")["summary"]
+    assert summary["value"] == pytest.approx(V2["strategies"]["ma_dip"]["value"], abs=1)
+    assert whole["results"] == fractional["results"]
+    assert whole["chart"] == fractional["chart"]
+
+
+def test_backtest_ma_days_reaches_engine(api: Api) -> None:
+    """F-15: 고른 이평선 기간으로 계산한다. 200일은 9-8 기준값, 20일은 엔진을 ma_days=20으로 부른 값과 같고
+    (공식은 다시 만들지 않는다) 둘이 다르다."""
+    short = _result(_backtest(api.client, rule="ma_dip", ma_days=20), "QLD")["summary"]
+    long = _result(_backtest(api.client, rule="ma_dip", ma_days=200), "QLD")["summary"]
+    assert long["value"] == pytest.approx(V2["strategies"]["ma_dip"]["value"], abs=1)
+    params = engine.Params(
+        start=date.fromisoformat(V2_BACKTEST["start"]),
+        end=date.fromisoformat(V2_BACKTEST["end"]),
+        freq=V2_BACKTEST["freq"],
+        anchor=V2_BACKTEST["anchor"],
+        amount=V2_BACKTEST["amount"],
+        currency=V2_BACKTEST["currency"],
+    )
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    want = engine.simulate_rule(asset, fx, None, params, "ma_dip", ma_days=20)
+    assert short["value"] == pytest.approx(want.value, abs=1)
+    assert short["value"] != pytest.approx(long["value"], abs=1)
+
+
+@pytest.mark.parametrize("rule", NON_SWITCH_RULES, ids=NON_SWITCH_RULES)
+def test_backtest_non_switch_rule_ignores_unknown_switch_ref(api: Api, rule: str) -> None:
+    """기준 종목은 switch일 때만 받는다. 다른 규칙에 없는 switch_ref(ZZZZ)를 줘도 부르지 않고 오류도 없으며
+    switch_ref는 null이다."""
+    body = _backtest(api.client, rule=rule, switch_ref="ZZZZ")
+    assert body["errors"] == []
+    qld = _result(body, "QLD")
+    assert qld["switch_ref"] is None
+    assert qld["summary"]["value"] == pytest.approx(V2["strategies"][rule]["value"], abs=1)
+    assert _called(api.yahoo) == Counter({"QLD": 1, "USDKRW=X": 1})
+
+
+# 호출 횟수
+
+
+@pytest.mark.parametrize(
+    ("symbols", "want"),
+    [
+        (["QQQ", "QLD", "TQQQ"], Counter({"QQQ": 1, "QLD": 1, "TQQQ": 1, "USDKRW=X": 1})),
+        (["QLD", "TQQQ"], Counter({"QLD": 1, "TQQQ": 1, "USDKRW=X": 1, "QQQ": 1})),
+    ],
+    ids=["reference-among-symbols", "reference-not-among-symbols"],
+)
+def test_backtest_switch_gets_reference_series_once(
+    api: Api, monkeypatch: pytest.MonkeyPatch, symbols: list[str], want: Counter[str]
+) -> None:
+    """기준 종목은 요청 하나에 한 번만 받는다. 요청 종목과 같으면 그 데이터를 쓰고, 종목이 여럿이어도 한 번."""
+    counts = _count_get_series(api, monkeypatch)
+    body = _backtest(api.client, symbols=symbols, rule="switch", switch_ref="QQQ")
+    assert body["errors"] == []
+    assert counts == want
+    assert [r["switch_ref"] for r in body["results"]] == [SAME_DAY_QQQ] * len(symbols)
+
+
+# 실패 경로
+
+
+@pytest.mark.parametrize(
+    ("missing", "switch_ref", "message"),
+    [
+        ("QQQ", "QQQ", REF_QQQ_FAILED),
+        (None, "ZZZZ", "기준 종목 ZZZZ를 받지 못해 계산하지 못했습니다."),
+    ],
+    ids=["qqq-not-found", "unknown-code"],
+)
+def test_backtest_switch_reference_failure_fails_each_symbol(
+    api: Api, missing: str | None, switch_ref: str, message: str
+) -> None:
+    """기준 종목을 받지 못하면 200이고, 결과 전체가 그 규칙이라 종목마다 errors에 담는다 (환율 실패와 같은
+    처리). results와 그래프는 비고, 기준 종목은 한 번만 부른다."""
+    if missing is not None:
+        api.yahoo.missing.add(missing)
+    body = _backtest(api.client, symbols=["QLD", "TQQQ"], rule="switch", switch_ref=switch_ref)
+    assert body["results"] == []
+    assert body["errors"] == [
+        {"symbol": "QLD", "message": message},
+        {"symbol": "TQQQ", "message": message},
+    ]
+    assert body["chart"]["series"] == {}
+    assert _called(api.yahoo)[switch_ref] == 1
+
+
+def test_backtest_switch_failing_symbol_keeps_own_error_over_reference_error(api: Api) -> None:
+    """종목과 기준 종목이 모두 실패하면 그 종목은 자기 오류 한 줄이다 (설계 메모 표)."""
+    body = _backtest(api.client, symbols=["QLD", "XXXX"], rule="switch", switch_ref="ZZZZ")
+    assert body["results"] == []
+    assert body["errors"] == [
+        {"symbol": "QLD", "message": "기준 종목 ZZZZ를 받지 못해 계산하지 못했습니다."},
+        {"symbol": "XXXX", "message": "'XXXX' 종목을 찾을 수 없습니다."},
+    ]
+
+
+def test_backtest_switch_missing_reference_symbol_reports_own_and_reference_errors(
+    api: Api,
+) -> None:
+    """기준 종목이 요청 종목이면서 없으면 그 종목은 자기 문구, 다른 종목은 기준 종목 문구다. 한 번만 부른다."""
+    api.yahoo.missing.add("QQQ")
+    body = _backtest(api.client, symbols=["QQQ", "QLD"], rule="switch")
+    assert body["results"] == []
+    assert body["errors"] == [
+        {"symbol": "QQQ", "message": "'QQQ' 종목을 찾을 수 없습니다."},
+        {"symbol": "QLD", "message": REF_QQQ_FAILED},
+    ]
+    assert _called(api.yahoo)["QQQ"] == 1
+
+
+def test_backtest_switch_reference_symbol_fx_failure_keeps_other_symbol(api: Api) -> None:
+    """기준 종목이 요청 종목이고 그 종목의 환율만 실패하면, 그 종목은 환율 문구이고 다른 종목은 받은 기준 종목
+    데이터로 계산한다. 005930.KS는 9-8 다른 거래소 레버리지 전환 값이다."""
+    api.yahoo.missing.add("USDKRW=X")
+    body = _backtest(api.client, symbols=["QQQ", "005930.KS"], rule="switch")
+    assert body["errors"] == [{"symbol": "QQQ", "message": FX_FAILED}]
+    samsung = _result(body, "005930.KS")
+    want = V2["switch_cross_exchange"]
+    assert samsung["summary"]["value"] == pytest.approx(want["value"], abs=1)
+    assert samsung["switch_ref"] == PREVIOUS_DAY_QQQ
+    assert _called(api.yahoo)["QQQ"] == 1
+
+
+def test_backtest_switch_stale_reference_only_marks_switch_ref(api: Api) -> None:
+    """기준 종목만 저장본이면 switch_ref.stale만 true다. 종목·환율은 새로 받았으니 results[].stale은 false
+    (/api/strategy와 같다). 값은 9-8 레버리지 전환 그대로다."""
+    assert _backtest(api.client, rule="switch")["errors"] == []  # 저장본을 채운다
+    api.clock.now += 7 * 3600
+    api.yahoo.missing.add("QQQ")
+    body = _backtest(api.client, rule="switch")
+    assert body["errors"] == []
+    qld = _result(body, "QLD")
+    assert qld["stale"] is False
+    assert qld["switch_ref"] == {**SAME_DAY_QQQ, "stale": True}
+    assert qld["summary"]["value"] == pytest.approx(V2["strategies"]["switch"]["value"], abs=1)

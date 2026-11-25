@@ -1011,3 +1011,219 @@ def test_anchor_sweep_whole_shares_without_one_share_is_none() -> None:
     )
     assert anchor_sweep(asset, None, params)[1] is None
     assert anchor_sweep(asset, None, replace(params, fractional=True))[1] is not None
+
+
+# ---------- 이슈 #36: 매수 규칙을 SimResult로 (F-17, 계산 규칙 9-6) ----------
+
+# F-17 매수 규칙 4개: 9-8 전략 표에서 일시금(전략 비교 전용)을 뺀 것
+BACKTEST_RULES = [rule for rule in V2["strategies"] if rule != "lump_sum"]
+# 9-8: 매수일은 7절 "매월 1일 200만원" QLD와 같다 (60번, 2021-12-01 ~ 2026-11-02, 투자금 1억 2천만원)
+V1_MONTHLY = next(c for c in EXPECTED["cases"] if CASE_IDS[c["name"]] == "monthly1-krw2m")
+V1_QLD = V1_MONTHLY["results"]["QLD"]
+# 7절 허용 오차에서 평단가(투자 통화)를 뺀 것. 규칙 매수에는 원화 평단가가 없다 (결정 d39)
+RULE_SUMMARY_TOLERANCE = {k: v for k, v in TOLERANCE.items() if k != "avg_cost_invest"}
+
+
+def _with_rule(rule: str, **changes: Any) -> engine.SimResult:
+    """9-8 조건(QLD, 기준 종목 QQQ, 200일선)을 매수 규칙 하나로. changes로 Params 항목을 바꾼다."""
+    asset, fx, ref = load_series("QLD"), load_series("USDKRW=X"), load_series(V2["switch_ref"])
+    params = _v2_params(**changes)
+    return engine.simulate_with_rule(asset, fx, ref, params, rule, ma_days=V2["ma_days"])
+
+
+def _summary_numbers(s: engine.Summary) -> dict[str, float | None]:
+    """RULE_SUMMARY_TOLERANCE 키로 요약 숫자를 모은다."""
+    return {
+        "invested": s.invested,
+        "shares": s.shares,
+        "leftover_cash_asset": s.leftover_cash,
+        "avg_cost_asset": s.avg_cost_asset,
+        "eval_price": s.eval_price,
+        "eval_fx": s.eval_fx,
+        "value": s.value,
+        "return_pct": s.return_pct,
+        "xirr_pct": s.xirr_pct,
+    }
+
+
+def _assert_rule_summary(s: engine.Summary, want: dict[str, Any]) -> None:
+    """9-8 전략 표 한 줄과 7절 허용 오차로 비교한다. 남은 현금은 leftover_cash × eval_fx(투자 통화)로 본다."""
+    assert s.value == pytest.approx(want["value"], abs=1)
+    assert s.return_pct == pytest.approx(want["return_pct"], abs=0.01)
+    assert s.xirr_pct == pytest.approx(want["xirr_pct"], abs=0.01)
+    assert s.avg_cost_asset == pytest.approx(want["avg_cost_asset"], abs=0.01)
+    assert s.worst.value == pytest.approx(want["worst_return_pct"], abs=0.01)
+    assert s.leftover_cash * s.eval_fx == pytest.approx(want["leftover_cash_invest"], abs=1)
+
+
+@pytest.mark.parametrize("rule", BACKTEST_RULES, ids=BACKTEST_RULES)
+def test_simulate_with_rule_reference_case_matches_v2_strategies(rule: str) -> None:
+    """9-8 전략 표: 규칙마다 summary가 v2.strategies와 같고, 매수 60번·투자금은 기본 적립과 같다 (9-6)."""
+    s = _with_rule(rule).summary
+    _assert_rule_summary(s, V2["strategies"][rule])
+    assert s.buys == V2["metrics"]["buys"]
+    assert (s.first_buy.isoformat(), s.last_buy.isoformat()) == (
+        V1_QLD["first_buy"],
+        V1_QLD["last_buy"],
+    )
+    assert s.invested == pytest.approx(V1_QLD["invested"], abs=1)
+
+
+@pytest.mark.parametrize("rule", BACKTEST_RULES, ids=BACKTEST_RULES)
+def test_simulate_with_rule_summary_and_daily_equal_simulate_rule(rule: str) -> None:
+    """두 함수는 같은 계산 루프를 쓴다 (설계 메모 _run_rule). simulate_rule의 7개 값과 daily가 그대로 같다."""
+    sim, strategy = _with_rule(rule), _strategy(rule)
+    s = sim.summary
+    assert s.value == strategy.value
+    assert s.invested == strategy.invested
+    assert s.return_pct == strategy.return_pct
+    assert s.xirr_pct == strategy.xirr_pct
+    assert s.avg_cost_asset == strategy.avg_cost_asset
+    assert s.worst.value == strategy.worst_return_pct
+    assert s.leftover_cash * s.eval_fx == strategy.leftover_cash_invest
+    assert sim.daily == strategy.daily
+
+
+def test_simulate_with_rule_none_matches_simulate() -> None:
+    """rule none은 기본 적립이라 simulate(소수점 매수)와 같다: 매수 60줄, 평단가 $37.9743, 평가금 225,824,590원.
+    다른 것은 원화 평단가뿐이다 (결정 d39)."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    basic, got = simulate(asset, fx, _v2_params()), _with_rule("none")
+    s, b = got.summary, basic.summary
+    assert len(got.buys) == len(basic.buys) == V2["metrics"]["buys"]
+    assert (s.buys, s.first_buy, s.last_buy, s.eval_date) == (
+        b.buys,
+        b.first_buy,
+        b.last_buy,
+        b.eval_date,
+    )
+    assert s.listed_after_start is b.listed_after_start is False
+    want = _summary_numbers(b)
+    for field, value in _summary_numbers(s).items():
+        assert value == pytest.approx(want[field], abs=RULE_SUMMARY_TOLERANCE[field]), field
+    for got_x, want_x, tolerance in (
+        (s.best, b.best, 0.01),
+        (s.worst, b.worst, 0.01),
+        (s.peak_value, b.peak_value, 1.0),
+    ):
+        assert got_x.date == want_x.date
+        assert got_x.value == pytest.approx(want_x.value, abs=tolerance)
+    for row, want_row in zip(got.buys, basic.buys, strict=True):
+        assert (row.date, row.price, row.fx) == (want_row.date, want_row.price, want_row.fx)
+        assert row.qty == pytest.approx(want_row.qty, abs=1e-4), row.date
+        assert row.cum_qty == pytest.approx(want_row.cum_qty, abs=1e-4), row.date
+        assert row.avg_cost_asset == pytest.approx(want_row.avg_cost_asset, abs=0.01), row.date
+        assert row.invested == pytest.approx(want_row.invested, abs=1), row.date
+        assert row.cash == pytest.approx(want_row.cash, abs=0.01), row.date
+
+
+@pytest.mark.parametrize("rule", BACKTEST_RULES, ids=BACKTEST_RULES)
+def test_simulate_with_rule_buys_one_row_per_buy_day_ending_at_summary(rule: str) -> None:
+    """buys는 매수일(돈을 넣은 날)마다 한 줄이다. 날짜·가격·환율·누적 투자금은 기본 적립(simulate)과 같고,
+    마지막 줄의 누적 수량·평단가·남은 현금이 summary와 맞는다. analyze가 9-4 달러 원가를 이 줄로 센다."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    basic = simulate(asset, fx, _v2_params())
+    got = _with_rule(rule)
+    s = got.summary
+    assert len(got.buys) == s.buys == V2["metrics"]["buys"]
+    assert [(r.date, r.price, r.fx) for r in got.buys] == [
+        (r.date, r.price, r.fx) for r in basic.buys
+    ]
+    assert [r.invested for r in got.buys] == pytest.approx([r.invested for r in basic.buys], abs=1)
+    assert sum(r.qty for r in got.buys) == pytest.approx(s.shares, abs=1e-4)
+    last = got.buys[-1]
+    assert last.cum_qty == pytest.approx(s.shares, abs=1e-4)
+    assert last.avg_cost_asset == pytest.approx(s.avg_cost_asset, abs=0.01)
+    assert last.invested == pytest.approx(s.invested, abs=1)
+    assert last.cash == pytest.approx(s.leftover_cash, abs=0.01)
+
+
+def test_simulate_with_rule_switch_rest_days_are_zero_qty_rows() -> None:
+    """레버리지 전환에서 쉰 매수일도 줄이 있고 qty는 0이다 (정수 주 모드와 같다). 9-8: 15줄
+    (v2.strategies.switch.rule_days). 쉰 날은 보유 수량이 그대로이고 넣은 돈이 현금으로 쌓인다."""
+    buys = _with_rule("switch").buys
+    rests = [i for i, row in enumerate(buys) if row.qty == 0]
+    assert len(rests) == V2["strategies"]["switch"]["rule_days"]
+    for i in rests:
+        if i == 0:
+            continue
+        assert buys[i].cum_qty == buys[i - 1].cum_qty, buys[i].date
+        assert buys[i].cash > buys[i - 1].cash, buys[i].date
+
+
+@pytest.mark.parametrize("rule", BACKTEST_RULES, ids=BACKTEST_RULES)
+def test_simulate_with_rule_avg_cost_invest_is_none(rule: str) -> None:
+    """결정 d39: 규칙 매수에는 평단가(투자 통화)가 없다. summary와 buys 모두 None."""
+    got = _with_rule(rule)
+    assert got.summary.avg_cost_invest is None
+    assert [row.avg_cost_invest for row in got.buys] == [None] * len(got.buys)
+
+
+@pytest.mark.parametrize("rule", BACKTEST_RULES, ids=BACKTEST_RULES)
+def test_simulate_with_rule_whole_shares_flag_is_ignored(rule: str) -> None:
+    """9-6, 결정 d28: 규칙 매수는 소수점 매수로 계산하고 p.fractional은 보지 않는다."""
+    assert _with_rule(rule, fractional=False) == _with_rule(rule)
+
+
+def test_simulate_with_rule_switch_cross_exchange_matches_v2_reference() -> None:
+    """9-8 다른 거래소 레버리지 전환 (결정 d29): 005930.KS를 QQQ 200일선으로, 원화. 평가금 298,106,846원,
+    +148.42%, XIRR 37.64%, 평단가 76,241.12원. 쉰 매수일 14줄은 qty 0이다."""
+    want = V2["switch_cross_exchange"]
+    asset, ref = load_series("005930.KS"), load_series(V2["switch_ref"])
+    got = engine.simulate_with_rule(asset, None, ref, _v2_params(), "switch", ma_days=V2["ma_days"])
+    _assert_rule_summary(got.summary, want)
+    assert len(got.buys) == got.summary.buys
+    assert sum(1 for row in got.buys if row.qty == 0) == want["rule_days"]
+
+
+@pytest.mark.parametrize("rule", BACKTEST_RULES, ids=BACKTEST_RULES)
+def test_analyze_rule_result_fx_effect_matches_v2_metrics(rule: str) -> None:
+    """9-4: 환율 효과(−746,367원)와 평균 매수 환율(1,352.57원)은 매수 방식과 상관없다. 쉰 날도 넣은 돈은
+    그날 환율로 바꿨으니 buys 줄로 센다. 주가 효과 + 환율 효과 = 그 규칙의 손익."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    params = _v2_params()
+    sim = _with_rule(rule)
+    a = analyze(sim, asset, fx, params.end, tax_fx=1.0)
+    assert a.fx_effect == pytest.approx(V2["metrics"]["fx_effect"], abs=1)
+    assert a.avg_buy_fx == pytest.approx(V2["metrics"]["avg_buy_fx"], abs=0.01)
+    assert a.price_effect + a.fx_effect == pytest.approx(sim.summary.profit, abs=1)
+
+
+def test_simulate_with_rule_lump_sum_raises_value_error() -> None:
+    """F-17에 일시금은 없다 (전략 비교 전용). 호출 계약 위반이라 데이터 오류(EngineError)가 아니다."""
+    with pytest.raises(ValueError) as excinfo:  # noqa: PT011 - 메시지는 설계에 없다
+        _with_rule("lump_sum")
+    assert not isinstance(excinfo.value, EngineError)
+
+
+def test_simulate_with_rule_unknown_rule_raises_value_error() -> None:
+    """검사 순서와 메시지는 simulate_rule 그대로다 (설계 메모 _run_rule)."""
+    with pytest.raises(ValueError, match="알 수 없는 전략"):
+        _with_rule("dca_x")
+
+
+def test_simulate_with_rule_switch_without_reference_raises_value_error() -> None:
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    with pytest.raises(ValueError, match="기준 종목"):
+        engine.simulate_with_rule(asset, fx, None, _v2_params(), "switch", ma_days=V2["ma_days"])
+
+
+def test_simulate_with_rule_without_buy_days_in_period_raises_engine_error() -> None:
+    with pytest.raises(EngineError, match="매수일"):
+        _with_rule("ma_dip", start=date(2030, 1, 1), end=date(2030, 2, 1))
+
+
+def test_simulate_with_rule_fx_starting_after_first_buy_raises_engine_error() -> None:
+    """환율이 2024년부터만 있으면 첫 매수일(2021-12-01)에 환율이 없다 (3절)."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    cut = next(i for i, d in enumerate(fx.dates) if d >= date(2024, 1, 1))
+    short_fx = Series(fx.symbol, fx.currency, fx.dates[cut:], fx.close[cut:])
+    with pytest.raises(EngineError, match="환율"):
+        engine.simulate_with_rule(asset, short_fx, None, _v2_params(), "ma_dip", ma_days=200)
+
+
+def test_simulate_with_rule_listed_after_start_is_flagged() -> None:
+    """종목 데이터가 시작일보다 늦게 시작하면 listed_after_start다 (simulate와 같은 뜻, main의 listed_from)."""
+    got = _with_rule("ma_dip", start=date(2020, 1, 1))
+    assert got.summary.listed_after_start is True
+    assert got.summary.first_buy >= load_series("QLD").dates[0]
