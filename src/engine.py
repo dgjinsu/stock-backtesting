@@ -102,7 +102,11 @@ class Extreme:
 
 @dataclass(frozen=True, slots=True)
 class Summary:
-    """결과 지표 (계산 규칙 5절)."""
+    """결과 지표 (계산 규칙 5절).
+
+    simulate_with_rule 결과면 avg_cost_invest는 None(결정 d39), leftover_cash는 9-6에서 쓰지 않고 쌓인
+    현금(종목 통화), invested는 A × 매수 횟수다.
+    """
 
     buys: int
     first_buy: date
