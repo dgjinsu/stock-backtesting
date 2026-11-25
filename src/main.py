@@ -253,6 +253,7 @@ def _result_out(
     analysis: engine.Analysis,
     params: engine.Params,
     fx_stale: bool,
+    switch_ref: SwitchRefOut | None,
     *,
     tax: bool,
 ) -> ResultOut:
@@ -265,6 +266,7 @@ def _result_out(
         data_through=sim.summary.eval_date,
         stale=history.stale or fx_stale,
         listed_from=history.dates[0] if sim.summary.listed_after_start else None,
+        switch_ref=switch_ref,
         summary=_summary_out(sim.summary, analysis, invest, asset, tax=tax),
         analysis=_analysis_out(analysis),
         buys=[
@@ -354,30 +356,37 @@ class FxError(MarketError):
     """종목은 받았지만 그 종목의 환율을 받지 못했다."""
 
 
+def _series_task(
+    market: Market, code: str, tasks: dict[str, "asyncio.Task[PriceHistory]"]
+) -> "asyncio.Task[PriceHistory]":
+    """코드 하나를 받는 작업. 요청 하나에서 같은 코드(종목·환율·기준 종목)는 작업 하나를 나눠 기다린다.
+
+    실패해도 한 번만 부른다.
+    """
+    if code not in tasks:
+        tasks[code] = asyncio.create_task(market.get_series(code))
+    return tasks[code]
+
+
 async def _fetch(
     market: Market,
     symbol: str,
     currency: str,
-    fx_tasks: dict[str, "asyncio.Task[PriceHistory]"],
+    tasks: dict[str, "asyncio.Task[PriceHistory]"],
 ) -> tuple[PriceHistory, PriceHistory | None]:
-    """종목 하나와 (필요하면) 그 종목의 환율을 이어서 받는다. 종목끼리는 겹쳐서 받는다.
-
-    같은 환율 쌍은 fx_tasks에 작업 하나만 만들어 나눠 기다린다 (실패해도 한 번만 부른다).
-    """
-    history = await market.get_series(symbol)
+    """종목 하나와 (필요하면) 그 종목의 환율을 이어서 받는다. 종목끼리는 겹쳐서 받는다."""
+    history = await asyncio.shield(_series_task(market, symbol, tasks))
     if history.currency == currency:
         return history, None
-    return history, await _fetch_fx(market, f"{history.currency}{currency}=X", fx_tasks)
+    return history, await _fetch_fx(market, f"{history.currency}{currency}=X", tasks)
 
 
 async def _fetch_fx(
-    market: Market, pair: str, fx_tasks: dict[str, "asyncio.Task[PriceHistory]"]
+    market: Market, pair: str, tasks: dict[str, "asyncio.Task[PriceHistory]"]
 ) -> PriceHistory:
-    """환율 하나. 같은 코드는 fx_tasks에 작업 하나만 만들어 나눠 기다린다 (실패해도 한 번만 부른다)."""
-    if pair not in fx_tasks:
-        fx_tasks[pair] = asyncio.create_task(market.get_series(pair))
+    """환율 하나. 받지 못하면 FxError ("{pair} 환율을 받지 못해 계산하지 못했습니다.")."""
     try:
-        return await asyncio.shield(fx_tasks[pair])
+        return await asyncio.shield(_series_task(market, pair, tasks))
     except MarketError as error:
         raise FxError(f"{pair} 환율을 받지 못해 계산하지 못했습니다.") from error
 
@@ -386,32 +395,57 @@ async def _fetch_with_tax_fx(
     market: Market,
     symbol: str,
     request: BacktestRequest,
-    fx_tasks: dict[str, "asyncio.Task[PriceHistory]"],
+    tasks: dict[str, "asyncio.Task[PriceHistory]"],
 ) -> tuple[PriceHistory, PriceHistory | None, PriceHistory | None]:
     """_fetch에 더해, 9-5 양도세에 원화 환율이 필요한 종목이면 {투자통화}KRW=X도 받는다.
 
     필요한 때: tax가 켜졌고, 투자 통화가 원화가 아니고, 종목 통화도 원화가 아니다 (한국 종목은 세금 0).
-    fx_tasks를 _fetch와 같이 써서 요청 하나에 한 번만 받는다. 받지 못하면 FxError (결정 d40).
+    tasks를 _fetch와 같이 써서 요청 하나에 한 번만 받는다. 받지 못하면 FxError (결정 d40).
     """
-    history, fx_history = await _fetch(market, symbol, request.currency, fx_tasks)
+    history, fx_history = await _fetch(market, symbol, request.currency, tasks)
     if not request.tax or request.currency == "KRW" or history.currency == "KRW":
         return history, fx_history, None
-    won = await _fetch_fx(market, f"{request.currency}KRW=X", fx_tasks)
+    won = await _fetch_fx(market, f"{request.currency}KRW=X", tasks)
     return history, fx_history, won
+
+
+def _switch_ref_out(
+    code: str, asset: engine.Series, ref: engine.Series, stale: bool
+) -> SwitchRefOut:
+    """레버리지 전환의 기준 종목. basis는 engine.same_exchange로만 정한다 (결정 d29). 두 API가 같이 쓴다."""
+    return SwitchRefOut(
+        symbol=code,
+        basis="same_day" if engine.same_exchange(asset, ref) else "previous_day",
+        stale=stale,
+    )
 
 
 async def run_backtest(market: Market, request: BacktestRequest, today: date) -> BacktestResponse:
     """종목과 환율을 받고(동시에), 종목마다 계산하고, 그래프 날짜축을 맞춘다 (아키텍처 1절).
 
     엔진에는 끝날짜로 자르지 않은 전체 데이터를 넘긴다 (결정 d32). tax가 켜진 달러 투자면
-    양도세용 USDKRW=X를 요청 하나에 한 번 받는다 (9-5).
+    양도세용 USDKRW=X를 요청 하나에 한 번 받는다 (9-5). 매수 규칙(F-17)이 none이 아니면 9-6 같은
+    예산 규칙으로 계산하고, switch면 기준 종목을 환율 없이 한 번 받는다. 기준 종목을 받지 못하면 모든
+    종목이 그 규칙으로 계산할 수 없으니 종목마다 오류다.
     """
     params = _to_params(request, today)
-    fx_tasks: dict[str, asyncio.Task[PriceHistory]] = {}
+    tasks: dict[str, asyncio.Task[PriceHistory]] = {}
+    # 기준 종목이 요청 종목이면 그 종목의 _fetch가 같은 작업을 기다린다 (따로 부르지 않는다)
+    ref_task = _series_task(market, request.switch_ref, tasks) if request.rule == "switch" else None
     fetched = await asyncio.gather(
-        *(_fetch_with_tax_fx(market, s, request, fx_tasks) for s in request.symbols),
+        *(_fetch_with_tax_fx(market, s, request, tasks) for s in request.symbols),
         return_exceptions=True,
     )
+    ref: engine.Series | None = None
+    ref_stale = False
+    ref_error: str | None = None
+    if ref_task is not None:
+        try:
+            ref_history = await asyncio.shield(ref_task)
+        except MarketError:
+            ref_error = f"기준 종목 {request.switch_ref}를 받지 못해 계산하지 못했습니다."
+        else:
+            ref, ref_stale = _to_series(ref_history), ref_history.stale
 
     results: list[ResultOut] = []
     errors: list[SymbolError] = []
@@ -422,12 +456,20 @@ async def run_backtest(market: Market, request: BacktestRequest, today: date) ->
             continue
         if isinstance(outcome, BaseException):
             raise outcome
+        if ref_error is not None:
+            errors.append(SymbolError(symbol=symbol, message=ref_error))
+            continue
         history, fx_history, won_history = outcome
         asset = _to_series(history)
         fx = None if fx_history is None else _to_series(fx_history)
         won = None if won_history is None else _to_series(won_history)
         try:
-            sim = engine.simulate(asset, fx, params)
+            if request.rule == "none":
+                sim = engine.simulate(asset, fx, params)
+            else:  # 9-6 소수점 매수로 계산하고 fractional은 보지 않는다
+                sim = engine.simulate_with_rule(
+                    asset, fx, ref, params, request.rule, request.ma_days
+                )
             # 양도세 환율이 필요 없으면(원화 투자, tax 꺼짐, 한국 종목) 세금이 0이거나 응답에서 버리는 값이라 1
             tax_fx = engine.rate_on(won, params.end)
             analysis = engine.analyze(sim, asset, fx, params.end, tax_fx=tax_fx)
@@ -436,7 +478,12 @@ async def run_backtest(market: Market, request: BacktestRequest, today: date) ->
             continue
         simulated[symbol] = sim
         fx_stale = any(h is not None and h.stale for h in (fx_history, won_history))
-        results.append(_result_out(history, sim, analysis, params, fx_stale, tax=request.tax))
+        switch_ref = (
+            None if ref is None else _switch_ref_out(request.switch_ref, asset, ref, ref_stale)
+        )
+        results.append(
+            _result_out(history, sim, analysis, params, fx_stale, switch_ref, tax=request.tax)
+        )
 
     return BacktestResponse(
         params=request,
@@ -519,11 +566,7 @@ async def run_strategy(market: Market, request: StrategyRequest, today: date) ->
         listed_from=history.dates[0] if history.dates[0] > params.start else None,
         switch_ref=None
         if ref is None
-        else SwitchRefOut(
-            symbol=request.switch_ref,
-            basis="same_day" if engine.same_exchange(asset, ref) else "previous_day",
-            stale=ref_stale,
-        ),
+        else _switch_ref_out(request.switch_ref, asset, ref, ref_stale),
         strategies=StrategiesOut(
             none=_strategy_out(sims["none"], invest),
             ma_dip=_strategy_out(sims["ma_dip"], invest),

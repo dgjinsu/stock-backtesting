@@ -6,9 +6,9 @@ pydantic은 이 모듈에서만 쓴다. 엔진 결과(dataclass)를 이 모델�
 import math
 import re
 from datetime import date
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, field_validator
+from pydantic import AfterValidator, BaseModel, field_validator
 
 SYMBOL_PATTERN = re.compile(r"^[A-Za-z0-9.\-=^]{1,20}$")
 MAX_SYMBOLS = 8
@@ -29,6 +29,7 @@ FIELD_MESSAGES = {
     "ma_days": "이평선 기간은 20, 60, 120, 200일 중 하나입니다",
     "switch_ref": "기준 종목 코드는 문자열로 넣어 주세요",
     "tax": "양도세 어림 여부는 true 또는 false입니다",
+    "rule": "매수 규칙은 none, ma_dip, ma_hot, switch 중 하나입니다",
 }
 
 
@@ -38,6 +39,13 @@ def _clean_symbol(raw: str) -> str:
     if not SYMBOL_PATTERN.fullmatch(code):
         raise ValueError(f"종목 코드 형식이 올바르지 않습니다: '{raw}'")
     return code
+
+
+MaDays = Literal[20, 60, 120, 200]  # 이평선 기간 (거래일, F-15)
+SymbolCode = Annotated[str, AfterValidator(_clean_symbol)]  # 공백 제거·대문자·형식 검사
+BacktestRule = Literal[
+    "none", "ma_dip", "ma_hot", "switch"
+]  # F-17. engine.RULES에서 lump_sum을 뺀 것
 
 
 class Conditions(BaseModel):
@@ -75,6 +83,9 @@ class BacktestRequest(Conditions):
 
     symbols: list[str]
     tax: bool = False  # 양도세 어림 (F-20). 켜면 summary.tax·profit_after_tax를 채운다
+    rule: BacktestRule = "none"  # 매수 규칙 (F-17). none이 아니면 9-6 소수점 매수로 계산
+    ma_days: MaDays = 200  # ma_dip·ma_hot은 종목의, switch는 기준 종목의 이평선
+    switch_ref: SymbolCode = "QQQ"  # rule이 switch일 때만 받는다. 형식은 늘 본다
 
     @field_validator("symbols")
     @classmethod
@@ -93,14 +104,9 @@ class BacktestRequest(Conditions):
 class StrategyRequest(Conditions):
     """POST /api/strategy 요청 (F-15). 종목 하나를 전략 5개로 계산한다."""
 
-    symbol: str
-    ma_days: Literal[20, 60, 120, 200] = 200  # 이평선 기간 (거래일)
-    switch_ref: str = "QQQ"  # 레버리지 전환의 기준 종목
-
-    @field_validator("symbol", "switch_ref")
-    @classmethod
-    def _check_code(cls, raw: str) -> str:
-        return _clean_symbol(raw)
+    symbol: SymbolCode
+    ma_days: MaDays = 200
+    switch_ref: SymbolCode = "QQQ"  # 레버리지 전환의 기준 종목
 
 
 class FieldError(BaseModel):
@@ -194,6 +200,18 @@ class BuyOut(BaseModel):
     invested: float
 
 
+class SwitchRefOut(BaseModel):
+    """레버리지 전환의 기준 종목. basis는 기준 종목의 어느 날 종가·이평선을 봤는지다 (결정 d29).
+
+    same_day: 같은 거래소라 매수일 것을 봤다. previous_day: 다른 거래소이거나 시간대를 몰라
+    매수일보다 앞선 마지막 거래일 것을 봤다.
+    """
+
+    symbol: str
+    basis: Literal["same_day", "previous_day"]
+    stale: bool
+
+
 class ResultOut(BaseModel):
     """종목 하나의 결과. stale이면 저장본으로 계산했고, listed_from이 있으면 상장일이 시작일보다 늦다."""
 
@@ -204,6 +222,7 @@ class ResultOut(BaseModel):
     data_through: date
     stale: bool
     listed_from: date | None
+    switch_ref: SwitchRefOut | None  # 매수 규칙이 switch일 때만, 아니면 null
     summary: SummaryOut
     analysis: AnalysisOut
     buys: list[BuyOut]
@@ -259,18 +278,6 @@ class StrategiesOut(BaseModel):
     ma_hot: StrategyOut
     switch: StrategyOut | None
     lump_sum: StrategyOut
-
-
-class SwitchRefOut(BaseModel):
-    """레버리지 전환의 기준 종목. basis는 기준 종목의 어느 날 종가·이평선을 봤는지다 (결정 d29).
-
-    same_day: 같은 거래소라 매수일 것을 봤다. previous_day: 다른 거래소이거나 시간대를 몰라
-    매수일보다 앞선 마지막 거래일 것을 봤다.
-    """
-
-    symbol: str
-    basis: Literal["same_day", "previous_day"]
-    stale: bool
 
 
 class StrategyChartSeriesOut(BaseModel):
