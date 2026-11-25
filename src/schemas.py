@@ -230,6 +230,20 @@ class SwitchRefOut(BaseModel):
     stale: bool
 
 
+class StrategyChartSeriesOut(BaseModel):
+    value: list[float]  # 투자 통화
+    invested: list[float]  # 투자 통화
+    return_pct: list[float]
+
+
+class StrategyChartOut(BaseModel):
+    """전략 그래프. series 키는 계산한 전략만(engine.RULES 순서), total_days는 줄이기 전 날짜 수다."""
+
+    dates: list[date]
+    series: dict[str, StrategyChartSeriesOut]
+    total_days: int
+
+
 class StrategyResultOut(BaseModel):
     """종목 하나의 전략 비교. 종목 정보 필드는 ResultOut과 같은 뜻이다."""
 
@@ -242,6 +256,11 @@ class StrategyResultOut(BaseModel):
     listed_from: date | None
     switch_ref: SwitchRefOut | None  # 기준 종목을 못 받으면 null
     strategies: StrategiesOut
+    chart: StrategyChartOut
+    anchor_sweep: dict[
+        str, float | None
+    ]  # "1"~"28", "31" → 평단가(종목 통화). 매수일이 없으면 null
+    start_sweep: dict[str, float]  # "YYYY-MM" 오름차순 → 수익률(%)
 
 
 class StrategyResponse(BaseModel):
