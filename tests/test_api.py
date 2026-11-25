@@ -589,6 +589,34 @@ def test_strategy_whole_shares_flag_keeps_strategy_values(api: Api) -> None:
     assert whole["result"]["strategies"] == fractional["result"]["strategies"]
 
 
+def test_strategy_ma_days_reaches_engine(api: Api) -> None:
+    """F-15: 고른 이평선 기간으로 계산한다. 공식은 다시 만들지 않고, 20일선 요청이 엔진을 ma_days=20으로
+    부른 값과 같은지만 본다 (API와 엔진의 연결)."""
+    body = _strategy(api.client, ma_days=20)
+    params = engine.Params(
+        start=date.fromisoformat(STRATEGY_EXAMPLE["start"]),
+        end=date.fromisoformat(STRATEGY_EXAMPLE["end"]),
+        freq=STRATEGY_EXAMPLE["freq"],
+        anchor=STRATEGY_EXAMPLE["anchor"],
+        amount=STRATEGY_EXAMPLE["amount"],
+        currency=STRATEGY_EXAMPLE["currency"],
+    )
+    asset, fx, ref = load_series("QLD"), load_series("USDKRW=X"), load_series("QQQ")
+    strategies = body["result"]["strategies"]
+    for rule in engine.RULES:
+        want = engine.simulate_rule(asset, fx, ref, params, rule, ma_days=20)
+        assert strategies[rule]["rule_days"] == want.rule_days, rule
+        assert strategies[rule]["value"] == pytest.approx(want.value, abs=1), rule
+    # 200일선 기준값과 실제로 갈린다: 기본값 200으로 계산하면 이 테스트가 실패한다
+    assert strategies["ma_dip"]["rule_days"] != V2["strategies"]["ma_dip"]["rule_days"]
+
+
+def test_strategy_listed_after_start_reports_listing_date(api: Api) -> None:
+    """listed_from은 main이 정한다: 첫 거래일이 시작일보다 늦으면 그 날짜다 (/api/backtest와 같은 뜻)."""
+    result = _strategy(api.client, start="2020-01-01")["result"]
+    assert result["listed_from"] == load_series("QLD").dates[0].isoformat()
+
+
 # 입력 오류 (422, Yahoo를 부르지 않는다)
 
 
