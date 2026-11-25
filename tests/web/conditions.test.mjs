@@ -3,10 +3,14 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  DEFAULT_TAB,
   MAX_SYMBOLS,
+  RESULT_TABS,
   anchorOf,
   estimateBuys,
   isDate,
+  nextTab,
+  panelFold,
   readQuery,
   shiftYears,
   symbolStatus,
@@ -113,6 +117,121 @@ test("readQuery: 잘못된 값은 버린다", () => {
     "?s=qqq,../etc,QQQ,SPY&from=2021-1-1&to=x&freq=yearly&day=40&amt=-5&cur=JPY&fee=20",
   );
   assert.deepEqual(found, { codes: ["QQQ", "SPY"] });
+});
+
+// ---------- 결과 탭 (F-11) ----------
+
+const V1_QUERY =
+  "s=QQQ,QLD&from=2021-11-25&to=2026-11-24&freq=monthly&day=1&amt=2000000&cur=KRW";
+
+test("RESULT_TABS: 요약·분석·전략 비교·매수 내역 순서이고 요약이 기본", () => {
+  assert.deepEqual(RESULT_TABS, ["summary", "analysis", "strategy", "buys"]);
+  assert.equal(DEFAULT_TAB, "summary");
+});
+
+test("toQuery: 요약 탭은 기본값이라 tab을 넣지 않는다", () => {
+  assert.equal(toQuery({ ...BASE, tab: "summary" }), V1_QUERY);
+  assert.equal(new URLSearchParams(toQuery({ ...BASE, tab: "summary" })).get("tab"), null);
+});
+
+test("toQuery: 탭은 조건 뒤에 붙는다", () => {
+  assert.equal(toQuery({ ...BASE, tab: "buys" }), `${V1_QUERY}&tab=buys`);
+});
+
+test("toQuery·readQuery: 분석·전략 비교·매수 내역 탭은 주소로 왕복한다", () => {
+  for (const tab of ["analysis", "strategy", "buys"]) {
+    const query = toQuery({ ...BASE, tab });
+    assert.equal(new URLSearchParams(query).get("tab"), tab, tab);
+    assert.equal(readQuery(`?${query}`).tab, tab, tab);
+  }
+});
+
+test("toQuery: 모르는 탭 값은 넣지 않는다", () => {
+  assert.equal(toQuery({ ...BASE, tab: "foo" }), V1_QUERY);
+});
+
+test("readQuery: 모르는 탭 값은 버린다", () => {
+  for (const bad of ["foo", "", "BUYS", "Buys", "buys "]) {
+    const found = readQuery(`?s=QQQ&tab=${encodeURIComponent(bad)}`);
+    assert.equal("tab" in found, false, JSON.stringify(bad));
+  }
+});
+
+test("readQuery: tab=summary는 요약으로 읽는다", () => {
+  assert.equal(readQuery("?s=QQQ&tab=summary").tab, "summary");
+});
+
+test("readQuery: tab이 없는 v1 주소는 그대로 읽는다", () => {
+  assert.deepEqual(readQuery(`?${V1_QUERY}`), {
+    codes: ["QQQ", "QLD"],
+    start: "2021-11-25",
+    end: "2026-11-24",
+    freq: "monthly",
+    monthDay: 1,
+    amount: 2_000_000,
+    currency: "KRW",
+  });
+});
+
+test("readQuery: 탭이 있어도 나머지 조건은 v1과 같게 읽는다", () => {
+  const { tab, ...rest } = readQuery(`?${V1_QUERY}&tab=buys`);
+  assert.equal(tab, "buys");
+  assert.deepEqual(rest, readQuery(`?${V1_QUERY}`));
+});
+
+test("nextTab: →는 다음 탭, 마지막에서는 처음으로", () => {
+  assert.equal(nextTab("summary", "ArrowRight"), "analysis");
+  assert.equal(nextTab("strategy", "ArrowRight"), "buys");
+  assert.equal(nextTab("buys", "ArrowRight"), "summary");
+});
+
+test("nextTab: ←는 앞 탭, 처음에서는 마지막으로", () => {
+  assert.equal(nextTab("strategy", "ArrowLeft"), "analysis");
+  assert.equal(nextTab("summary", "ArrowLeft"), "buys");
+});
+
+test("nextTab: Home은 처음, End는 마지막 탭", () => {
+  assert.equal(nextTab("analysis", "Home"), "summary");
+  assert.equal(nextTab("analysis", "End"), "buys");
+  assert.equal(nextTab("summary", "Home"), "summary");
+});
+
+test("nextTab: 다른 키나 모르는 탭이면 null", () => {
+  for (const key of ["Enter", " ", "Tab", "ArrowDown", "ArrowUp"]) {
+    assert.equal(nextTab("summary", key), null, key);
+  }
+  assert.equal(nextTab("foo", "ArrowRight"), null);
+});
+
+test("panelFold: 결과가 없으면 접힌 줄도 없고 패널은 편다", () => {
+  for (const tab of RESULT_TABS) {
+    assert.deepEqual(panelFold({ hasResult: false, tab, expanded: false }), {
+      bar: false,
+      collapsed: false,
+    });
+  }
+});
+
+test("panelFold: 요약 탭은 늘 패널을 편다", () => {
+  for (const expanded of [false, true]) {
+    assert.deepEqual(panelFold({ hasResult: true, tab: "summary", expanded }), {
+      bar: false,
+      collapsed: false,
+    });
+  }
+});
+
+test("panelFold: 요약이 아닌 탭은 접고, 조건 펼치기를 누르면 줄을 둔 채 편다", () => {
+  for (const tab of ["analysis", "strategy", "buys"]) {
+    assert.deepEqual(panelFold({ hasResult: true, tab, expanded: false }), {
+      bar: true,
+      collapsed: true,
+    });
+    assert.deepEqual(panelFold({ hasResult: true, tab, expanded: true }), {
+      bar: true,
+      collapsed: false,
+    });
+  }
 });
 
 test("isDate: 달력에 있는 날짜만", () => {

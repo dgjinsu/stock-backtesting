@@ -90,7 +90,7 @@
     </header>
 
     <div class="layout">
-      <aside class="panel" aria-labelledby="cond-h">
+      <aside class="panel" id="panel" aria-labelledby="cond-h">
         <form id="form" novalidate>
           <h2 id="cond-h">조건</h2>
 
@@ -247,12 +247,41 @@
               <span class="spinner" aria-hidden="true" hidden></span
               ><span id="run-label">계산하기</span>
             </button>
-            <p class="status" id="status" role="status" aria-live="polite"></p>
+            <!-- 읽어 주는 안내는 패널 밖 #status-live가 맡는다 (패널을 접어도 읽힌다) -->
+            <p class="status" id="status"></p>
           </div>
         </form>
       </aside>
 
       <main class="results" id="results">
+        <!-- 계산 상태·완료 안내를 스크린 리더에 읽어 준다. 보이는 글은 패널의 #status -->
+        <p class="sr" id="status-live" role="status" aria-live="polite"></p>
+        <!-- 요약이 아닌 탭에서 조건 패널 대신 보이는 한 줄 (F-11). 보이는 결과의 조건을 적는다 -->
+        <section class="cond-bar" id="cond-bar" aria-label="조건 (접힘)" hidden>
+          <span class="cond-bar-title">조건</span>
+          <span class="cond-syms" id="cond-syms"></span>
+          <span class="muted" id="cond-text"></span>
+          <button
+            type="button"
+            class="btn2 cond-toggle"
+            id="cond-toggle"
+            aria-expanded="false"
+            aria-controls="panel"
+          >
+            <svg
+              width="16"
+              height="16"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M4 6h16M7 12h10M10 18h4"></path></svg
+            ><span id="cond-toggle-label">조건 펼치기</span>
+          </button>
+        </section>
         <section class="empty" id="empty">
           <p class="empty-title">조건을 정하고 계산하기를 누르세요</p>
           <p class="muted">

@@ -664,6 +664,78 @@ a {
   stroke: var(--text);
 }
 
+/* 결과 탭 (F-11). 시안 v2: 고른 탭은 글자색과 밑줄 둘 다로 보인다 (색만으로 구분하지 않는다) */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.tabs [role="tab"] {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+  margin-bottom: -1px;
+  padding: 0 16px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  color: var(--muted);
+  font-size: 15px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.tabs [role="tab"]:hover {
+  color: var(--text);
+}
+.tabs [role="tab"][aria-selected="true"] {
+  color: var(--text);
+  border-bottom-color: var(--text);
+}
+.tabs [role="tab"]:focus-visible {
+  outline-offset: -2px;
+  border-radius: 8px 8px 0 0;
+}
+.tabpanel {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  min-width: 0;
+}
+.tabpanel:focus-visible {
+  outline-offset: 4px;
+  border-radius: 4px;
+}
+
+/* 접힌 조건 줄 (F-11). 요약이 아닌 탭에서 조건 패널 대신 결과 위에 둔다 */
+.cond-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 10px 12px 10px 16px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  font-size: 14px;
+}
+.cond-bar-title {
+  font-weight: 700;
+}
+.cond-syms {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+}
+.cond-sym {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.cond-toggle {
+  margin-left: auto;
+}
+
 .alert {
   display: flex;
   gap: 12px;

@@ -1,11 +1,15 @@
 // 조건(종목·기간·주기·금액)을 다루는 순수 함수. DOM을 쓰지 않아 node --test로 시험한다.
 // cond 모양: { codes, start, end, freq, monthDay, weekDay, amount, currency, fractional, fee }
+// 주소에는 보고 있는 결과 탭(tab)도 같이 담는다 (F-11). 조건이 아니라 계산에는 쓰지 않는다.
 
 export const MAX_SYMBOLS = 8;
 export const ALL_START = "1970-01-02"; // "전체": 상장 이후 전부
 export const SYMBOL_PATTERN = /^[A-Za-z0-9.\-=^]{1,20}$/;
 export const FREQS = ["daily", "weekly", "monthly"];
 export const CURRENCIES = ["KRW", "USD"];
+/** 결과 탭 (F-11): 요약, 분석, 전략 비교, 매수 내역. 화면의 탭 순서와 같다. */
+export const RESULT_TABS = ["summary", "analysis", "strategy", "buys"];
+export const DEFAULT_TAB = "summary";
 const DAY_MS = 86_400_000;
 
 /** 한국 시각 기준 오늘 (YYYY-MM-DD). 서버의 "오늘"과 같은 기준이다. */
@@ -37,7 +41,8 @@ export function anchorOf(cond) {
   return null;
 }
 
-/** 조건을 주소 쿼리로 (F-09). 기본값인 항목(정수 주가 아님, 수수료 0)은 뺀다.
+/** 조건을 주소 쿼리로 (F-09). 기본값인 항목(정수 주가 아님, 수수료 0, 요약 탭)은 뺀다.
+ * cond.tab이 있으면 맨 뒤에 붙인다 (F-11). 모르는 탭 값은 넣지 않는다.
  * 종목 사이 쉼표는 읽기 쉽게 그대로 둔다 (s=QQQ,QLD). 쿼리 키는 상세 설계 5절 표. */
 export function toQuery(cond) {
   const params = new URLSearchParams();
@@ -50,10 +55,11 @@ export function toQuery(cond) {
   params.set("cur", cond.currency);
   if (!cond.fractional) params.set("frac", "0");
   if (cond.fee) params.set("fee", String(cond.fee));
+  if (RESULT_TABS.includes(cond.tab) && cond.tab !== DEFAULT_TAB) params.set("tab", cond.tab);
   return params.toString().replaceAll("%2C", ",");
 }
 
-/** 주소 쿼리에서 조건을 읽는다. 잘못된 값은 버리고 읽은 항목만 돌려준다. */
+/** 주소 쿼리에서 조건과 탭을 읽는다. 잘못된 값은 버리고 읽은 항목만 돌려준다. */
 export function readQuery(search) {
   const params = new URLSearchParams(search);
   const codes = (params.get("s") ?? "")
@@ -78,7 +84,36 @@ export function readQuery(search) {
   const feeText = params.get("fee");
   const fee = Number(feeText);
   if (feeText !== null && feeText !== "" && fee >= 0 && fee <= 10) found.fee = fee;
+  if (RESULT_TABS.includes(params.get("tab"))) found.tab = params.get("tab");
   return found;
+}
+
+/**
+ * 탭 목록에서 키를 눌렀을 때 옮겨 갈 탭 (WAI-ARIA 탭 패턴, F-11).
+ * →는 다음, ←는 앞 탭이고 끝에서는 반대쪽 끝으로 넘어간다. Home은 처음, End는 마지막.
+ * 다른 키이거나 모르는 탭이면 null (그 키는 브라우저 기본 동작에 맡긴다).
+ */
+export function nextTab(tab, key) {
+  const from = RESULT_TABS.indexOf(tab);
+  if (from < 0) return null;
+  const last = RESULT_TABS.length - 1;
+  const to = {
+    ArrowRight: from === last ? 0 : from + 1,
+    ArrowLeft: from === 0 ? last : from - 1,
+    Home: 0,
+    End: last,
+  }[key];
+  return to === undefined ? null : RESULT_TABS[to];
+}
+
+/**
+ * 조건 패널 접기 규칙 (F-11). 결과(탭)가 보일 때 요약이 아닌 탭이면 결과 위에 접힌 줄(bar)을 두고,
+ * "조건 펼치기"를 누르지 않았으면(expanded가 아니면) 패널을 접는다(collapsed).
+ * 결과가 없거나 실패를 보이는 중이면 탭이 없으니 줄 없이 패널을 편다.
+ */
+export function panelFold({ hasResult, tab, expanded }) {
+  const bar = hasResult && tab !== DEFAULT_TAB;
+  return { bar, collapsed: bar && !expanded };
 }
 
 /** 서버에 보내기 전 입력 검사 (F-10). 항목 이름 → 한국어 메시지. 서버도 같은 검사를 한다. */

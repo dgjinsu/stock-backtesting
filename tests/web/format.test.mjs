@@ -4,7 +4,10 @@ import { test } from "node:test";
 
 import {
   MINUS,
+  condLine,
+  freqText,
   fx,
+  investLabel,
   krwShort,
   money,
   pct,
@@ -13,6 +16,70 @@ import {
   qty,
   signedMoney,
 } from "../../web/format.js";
+
+// ---------- 주기·통화 글자와 접힌 조건 줄 (F-11) ----------
+
+/** API 응답의 params (요청 그대로): 예시 조건. */
+const PARAMS = {
+  symbols: ["QQQ", "QLD"],
+  start: "2021-11-25",
+  end: "2026-11-24",
+  freq: "monthly",
+  anchor: 1,
+  amount: 2_000_000,
+  currency: "KRW",
+  fractional: true,
+  fee_pct: 0,
+};
+const LINE = "2021-11-25 ~ 2026-11-24 · 매월 1일 · 종목마다 200만원 · 원화";
+
+test("freqText: 주기마다 글자", () => {
+  assert.equal(freqText("daily", null), "매일");
+  assert.equal(freqText("weekly", 0), "매주 월요일");
+  assert.equal(freqText("weekly", 4), "매주 금요일");
+  assert.equal(freqText("monthly", 1), "매월 1일");
+  assert.equal(freqText("monthly", 31), "매월 말일");
+});
+
+test("investLabel: 투자 통화 이름", () => {
+  assert.equal(investLabel("KRW"), "원화");
+  assert.equal(investLabel("USD"), "달러");
+  assert.equal(investLabel("JPY"), "JPY");
+});
+
+test("condLine: 예시 조건은 기간 · 주기 · 금액 · 통화", () => {
+  assert.equal(condLine(PARAMS), LINE);
+});
+
+test("condLine: 정수 주는 기본값이 아닐 때만 붙인다", () => {
+  assert.equal(condLine({ ...PARAMS, fractional: false }), `${LINE} · 정수 주만`);
+});
+
+test("condLine: 수수료는 0보다 클 때만 붙인다", () => {
+  assert.equal(condLine({ ...PARAMS, fee_pct: 0.25 }), `${LINE} · 수수료 0.25%`);
+  assert.equal(
+    condLine({ ...PARAMS, fractional: false, fee_pct: 0.1 }),
+    `${LINE} · 정수 주만 · 수수료 0.1%`,
+  );
+});
+
+test("condLine: 전체 기간은 상장일부터", () => {
+  assert.equal(
+    condLine({ ...PARAMS, start: "1970-01-02" }),
+    "상장일 ~ 2026-11-24 · 매월 1일 · 종목마다 200만원 · 원화",
+  );
+});
+
+test("condLine: 매주·매일과 달러", () => {
+  assert.equal(
+    condLine({ ...PARAMS, freq: "weekly", anchor: 0, amount: 1500, currency: "USD" }),
+    "2021-11-25 ~ 2026-11-24 · 매주 월요일 · 종목마다 $1,500.00 · 달러",
+  );
+  assert.equal(
+    condLine({ ...PARAMS, freq: "daily", anchor: null }),
+    "2021-11-25 ~ 2026-11-24 · 매일 · 종목마다 200만원 · 원화",
+  );
+});
 
 test("pct: 부호와 소수 자리를 붙인다", () => {
   assert.equal(pct(88.19), "+88.19%");
