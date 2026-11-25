@@ -252,6 +252,19 @@ test("logFirst: 값이 null인 종목은 건너뛴다", () => {
   assert.equal(logFirst([peaks[0], peaks[2]]), null);
 });
 
+test("logFirst: 최고 평가금이 0이거나 음수인 종목도 null처럼 건너뛴다", () => {
+  const zero = { symbol: "Z", value: 0 };
+  const negative = { symbol: "N", value: -50 };
+  // 0 이하를 빼면 600 / 100 = 6배라 걸린다
+  const over = [zero, negative, { symbol: "QQQ", value: 100 }, { symbol: "SOXL", value: 600 }];
+  assert.deepEqual(logFirst(over), { symbol: "SOXL", value: 600 });
+  // 0을 가장 작은 값으로 쓰면 무엇이든 5배를 넘지만, 빼고 보면 400 / 100 = 4배라 걸리지 않는다
+  const under = [zero, negative, { symbol: "QQQ", value: 100 }, { symbol: "QLD", value: 400 }];
+  assert.equal(logFirst(under), null);
+  // 0 이하를 빼고 종목이 하나만 남으면 null
+  assert.equal(logFirst([zero, negative, { symbol: "SOXL", value: 600 }]), null);
+});
+
 test("logFirstNote: 이유 한 줄에 종목과 최고 평가금을 적는다 (시안 v2)", () => {
   assert.equal(
     logFirstNote({ symbol: "SOXL", value: 1_577_680_000 }, "KRW"),
