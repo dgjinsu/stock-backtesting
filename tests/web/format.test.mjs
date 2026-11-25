@@ -14,7 +14,9 @@ import {
   period,
   price,
   qty,
+  rate,
   signedMoney,
+  times,
 } from "../../web/format.js";
 
 // ---------- 주기·통화 글자와 접힌 조건 줄 (F-11) ----------
@@ -96,6 +98,21 @@ test("pct: 0으로 반올림되면 부호를 붙이지 않는다", () => {
 test("pct: 값이 없으면 계산 불가", () => {
   assert.equal(pct(null), "계산 불가");
   assert.equal(pct(undefined), "계산 불가");
+});
+
+test("rate: +는 붙이지 않고 빼기만 붙인다 (한눈에 요약의 연환산·비율)", () => {
+  assert.equal(rate(28.19), "28.19%");
+  assert.equal(rate(-1.5), `${MINUS}1.50%`);
+  assert.equal(rate(22.8, 1), "22.8%");
+  assert.equal(rate(0), "0.00%");
+  assert.equal(rate(null), "계산 불가");
+});
+
+test("times: 몇 배인지 소수 2자리", () => {
+  assert.equal(times(49.1 / 24.4708), "2.01배");
+  assert.equal(times(0.5), "0.50배");
+  assert.equal(times(1234.5), "1,234.50배");
+  assert.equal(times(null), "—");
 });
 
 test("krwShort: 억·만 단위로 줄인다", () => {
