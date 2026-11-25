@@ -655,6 +655,11 @@ def _moving_average(series: Series, day: date, n: int) -> float | None:
     return sum(series.close[i - n : i]) / n if i >= n else None
 
 
+def same_exchange(a: Series, b: Series) -> bool:
+    """두 종목이 같은 거래소인지. exchange_tz가 둘 다 비어 있지 않고 같을 때만 True (9-6절, 결정 d29)."""
+    return a.exchange_tz != "" and a.exchange_tz == b.exchange_tz
+
+
 def simulate_rule(
     asset: Series, fx: Series | None, ref: Series | None, p: Params, rule: Rule, ma_days: int = 200
 ) -> StrategyResult:
@@ -681,8 +686,7 @@ def simulate_rule(
     if not picked:
         raise EngineError(f"{asset.symbol}: 기간 안에 매수일이 없습니다")
     buy_set = set(picked)
-    ref_tz = ref.exchange_tz if ref is not None else ""
-    same_exchange = ref_tz != "" and ref_tz == asset.exchange_tz  # 모르면 다른 거래소로 본다
+    on_buy_day = ref is not None and same_exchange(asset, ref)  # 모르면 다른 거래소로 본다
     keep = 1 - p.fee
     shares = cash = cost = invested = 0.0
     rule_days = 0
@@ -708,7 +712,7 @@ def simulate_rule(
                         spend = min(cash, RULE_MULTIPLIER[rule][0 if hit else 1] * unit)
                 elif rule == "switch" and ref is not None:
                     # 날짜에 시각이 없으니 "전날 당일 또는 그 이전" = 매수일보다 앞선 마지막 거래일
-                    ref_day = day if same_exchange else day - timedelta(days=1)
+                    ref_day = day if on_buy_day else day - timedelta(days=1)
                     avg = _moving_average(ref, ref_day, ma_days)
                     if avg is not None:
                         on = ref.close[_asof_index(ref.dates, ref_day)] > avg

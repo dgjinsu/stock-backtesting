@@ -33,12 +33,19 @@ from src.schemas import (
     BuyOut,
     ChartOut,
     ChartSeriesOut,
+    Conditions,
     Extreme,
     FieldError,
     Peak,
     ResultOut,
     SearchHitOut,
+    StrategiesOut,
+    StrategyOut,
+    StrategyRequest,
+    StrategyResponse,
+    StrategyResultOut,
     SummaryOut,
+    SwitchRefOut,
     SymbolError,
 )
 
@@ -90,7 +97,7 @@ def today_kst() -> date:
 # ---------- 입력 검사 ----------
 
 
-def _anchor_for(request: BacktestRequest) -> int | None:
+def _anchor_for(request: Conditions) -> int | None:
     """주기에 맞는 매수 기준일. 비어 있으면 매주 월요일, 매월 1일 (범위는 _check_request가 본다)."""
     if request.freq == "daily":
         return None
@@ -99,7 +106,7 @@ def _anchor_for(request: BacktestRequest) -> int | None:
     return 0 if request.freq == "weekly" else 1
 
 
-def _check_request(request: BacktestRequest, today: date) -> list[FieldError]:
+def _check_request(request: Conditions, today: date) -> list[FieldError]:
     """항목끼리 맞춰 보는 검사. 틀린 것을 모두 모아 돌려준다."""
     errors: list[FieldError] = []
     anchor = _anchor_for(request)
@@ -118,6 +125,23 @@ def _check_request(request: BacktestRequest, today: date) -> list[FieldError]:
             )
         )
     return errors
+
+
+def _to_params(request: Conditions, today: date) -> engine.Params:
+    """항목끼리 맞춰 보고(틀리면 InputError) 엔진 조건을 만든다. 두 요청이 같이 쓴다."""
+    problems = _check_request(request, today)
+    if problems:
+        raise InputError(problems)
+    return engine.Params(
+        start=request.start,
+        end=request.end,
+        freq=request.freq,
+        anchor=_anchor_for(request),
+        amount=request.amount,
+        currency=request.currency,
+        fractional=request.fractional,
+        fee=request.fee_pct / 100,
+    )
 
 
 def _validation_errors(exc: RequestValidationError) -> list[FieldError]:
@@ -179,20 +203,20 @@ def _summary_out(s: engine.Summary, invest: str, asset: str) -> SummaryOut:
     )
 
 
+def _split_notes(history: PriceHistory, start: date) -> list[str]:
+    """시작일 뒤의 분할 안내. 끝날짜 뒤의 분할도 가격·수량에 반영돼 있어 같이 적는다."""
+    return [f"{day.isoformat()} {ratio} 분할 반영" for day, ratio in history.splits if day >= start]
+
+
 def _result_out(
     history: PriceHistory, sim: engine.SimResult, params: engine.Params, fx_stale: bool
 ) -> ResultOut:
     invest, asset = params.currency, history.currency
-    notes = [
-        f"{day.isoformat()} {ratio} 분할 반영"
-        for day, ratio in history.splits
-        if day >= params.start  # 끝날짜 뒤의 분할도 가격·수량에 반영돼 있다
-    ]
     return ResultOut(
         symbol=history.symbol,
         name=history.name,
         currency=asset,
-        notes=notes,
+        notes=_split_notes(history, params.start),
         data_through=sim.summary.eval_date,
         stale=history.stale or fx_stale,
         listed_from=history.dates[0] if sim.summary.listed_after_start else None,
@@ -233,6 +257,20 @@ def _chart_out(chart: engine.Chart, invest: str) -> ChartOut:
             for symbol, s in chart.series.items()
         },
         total_days=chart.total_days,
+    )
+
+
+def _strategy_out(result: engine.StrategyResult, invest: str) -> StrategyOut:
+    """전략 하나를 응답 자리수로 반올림한다 (계산 규칙 5절 끝)."""
+    return StrategyOut(
+        value=_money(result.value, invest),
+        invested=_money(result.invested, invest),
+        return_pct=round(result.return_pct, 2),
+        xirr_pct=_maybe(result.xirr_pct, 2),
+        avg_cost_asset=_maybe(result.avg_cost_asset, 4),
+        worst_return_pct=round(result.worst_return_pct, 2),
+        leftover_cash_invest=_money(result.leftover_cash_invest, invest),
+        rule_days=result.rule_days,
     )
 
 
@@ -277,19 +315,7 @@ async def _fetch(
 
 async def run_backtest(market: Market, request: BacktestRequest, today: date) -> BacktestResponse:
     """종목과 환율을 받고(동시에), 종목마다 계산하고, 그래프 날짜축을 맞춘다 (아키텍처 1절)."""
-    problems = _check_request(request, today)
-    if problems:
-        raise InputError(problems)
-    params = engine.Params(
-        start=request.start,
-        end=request.end,
-        freq=request.freq,
-        anchor=_anchor_for(request),
-        amount=request.amount,
-        currency=request.currency,
-        fractional=request.fractional,
-        fee=request.fee_pct / 100,
-    )
+    params = _to_params(request, today)
     fx_tasks: dict[str, asyncio.Task[PriceHistory]] = {}
     fetched = await asyncio.gather(
         *(_fetch(market, s, request.currency, fx_tasks) for s in request.symbols),
@@ -322,6 +348,90 @@ async def run_backtest(market: Market, request: BacktestRequest, today: date) ->
         chart=_chart_out(engine.build_chart(simulated), request.currency),
         errors=errors,
     )
+
+
+async def _fetch_ref(market: Market, request: StrategyRequest) -> PriceHistory | None:
+    """레버리지 전환의 기준 종목. 기준 종목 자신의 종가와 이평선만 보니 환율 없이 받는다.
+
+    종목과 같으면 부르지 않고 None을 돌려준다 (종목의 것을 쓴다).
+    """
+    if request.switch_ref == request.symbol:
+        return None
+    return await market.get_series(request.switch_ref)
+
+
+async def run_strategy(market: Market, request: StrategyRequest, today: date) -> StrategyResponse:
+    """종목(+환율)과 기준 종목을 겹쳐 받고 같은 예산 전략 5개를 계산한다 (계산 규칙 9-6).
+
+    엔진에는 시작일·끝날짜로 자르지 않은 전체 데이터를 넘긴다. 이평선은 시작일 이전 주가를 쓰고(9-6),
+    진행 중인 달은 데이터 마지막 날을 보고 판정한다(2절). 기준 종목만 실패하면 레버리지 전환만 빼고
+    돌려준다 (결정 d31).
+    """
+    params = _to_params(request, today)
+    fetched, ref_fetched = await asyncio.gather(
+        _fetch(market, request.symbol, request.currency, {}),
+        _fetch_ref(market, request),
+        return_exceptions=True,
+    )
+    for outcome in (fetched, ref_fetched):
+        if isinstance(outcome, BaseException) and not isinstance(outcome, MarketError):
+            raise outcome  # 코드 버그는 숨기지 않는다
+
+    errors: list[SymbolError] = []
+    ref_errors: list[SymbolError] = []
+    if isinstance(ref_fetched, BaseException):  # MarketError: 기준 종목만 실패
+        ref_errors.append(SymbolError(symbol=request.switch_ref, message=str(ref_fetched)))
+    if isinstance(fetched, BaseException):  # MarketError (FxError 포함): 종목 실패
+        errors.append(SymbolError(symbol=request.symbol, message=str(fetched)))
+        return StrategyResponse(params=request, result=None, errors=errors + ref_errors)
+
+    history, fx_history = fetched
+    asset = _to_series(history)
+    fx = None if fx_history is None else _to_series(fx_history)
+    ref: engine.Series | None
+    if isinstance(ref_fetched, BaseException):
+        ref, ref_stale = None, False
+    elif ref_fetched is None:  # 기준 종목이 종목과 같다
+        ref, ref_stale = asset, history.stale
+    else:
+        ref, ref_stale = _to_series(ref_fetched), ref_fetched.stale
+
+    try:
+        sims = {
+            rule: engine.simulate_rule(asset, fx, ref, params, rule, request.ma_days)
+            for rule in engine.RULES
+            if rule != "switch" or ref is not None
+        }
+    except engine.EngineError as error:  # 기간 안 매수일 없음 등
+        errors.append(SymbolError(symbol=request.symbol, message=str(error)))
+        return StrategyResponse(params=request, result=None, errors=errors + ref_errors)
+
+    invest = request.currency
+    switch = sims.get("switch")
+    result = StrategyResultOut(
+        symbol=history.symbol,
+        name=history.name,
+        currency=history.currency,
+        notes=_split_notes(history, params.start),
+        data_through=sims["none"].daily[-1].date,
+        stale=history.stale or (fx_history is not None and fx_history.stale),
+        listed_from=history.dates[0] if history.dates[0] > params.start else None,
+        switch_ref=None
+        if ref is None
+        else SwitchRefOut(
+            symbol=request.switch_ref,
+            basis="same_day" if engine.same_exchange(asset, ref) else "previous_day",
+            stale=ref_stale,
+        ),
+        strategies=StrategiesOut(
+            none=_strategy_out(sims["none"], invest),
+            ma_dip=_strategy_out(sims["ma_dip"], invest),
+            ma_hot=_strategy_out(sims["ma_hot"], invest),
+            switch=None if switch is None else _strategy_out(switch, invest),
+            lump_sum=_strategy_out(sims["lump_sum"], invest),
+        ),
+    )
+    return StrategyResponse(params=request, result=result, errors=ref_errors)
 
 
 # ---------- 앱 ----------
@@ -371,6 +481,22 @@ def create_app(
             ",".join(request.symbols),
             request.freq,
             len(response.results),
+            len(response.errors),
+            time.monotonic() - started,
+        )
+        return response
+
+    @app.post("/api/strategy")
+    async def strategy(request: StrategyRequest) -> StrategyResponse:
+        started = time.monotonic()
+        response = await run_strategy(app.state.market, request, today())
+        result = response.result
+        done = 0 if result is None else sum(s is not None for _, s in result.strategies)
+        logger.info(
+            "strategy %s %s: %d개 전략, %d개 실패, %.2fs",
+            request.symbol,
+            request.freq,
+            done,
             len(response.errors),
             time.monotonic() - started,
         )
