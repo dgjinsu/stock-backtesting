@@ -221,6 +221,22 @@ export function estimateBuys(cond) {
 }
 
 /**
+ * 종목 줄 저장본 맵 (F-01). 그 종목의 주가(price)가 저장본인 결과만 code → 그 price의 data_through다.
+ * 환율만 저장본이면 넣지 않는다 (알림은 따로 뜬다). listed는 지금 패널에 있는 코드 Set이고, 계산 중에
+ * 뺀 종목은 버린다.
+ * @returns {Map<string, string>}
+ */
+export function staleSymbols(results, listed) {
+  const map = new Map();
+  for (const r of results) {
+    if (!listed.has(r.symbol)) continue;
+    const price = (r.stale_sources ?? []).find((s) => s.kind === "price");
+    if (price) map.set(r.symbol, price.data_through);
+  }
+  return map;
+}
+
+/**
  * 종목 줄 상태 (F-01). 기본이면 null.
  * 계산 중이고 보낸 종목이면 "받는 중"이 앞선다 (앞 계산에서 실패했어도 다시 받는 중이다).
  * 그다음 실패("찾을 수 없음"/"계산 못 함"), 저장본("저장본 MM-DD", 전체 날짜는 title).

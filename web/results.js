@@ -252,31 +252,72 @@ export const NO_WHOLE_SHARE_REASON =
  * 카드 투자 통화 평단가 ⓘ 글 (F-06, 결정 d39·d52 ⑥). params는 API 응답의 params, summary는 결과 summary.
  * - 값이 없고 매수 규칙 결과면 규칙 이유 (avgInvestNote와 같은 글)
  * - 값이 없고 기본 규칙에 정수 주만이면 한 주도 못 산 이유
- * - 그 밖에는 매수할 때마다 그날 환율로 계산했다는 설명과 지금 환율
+ * - 그 밖에는 매수할 때마다 그날 환율로 계산했다는 설명과 지금 환율. 뒤 문장의 평단가는 종목 통화
+ *   이름이다 (원화로 달러 종목이면 "달러 평단가", 달러로 한국 종목이면 "원화 평단가")
+ * asset은 종목 통화 코드(결과의 currency)다.
  */
-export function avgInvestTip(params, summary) {
+export function avgInvestTip(params, summary, asset) {
   const ruleNote = avgInvestNote(params, summary.avg_cost_invest);
   if (ruleNote !== null) return ruleNote;
   const missing = summary.avg_cost_invest === null || summary.avg_cost_invest === undefined;
   if (missing && params.fractional === false) return NO_WHOLE_SHARE_REASON;
   return (
     `매수할 때마다 그날 환율로 계산한 ${investLabel(params.currency)} 평단가입니다. ` +
-    `달러 평단가 × 지금 환율(${fx(summary.eval_fx)})과 다릅니다.`
+    `${investLabel(asset)} 평단가 × 지금 환율(${fx(summary.eval_fx)})과 다릅니다.`
   );
 }
 
 /**
  * 레버리지 전환(F-17)의 기준 종목을 저장본으로 판단했으면 F-10 노랑 알림 { title, detail }, 아니면
- * null. 기준 종목은 요청 하나에 하나라 종목이 여럿이어도 알림은 하나다. switch_ref에는 날짜가 없어
- * 기준일은 적지 않는다. params는 API 응답의 params다.
+ * null. 기준 종목은 요청 하나에 하나라 종목이 여럿이어도 알림은 하나다. 기준일(switch_ref.data_through)이
+ * 있으면 제목에 적는다 (결정 d45). params는 API 응답의 params다.
  */
 export function refStaleAlert(results, params) {
   const ref = results.map((r) => r.switch_ref).find((s) => s?.stale);
   if (!ref) return null;
+  const through = ref.data_through ? `${ref.data_through}까지 ` : "";
   return {
-    title: `기준 종목 ${ref.symbol}는 저장된 데이터로 판단했습니다.`,
+    title: `기준 종목 ${ref.symbol}는 ${through}저장된 데이터로 판단했습니다.`,
     detail: `Yahoo Finance에서 새로 받지 못해 저장해 둔 주가로 ${params.ma_days ?? RULE_MA_DAYS}일선 위아래를 봤습니다.`,
   };
+}
+
+const NOT_FETCHED = "Yahoo Finance에서 새로 받지 못했습니다.";
+
+/** 저장본 환율 알림의 앞말과 뒤 문장 (F-10). 양도세 환율은 손익을 원화로 바꿀 때만 쓴다 (9-5). */
+const FX_STALE_TEXT = {
+  fx: { label: "환율", used: "평가 환율도" },
+  tax_fx: { label: "양도세 환율", used: "양도세 원화 환산에 쓴 환율도" },
+};
+
+/**
+ * 저장본으로 계산했다는 F-10 노랑 알림들 [{ title, detail }]. results[].stale_sources를 본다.
+ * 순서: 종목 주가 알림(결과 순서) → 환율·양도세 환율 알림(처음 나온 순서, 같은 코드는 하나) →
+ * 기준 종목 알림(refStaleAlert). 환율만 저장본이면 종목 알림은 없다. params는 API 응답의 params다.
+ */
+export function staleAlerts(results, params) {
+  const prices = [];
+  const fxs = new Map();
+  for (const r of results) {
+    for (const s of r.stale_sources ?? []) {
+      if (s.kind === "price") {
+        prices.push({
+          title: `${r.symbol}는 ${s.data_through}까지 저장된 데이터로 계산했습니다.`,
+          detail: `${NOT_FETCHED} 평가 기준일도 ${s.data_through}입니다.`,
+        });
+        continue;
+      }
+      const key = `${s.kind} ${s.symbol}`;
+      const text = FX_STALE_TEXT[s.kind];
+      if (!text || fxs.has(key)) continue;
+      fxs.set(key, {
+        title: `${text.label} ${s.symbol}는 ${s.data_through}까지 저장된 데이터로 계산했습니다.`,
+        detail: `${NOT_FETCHED} ${text.used} ${s.data_through} 값입니다.`,
+      });
+    }
+  }
+  const ref = refStaleAlert(results, params);
+  return [...prices, ...fxs.values(), ...(ref ? [ref] : [])];
 }
 
 /**
