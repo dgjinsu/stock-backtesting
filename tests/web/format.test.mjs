@@ -4,6 +4,7 @@ import { test } from "node:test";
 
 import {
   MINUS,
+  amountPreview,
   advancedText,
   condLine,
   freqText,
@@ -21,6 +22,7 @@ import {
   signedMoney,
   times,
 } from "../../web/format.js";
+import { ALL_START } from "../../web/conditions.js";
 
 // ---------- 주기·통화 글자와 접힌 조건 줄 (F-11) ----------
 
@@ -253,3 +255,76 @@ test("period: 년·개월·일로 줄인다", () => {
   assert.equal(period("2026-03-25", "2026-11-24"), "8개월");
   assert.equal(period("2026-11-01", "2026-11-24"), "23일");
 });
+
+// ---------- 금액 미리보기 (F-04, 이슈 #50) ----------
+// 금액 미리보기 시험의 기본 조건 (app.js cond()와 같은 모양)
+const BASE = {
+  codes: ["QQQ", "QLD"],
+  start: "2021-11-25",
+  end: "2026-11-24",
+  freq: "monthly",
+  monthDay: 1,
+  weekDay: 0,
+  amount: 2_000_000,
+  currency: "KRW",
+  fractional: true,
+  fee: 0,
+};
+
+// app.js renderPreview의 글을 DOM 없이 만든다. 기댓값은 지금 화면에 나오는 글 그대로다.
+
+/** 이슈 #50 완료 기준의 조건: 2021-11-25 ~ 2026-11-24 매월 1일 (어림 60회). */
+const PREVIEW = { ...BASE, start: "2021-11-25", end: "2026-11-24", freq: "monthly", monthDay: 1 };
+
+const PREVIEW_CASES = [
+  {
+    id: "200만원·원화·4종목은 종목당 금액 뒤에 합계",
+    cond: { ...PREVIEW, codes: ["QQQ", "QLD", "SPY", "TQQQ"] },
+    want: "약 60회 · 종목당 1억 2,000만원 · 4종목 합계 4억 8,000만원",
+  },
+  {
+    id: "200만원·원화·1종목은 합계를 붙이지 않는다",
+    cond: { ...PREVIEW, codes: ["QLD"] },
+    want: "약 60회 · 종목당 1억 2,000만원",
+  },
+  {
+    id: "1,500달러·달러·2종목은 달러로 쓴다",
+    cond: { ...PREVIEW, codes: ["QQQ", "QLD"], amount: 1500, currency: "USD" },
+    want: "약 60회 · 종목당 $90,000 · 2종목 합계 $180,000",
+  },
+  {
+    id: "횟수가 천 번을 넘으면 천 단위 쉼표 (매일 5년)",
+    cond: { ...PREVIEW, codes: ["QLD"], freq: "daily", amount: 10_000 },
+    want: "약 1,260회 · 종목당 1,260만원",
+  },
+];
+
+for (const { id, cond, want } of PREVIEW_CASES) {
+  test(`amountPreview: ${id}`, () => {
+    assert.equal(amountPreview(cond), want);
+  });
+}
+
+test("amountPreview: 시작일이 전체면 횟수 대신 상장일 안내 (종목 수·통화와 상관없이)", () => {
+  const want = "상장일부터 끝날짜까지 · 매수 횟수는 종목마다 다릅니다";
+  for (const extra of [{}, { codes: ["QLD"] }, { amount: 1500, currency: "USD" }]) {
+    assert.equal(amountPreview({ ...PREVIEW, ...extra, start: ALL_START }), want);
+  }
+});
+
+const PREVIEW_EMPTY = [
+  { id: "금액이 0", cond: { ...PREVIEW, amount: 0 } },
+  { id: "금액이 음수", cond: { ...PREVIEW, amount: -1 } },
+  { id: "금액이 숫자가 아님 (빈 칸)", cond: { ...PREVIEW, amount: Number.NaN } },
+  { id: "시작일이 끝날짜와 같음", cond: { ...PREVIEW, start: "2026-11-24" } },
+  { id: "시작일이 끝날짜 뒤", cond: { ...PREVIEW, start: "2026-11-25" } },
+  { id: "시작일이 빔", cond: { ...PREVIEW, start: "" } },
+  { id: "끝날짜가 빔", cond: { ...PREVIEW, end: "" } },
+  { id: "시작일이 전체여도 금액이 0", cond: { ...PREVIEW, start: ALL_START, amount: 0 } },
+];
+
+for (const { id, cond } of PREVIEW_EMPTY) {
+  test(`amountPreview: ${id} → 빈 글`, () => {
+    assert.equal(amountPreview(cond), "");
+  });
+}
