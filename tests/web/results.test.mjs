@@ -281,6 +281,141 @@ test("bestIndexes: 예시 4종목은 수익률·XIRR 열에서 TQQQ, 원금 아�
   }
 });
 
+// ---------- 가장 좋은 값: 손익 열은 money가 보여 주는 자리로 (#53, PR #47 권장 1) ----------
+
+test("bestIndexes: 셋째 인자가 함수면 null이 아닌 값마다 그 함수로 바꾼 화면 값으로 견준다", () => {
+  const seen = [];
+  const byTenThousand = (v) => {
+    seen.push(v);
+    return Math.round(v / 1e4) * 1e4; // 시험용: 만 단위로 보인다고 친다
+  };
+  const values = [105_824_590, null, 105_821_000, undefined, 105_814_000];
+  assert.deepEqual(bestIndexes(values, "high", byTenThousand), new Set([0, 2]));
+  assert.ok(seen.length > 0, "함수를 부르지 않았다");
+  assert.ok(
+    seen.every((v) => v !== null && v !== undefined),
+    `null에도 함수를 불렀다: ${seen}`,
+  );
+  const byTen = (v) => Math.round(v / 10) * 10; // 12와 14는 둘 다 10
+  assert.deepEqual(bestIndexes([12, 14, 25], "low", byTen), new Set([0, 1]));
+});
+
+test("compareColumns: 손익·세후 손익 열은 투자 통화 화면 금액으로 견주고, 다른 열 자리는 그대로", () => {
+  for (const key of ["profit", "profit_after_tax"]) {
+    assert.equal(typeof column(key, "KRW").digits, "function", key);
+    assert.equal(column(key, "KRW").digits(105_824_590), 105_820_000, `${key} 원화`);
+    assert.equal(column(key, "USD").digits(12_345.4), 12_345, `${key} 달러`);
+  }
+  const digits = Object.fromEntries(
+    compareColumns("KRW", { tax: true })
+      .filter((c) => !["profit", "profit_after_tax"].includes(c.key))
+      .map((c) => [c.key, c.digits]),
+  );
+  assert.deepEqual(digits, {
+    avg_cost_asset: 2,
+    avg_cost_invest: 2,
+    eval_price: 2,
+    shares: 2,
+    value: 2,
+    return_pct: 2,
+    xirr_pct: 2,
+    worst: 1,
+    from_peak_pct: 1,
+    underwater_days: 0,
+  });
+});
+
+/** 열 key의 결과 줄. c.value가 읽는 summary 필드 하나만 채운다. */
+const moneyRow = (key, amount) => ({ summary: { [key]: amount } });
+
+/** compareColumns 열 그대로(value, better, digits) 견준 가장 좋은 값 위치. */
+function bestMoney(key, invest, amounts) {
+  const c = column(key, invest);
+  const rows = amounts.map((amount) => moneyRow(key, amount));
+  return {
+    read: rows.map(c.value),
+    texts: rows.map(c.text),
+    best: [...bestIndexes(rows.map(c.value), c.better, c.digits)],
+  };
+}
+
+/** 이슈 #53 완료 기준. texts는 칸에 보이는 글(money), best는 굵은 위치다. */
+const BEST_MONEY_CASES = [
+  {
+    id: "원화 105,824,590원과 105,821,000원은 둘 다 +1억 582만원이라 둘 다",
+    key: "profit",
+    invest: "KRW",
+    amounts: [105_824_590, 105_821_000],
+    texts: ["+1억 582만원", "+1억 582만원"],
+    best: [0, 1],
+  },
+  {
+    id: "원화 105,824,590원과 105,814,000원(+1억 581만원)은 앞의 것만",
+    key: "profit",
+    invest: "KRW",
+    amounts: [105_824_590, 105_814_000],
+    texts: ["+1억 582만원", "+1억 581만원"],
+    best: [0],
+  },
+  {
+    id: "원화 1만원 아래는 원 단위라 5,000원과 5,001원은 5,001원만",
+    key: "profit",
+    invest: "KRW",
+    amounts: [5_000, 5_001],
+    texts: ["+5,000원", "+5,001원"],
+    best: [1],
+  },
+  {
+    id: "원화 손실 −1억 582만원 둘은 둘 다",
+    key: "profit",
+    invest: "KRW",
+    amounts: [-105_824_590, -105_821_000],
+    texts: [`${MINUS}1억 582만원`, `${MINUS}1억 582만원`],
+    best: [0, 1],
+  },
+  {
+    id: "달러 $12,345.40과 $12,345.20은 둘 다 $12,345라 둘 다",
+    key: "profit",
+    invest: "USD",
+    amounts: [12_345.4, 12_345.2],
+    texts: ["+$12,345", "+$12,345"],
+    best: [0, 1],
+  },
+  {
+    id: "달러 $123.454($123.45)와 $123.456($123.46)은 뒤의 것만",
+    key: "profit",
+    invest: "USD",
+    amounts: [123.454, 123.456],
+    texts: ["+$123.45", "+$123.46"],
+    best: [1],
+  },
+  {
+    id: "세후 손익 원화도 +1억 582만원 둘은 둘 다, 양도세를 끈 줄(null)은 건너뛴다",
+    key: "profit_after_tax",
+    invest: "KRW",
+    amounts: [105_824_590, null, 105_821_000],
+    texts: ["+1억 582만원", "—", "+1억 582만원"],
+    best: [0, 2],
+  },
+  {
+    id: "세후 손익 달러도 $12,345 둘은 둘 다",
+    key: "profit_after_tax",
+    invest: "USD",
+    amounts: [12_345.4, 12_345.2],
+    texts: ["+$12,345", "+$12,345"],
+    best: [0, 1],
+  },
+];
+
+for (const { id, key, invest, amounts, texts, best } of BEST_MONEY_CASES) {
+  test(`bestIndexes: ${id}`, () => {
+    const got = bestMoney(key, invest, amounts);
+    assert.deepEqual(got.read, amounts, "c.value가 이 열의 금액을 읽는다");
+    assert.deepEqual(got.texts, texts, "칸 글자 (money)");
+    assert.deepEqual(got.best, best, "굵은 위치");
+  });
+}
+
 // ---------- 카드 ----------
 
 test("underwaterText: 일수와 비율(소수 1자리)", () => {

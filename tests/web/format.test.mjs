@@ -19,6 +19,7 @@ import {
   qty,
   rate,
   ruleTag,
+  shownMoney,
   signedMoney,
   times,
 } from "../../web/format.js";
@@ -225,6 +226,63 @@ test("signedMoney: 이익과 손실 모두 부호를 붙인다", () => {
   assert.equal(signedMoney(61_270_000, "KRW"), "+6,127만원");
   assert.equal(signedMoney(-500, "USD"), `${MINUS}$500.00`);
   assert.equal(signedMoney(0, "USD"), "$0.00");
+});
+
+// ---------- 화면에 보이는 금액 (#53): 비교 표 손익 열의 가장 좋은 값을 견주는 자리 ----------
+
+/** money(기본 짧은 꼴)가 보여 주는 자리. 원은 1만원 이상 만 단위, 달러는 $10,000 이상 정수. */
+const SHOWN_CASES = [
+  { id: "원화 105,824,590원 → 1억 582만원", value: 105_824_590, cur: "KRW", want: 105_820_000 },
+  { id: "원화 105,821,000원 → 1억 582만원", value: 105_821_000, cur: "KRW", want: 105_820_000 },
+  { id: "원화 105,814,000원 → 1억 581만원", value: 105_814_000, cur: "KRW", want: 105_810_000 },
+  { id: "원화 1만원 아래는 원 단위 (5,000원)", value: 5_000, cur: "KRW", want: 5_000 },
+  { id: "원화 1만원 아래는 원 단위 (5,001원)", value: 5_001, cur: "KRW", want: 5_001 },
+  { id: "원화 원 단위 반올림이 1만원이면 만 단위", value: 9_999.6, cur: "KRW", want: 10_000 },
+  { id: "원화 손실은 부호를 지킨다", value: -105_824_590, cur: "KRW", want: -105_820_000 },
+  // money는 절댓값을 반올림하므로 손실의 .5도 0에서 먼 쪽이다: −1억 583만원, −$12,346
+  { id: "원화 손실은 절댓값을 반올림", value: -105_825_000, cur: "KRW", want: -105_830_000 },
+  { id: "달러 $10,000 이상은 정수 ($12,345.40)", value: 12_345.4, cur: "USD", want: 12_345 },
+  { id: "달러 $10,000 이상은 정수 ($12,345.20)", value: 12_345.2, cur: "USD", want: 12_345 },
+  { id: "달러 $10,000 아래는 소수 2자리 ($123.454)", value: 123.454, cur: "USD", want: 123.45 },
+  { id: "달러 $10,000 아래는 소수 2자리 ($123.456)", value: 123.456, cur: "USD", want: 123.46 },
+  { id: "달러 손실은 절댓값을 반올림", value: -12_345.5, cur: "USD", want: -12_346 },
+];
+
+for (const { id, value, cur, want } of SHOWN_CASES) {
+  test(`shownMoney: ${id}`, () => {
+    assert.equal(shownMoney(value, cur), want);
+  });
+}
+
+test("shownMoney: 값이 없으면 null", () => {
+  assert.equal(shownMoney(null, "KRW"), null);
+  assert.equal(shownMoney(undefined, "USD"), null);
+});
+
+test("shownMoney: 그 값을 money로 쓰면 원래 값의 money 글과 같다", () => {
+  for (const { value, cur } of SHOWN_CASES) {
+    assert.equal(money(shownMoney(value, cur), cur), money(value, cur), `${value} ${cur}`);
+  }
+});
+
+test("shownMoney: money 글이 같은 두 값만 같은 값이다", () => {
+  const pairs = [
+    [105_824_590, 105_821_000, "KRW"], // 둘 다 1억 582만원
+    [105_824_590, 105_814_000, "KRW"], // 1억 582만원, 1억 581만원
+    [5_000, 5_001, "KRW"],
+    [-105_825_000, -105_830_000, "KRW"], // 둘 다 −1억 583만원
+    [12_345.4, 12_345.2, "USD"], // 둘 다 $12,345
+    [123.454, 123.456, "USD"], // $123.45, $123.46
+    [-12_345.5, -12_346, "USD"], // 둘 다 −$12,346
+  ];
+  for (const [a, b, cur] of pairs) {
+    const sameText = money(a, cur) === money(b, cur);
+    assert.equal(
+      shownMoney(a, cur) === shownMoney(b, cur),
+      sameText,
+      `${money(a, cur)} / ${money(b, cur)}`,
+    );
+  }
 });
 
 test("price: 달러는 1보다 작으면 4자리, 원은 정수", () => {
