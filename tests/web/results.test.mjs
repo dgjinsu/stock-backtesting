@@ -7,6 +7,7 @@ import {
   afterTax,
   avgInvestNote,
   avgInvestReason,
+  avgInvestTip,
   bestIndexes,
   compareColumns,
   costNotice,
@@ -449,4 +450,50 @@ test("avgInvestNote: 매수 규칙 결과에서 값이 없을 때만 이유를 �
 test("avgInvestNote: 기본 규칙에서 정수 주로 아직 못 사 값이 없으면 규칙 이유를 달지 않는다", () => {
   assert.equal(avgInvestNote({ currency: "KRW", rule: "none" }, null), null);
   assert.equal(avgInvestNote({ currency: "KRW" }, null), null);
+});
+
+// ---------- 카드 원화(달러) 평단가 ⓘ 툴팁 (F-06, 결정 d39, d52 ⑥) ----------
+
+/** 기본 규칙·소수점 매수 params와 QLD summary (평단가는 상세 설계 4절, 환율은 계산 규칙 7절). */
+const TIP_PARAMS = { currency: "KRW", rule: "none", fractional: true };
+const BOUGHT = { avg_cost_invest: 51_363, eval_fx: 1344.16 };
+const NOT_BOUGHT = { avg_cost_invest: null, eval_fx: 1344.16 };
+
+const WHOLE_SHARE_TIP =
+  "정수 주만 사서 모은 돈이 한 주 값보다 적어 끝날짜까지 한 주도 사지 못했습니다. " +
+  "그래서 평단가가 없습니다.";
+const FX_TIP =
+  "매수할 때마다 그날 환율로 계산한 원화 평단가입니다. " +
+  "달러 평단가 × 지금 환율(1,344.16)과 다릅니다.";
+
+test("avgInvestTip: 매수 규칙 결과라 값이 없으면 규칙 이유 (결정 d39)", () => {
+  for (const rule of ["ma_dip", "ma_hot", "switch"]) {
+    assert.equal(avgInvestTip({ ...TIP_PARAMS, rule }, NOT_BOUGHT), avgInvestReason("KRW"), rule);
+  }
+  const usd = { ...TIP_PARAMS, currency: "USD", rule: "ma_dip" };
+  assert.equal(avgInvestTip(usd, NOT_BOUGHT), avgInvestReason("USD"));
+});
+
+test("avgInvestTip: 매수 규칙은 정수 주만을 골랐어도 규칙 이유 (규칙은 소수점 매수, 9-6)", () => {
+  const ruled = { ...TIP_PARAMS, rule: "ma_dip", fractional: false };
+  assert.equal(avgInvestTip(ruled, NOT_BOUGHT), avgInvestReason("KRW"));
+});
+
+test("avgInvestTip: 기본 규칙에 정수 주만이라 끝날짜까지 한 주도 못 사면 그 이유 (결정 d52 ⑥)", () => {
+  const whole = { ...TIP_PARAMS, fractional: false };
+  assert.equal(avgInvestTip(whole, NOT_BOUGHT), WHOLE_SHARE_TIP);
+});
+
+test("avgInvestTip: rule이 없으면(v1 응답) 기본 규칙과 같다", () => {
+  const v1 = { currency: "KRW", fractional: false };
+  assert.equal(avgInvestTip(v1, NOT_BOUGHT), WHOLE_SHARE_TIP);
+});
+
+test("avgInvestTip: 값이 있으면 그날 환율로 계산했다는 설명과 지금 환율", () => {
+  assert.equal(avgInvestTip(TIP_PARAMS, BOUGHT), FX_TIP);
+  assert.equal(avgInvestTip({ ...TIP_PARAMS, fractional: false }, BOUGHT), FX_TIP); // 정수 주로 샀다
+});
+
+test("avgInvestTip: 매수 규칙 결과라도 값이 있으면 평소 설명", () => {
+  assert.equal(avgInvestTip({ ...TIP_PARAMS, rule: "ma_dip" }, BOUGHT), FX_TIP);
 });

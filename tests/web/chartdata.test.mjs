@@ -388,6 +388,7 @@ test("sparkline: x는 날짜축 위치, y는 값이 클수록 위. 0%가 범위�
   // 값 0~20: y = 1 + (20 − v) / 20 × 20. x = 위치 × 40 / 4
   assert.deepEqual(sparkline([0, 5, 10, 15, 20], BOX), {
     path: "M0 21L10 16L20 11L30 6L40 1",
+    area: "M0 22L0 21L10 16L20 11L30 6L40 1L40 22Z",
     zeroY: 21,
     last: 20,
     min: 0,
@@ -444,4 +445,59 @@ test("sparkline: 기본 상자는 300×48 (카드 SVG viewBox)", () => {
   const line = sparkline([0, 100]);
   assert.equal(line.path, "M0 46L300 2");
   assert.equal(line.zeroY, 46);
+});
+
+// ---------- 작은 수익률 그래프의 선 아래 면 (#52) ----------
+
+/** path를 선 조각(M으로 시작하는 연속 구간)마다 점 좌표 글자로: "M0 1L2 3M5 6" → [["0 1", "2 3"], ["5 6"]]. */
+function runsOf(path) {
+  return path
+    .split("M")
+    .slice(1)
+    .map((run) => run.split("L"));
+}
+
+/** area를 닫힌 조각마다 점 좌표 글자로. 조각은 모두 M으로 시작해 Z로 닫혀야 한다. */
+function piecesOf(area) {
+  assert.match(area, /^(M[^MZ]+Z)+$/);
+  return area
+    .slice(0, -1)
+    .split("Z")
+    .map((piece) => piece.slice(1).split("L"));
+}
+
+/**
+ * area가 선 조각마다 `M{첫 x} {bottom}`에서 올라가 선의 점(path와 같은 좌표 글자)을 같은 순서로
+ * 지나고 `L{끝 x} {bottom}Z`로 바닥까지 내려와 닫히는지 본다.
+ */
+function assertAreaUnder(line, bottom) {
+  const runs = runsOf(line.path);
+  const pieces = piecesOf(line.area);
+  const x = (point) => point.split(" ")[0];
+  assert.equal(pieces.length, runs.length, line.area);
+  runs.forEach((run, k) => {
+    assert.deepEqual(pieces[k], [`${x(run[0])} ${bottom}`, ...run, `${x(run.at(-1))} ${bottom}`]);
+  });
+}
+
+test("sparkline: area는 첫 점 x의 바닥에서 올라가 선을 지나 끝 점 x의 바닥으로 내려와 닫힌다", () => {
+  // x = 위치 × 40 / 3, y = 1 + (10 − v) / 15 × 20. 바닥은 height 22
+  const line = sparkline([null, 0, 10, -5], BOX);
+  assert.equal(line.path, "M13.3 14.3L26.7 1L40 21");
+  assert.equal(line.area, "M13.3 22L13.3 14.3L26.7 1L40 21L40 22Z");
+  assertAreaUnder(line, 22);
+});
+
+test("sparkline: 빈 자리로 나뉜 선은 area도 조각마다 따로 바닥까지 닫힌다", () => {
+  const line = sparkline([0, 5, null, 3, 4], BOX);
+  assert.equal(line.path, "M0 21L10 1M30 9L40 5");
+  assertAreaUnder(line, 22);
+  assert.equal(line.area.match(/M/g).length, 2);
+  assert.equal(line.area.match(/Z/g).length, 2);
+});
+
+test("sparkline: area 바닥은 height다. 기본 48, 카드 그래프 높이 54", () => {
+  const values = [null, 0, 10, -5];
+  assertAreaUnder(sparkline(values), 48);
+  assertAreaUnder(sparkline(values, { height: 54 }), 54);
 });
