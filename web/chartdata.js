@@ -254,7 +254,8 @@ function coord(value) {
  * - x는 날짜축 위치로 고르게 나눈다 (카드끼리 같은 날짜축). 날짜가 하나면 가운데.
  * - y는 값이 클수록 위이고, 범위에 0을 넣어 0% 선(zeroY)이 늘 상자 안에 있다. 위아래 pad만큼 띄운다.
  * - null은 건너뛰고, 빈 자리 뒤 첫 점에서 선을 새로 시작한다 (첫 매수 전 날짜는 null이다).
- * 돌려주는 값: { path, zeroY, last(마지막 null 아닌 값), min, max }. 그릴 값이 없으면 null.
+ * - area는 선 아래를 바닥(height)까지 채우는 면이다. 빈 자리로 나뉜 조각마다 따로 닫는다 (B 카드).
+ * 돌려주는 값: { path, area, zeroY, last(마지막 null 아닌 값), min, max }. 그릴 값이 없으면 null.
  */
 export function sparkline(values, { width = 300, height = 48, pad = 2 } = {}) {
   const points = (values ?? []).flatMap((v, i) => (v === null || v === undefined ? [] : [i]));
@@ -267,10 +268,20 @@ export function sparkline(values, { width = 300, height = 48, pad = 2 } = {}) {
   const yOf = (v) =>
     max === min ? height / 2 : pad + ((max - v) / (max - min)) * (height - 2 * pad);
   let path = "";
+  // 선 아래 면: 조각마다 첫 점 x의 바닥에서 올라가 선을 지나 끝 점 x의 바닥으로 내려와 닫는다
+  let area = "";
   let previous = -2;
+  const bottom = coord(height);
   for (const i of points) {
-    path += `${i === previous + 1 ? "L" : "M"}${coord(xOf(i))} ${coord(yOf(values[i]))}`;
+    const x = coord(xOf(i));
+    const y = coord(yOf(values[i]));
+    const joined = i === previous + 1;
+    if (!joined && area) area += `L${coord(xOf(previous))} ${bottom}Z`;
+    if (!joined) area += `M${x} ${bottom}`;
+    path += `${joined ? "L" : "M"}${x} ${y}`;
+    area += `L${x} ${y}`;
     previous = i;
   }
-  return { path, zeroY: coord(yOf(0)), last: lastValue(values), min, max };
+  area += `L${coord(xOf(previous))} ${bottom}Z`;
+  return { path, area, zeroY: coord(yOf(0)), last: lastValue(values), min, max };
 }
