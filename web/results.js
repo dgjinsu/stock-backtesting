@@ -1,6 +1,7 @@
 // 결과 카드·비교 표·결과 아래 안내의 DOM 없는 부분 (F-12, F-20, F-10). node --test로 시험한다.
 // 비교 표 열, 정렬, 열마다 가장 좋은 값, 원금 아래·세후 손익 글자, 환율·비용 안내.
 
+import { RULE_MA_DAYS } from "./conditions.js";
 import { investLabel, money, pct, price, qty, rate, signedMoney } from "./format.js";
 
 /** 비교 표 위 안내 (시안 v2). */
@@ -204,6 +205,42 @@ export function afterTax(result, invest) {
       result.currency === "KRW"
         ? "한국 종목은 양도세 0으로 둡니다"
         : `양도세 ${money(s.tax, invest)}`,
+  };
+}
+
+/**
+ * 매수 규칙(F-17) 결과에 투자 통화 평단가가 없는(null) 이유 (결정 d39). 카드·비교 표·매수 내역에서
+ * "—" 옆 툴팁으로 단다. 같은 예산 규칙은 넣은 돈 일부를 현금으로 남겼다가 나중에 쓰므로 정하지 않는다.
+ */
+export function avgInvestReason(invest) {
+  return (
+    "매수 규칙은 넣은 돈 일부를 현금으로 두었다가 나중에 사서 넣은 돈과 산 돈이 달라, " +
+    `${investLabel(invest)} 평단가는 정하지 않습니다. 평단가(종목 통화)는 그대로입니다.`
+  );
+}
+
+/**
+ * 투자 통화 평단가 칸에 달 이유. 매수 규칙(rule이 none이 아님) 결과라서 값이 없을 때만 이유를 돌려주고,
+ * 그 밖에는 null이다. 기본 규칙에서 정수 주만 살 때 아직 한 주도 못 사 값이 없는 것은 규칙 때문이 아니다.
+ * params는 API 응답의 params다.
+ */
+export function avgInvestNote(params, value) {
+  if (value !== null && value !== undefined) return null;
+  if (!params.rule || params.rule === "none") return null;
+  return avgInvestReason(params.currency);
+}
+
+/**
+ * 레버리지 전환(F-17)의 기준 종목을 저장본으로 판단했으면 F-10 노랑 알림 { title, detail }, 아니면
+ * null. 기준 종목은 요청 하나에 하나라 종목이 여럿이어도 알림은 하나다. switch_ref에는 날짜가 없어
+ * 기준일은 적지 않는다. params는 API 응답의 params다.
+ */
+export function refStaleAlert(results, params) {
+  const ref = results.map((r) => r.switch_ref).find((s) => s?.stale);
+  if (!ref) return null;
+  return {
+    title: `기준 종목 ${ref.symbol}는 저장된 데이터로 판단했습니다.`,
+    detail: `Yahoo Finance에서 새로 받지 못해 저장해 둔 주가로 ${params.ma_days ?? RULE_MA_DAYS}일선 위아래를 봤습니다.`,
   };
 }
 

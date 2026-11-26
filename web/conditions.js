@@ -1,6 +1,6 @@
 // 조건(종목·기간·주기·금액)을 다루는 순수 함수. DOM을 쓰지 않아 node --test로 시험한다.
-// cond 모양: { codes, start, end, freq, monthDay, weekDay, amount, currency, fractional, fee, tax }
-// tax는 해외주식 양도세 어림(F-20) 스위치다.
+// cond 모양: { codes, start, end, freq, monthDay, weekDay, amount, currency, fractional, fee, tax,
+// rule }. tax는 해외주식 양도세 어림(F-20) 스위치, rule은 매수 규칙(F-17)이다.
 // 주소에는 보고 있는 결과 탭(tab)도 같이 담는다 (F-11). 조건이 아니라 계산에는 쓰지 않는다.
 
 export const MAX_SYMBOLS = 8;
@@ -12,6 +12,42 @@ export const CURRENCIES = ["KRW", "USD"];
 export const RESULT_TABS = ["summary", "analysis", "strategy", "buys"];
 export const DEFAULT_TAB = "summary";
 const DAY_MS = 86_400_000;
+
+/** 매수 규칙의 이평선 기간과 레버리지 전환의 기준 종목. 화면에서 고르지 않고 늘 이 값이다 (결정 d43). */
+export const RULE_MA_DAYS = 200;
+export const RULE_SWITCH_REF = "QQQ";
+/**
+ * 매수 규칙 (F-17). key는 API의 rule, name은 F-17 규칙 이름(결과 머리 줄·접힌 줄에도 쓴다),
+ * desc는 시안 v2 조건 패널의 설명. 순서는 F-17과 같다. 계산은 계산 규칙 9-6(같은 예산)이다.
+ */
+export const BUY_RULES = [
+  { key: "none", name: "기본", desc: "매번 같은 금액" },
+  {
+    key: "ma_dip",
+    name: "이평선 아래 2배·위 절반",
+    desc: `${RULE_MA_DAYS}일선 아래면 2배, 위면 절반`,
+  },
+  { key: "ma_hot", name: "과열 때 절반", desc: `${RULE_MA_DAYS}일선보다 20% 넘게 위면 절반` },
+  {
+    key: "switch",
+    name: "레버리지 전환",
+    desc: `${RULE_SWITCH_REF}가 ${RULE_MA_DAYS}일선 위일 때만 사기`,
+  },
+];
+export const DEFAULT_RULE = "none";
+const RULE_KEYS = BUY_RULES.map((r) => r.key);
+/** 기본이 아닌 규칙에서 정수 주만을 골랐을 때의 안내 (계산 규칙 9-6: 규칙은 소수점 매수로 계산). */
+export const RULE_FRACTIONAL_NOTE = "매수 규칙은 소수점 매수로 계산합니다";
+
+/** 알려진 규칙이면 그 값, 아니면 기본 규칙. */
+function ruleKey(rule) {
+  return RULE_KEYS.includes(rule) ? rule : DEFAULT_RULE;
+}
+
+/** 정수 주만을 골랐는데 기본이 아닌 규칙이면 안내 문구, 아니면 null. */
+export function ruleFractionalNote({ rule, fractional }) {
+  return ruleKey(rule) !== DEFAULT_RULE && fractional === false ? RULE_FRACTIONAL_NOTE : null;
+}
 
 /** 한국 시각 기준 오늘 (YYYY-MM-DD). 서버의 "오늘"과 같은 기준이다. */
 export function todayKst(now = Date.now()) {
@@ -42,8 +78,9 @@ export function anchorOf(cond) {
   return null;
 }
 
-/** 조건을 주소 쿼리로 (F-09). 기본값인 항목(정수 주가 아님, 수수료 0, 양도세 꺼짐, 요약 탭)은 뺀다.
- * cond.tab이 있으면 맨 뒤에 붙인다 (F-11). 모르는 탭 값은 넣지 않는다.
+/** 조건을 주소 쿼리로 (F-09). 기본값인 항목(기본 규칙, 정수 주가 아님, 수수료 0, 양도세 꺼짐,
+ * 요약 탭)은 뺀다. 순서는 조건 패널 순서(…통화, 매수 규칙, 고급 설정)이고 tab은 맨 뒤다 (F-11).
+ * 모르는 규칙·탭 값은 넣지 않는다. 이평선 기간·기준 종목은 늘 같아 키가 없다 (결정 d43).
  * 종목 사이 쉼표는 읽기 쉽게 그대로 둔다 (s=QQQ,QLD). 쿼리 키는 상세 설계 5절 표. */
 export function toQuery(cond) {
   const params = new URLSearchParams();
@@ -54,6 +91,7 @@ export function toQuery(cond) {
   if (cond.freq !== "daily") params.set("day", String(anchorOf(cond)));
   params.set("amt", String(cond.amount));
   params.set("cur", cond.currency);
+  if (ruleKey(cond.rule) !== DEFAULT_RULE) params.set("rule", cond.rule);
   if (!cond.fractional) params.set("frac", "0");
   if (cond.fee) params.set("fee", String(cond.fee));
   if (cond.tax) params.set("tax", "1");
@@ -82,6 +120,7 @@ export function readQuery(search) {
   const amount = Number(params.get("amt"));
   if (Number.isFinite(amount) && amount > 0) found.amount = amount;
   if (CURRENCIES.includes(params.get("cur"))) found.currency = params.get("cur");
+  if (RULE_KEYS.includes(params.get("rule"))) found.rule = params.get("rule"); // 그 밖은 기본 규칙
   if (params.get("frac") === "0") found.fractional = false;
   const feeText = params.get("fee");
   const fee = Number(feeText);
@@ -89,6 +128,28 @@ export function readQuery(search) {
   if (params.get("tax") === "1") found.tax = true; // 그 밖의 값은 버리고 꺼짐(기본)으로 둔다
   if (RESULT_TABS.includes(params.get("tab"))) found.tab = params.get("tab");
   return found;
+}
+
+/**
+ * /api/backtest 요청 본문 (상세 설계 4절). 매수 규칙(F-17)은 이평선 기간과 기준 종목을 고르지 않고
+ * 200일·QQQ로 보낸다 (결정 d43). 모르는 규칙 값이면 기본 규칙. 탭은 계산에 쓰지 않아 싣지 않는다.
+ */
+export function backtestBody(cond) {
+  return {
+    symbols: cond.codes,
+    start: cond.start,
+    end: cond.end,
+    freq: cond.freq,
+    anchor: anchorOf(cond),
+    amount: cond.amount,
+    currency: cond.currency,
+    fractional: cond.fractional,
+    fee_pct: cond.fee,
+    tax: cond.tax === true,
+    rule: ruleKey(cond.rule),
+    ma_days: RULE_MA_DAYS,
+    switch_ref: RULE_SWITCH_REF,
+  };
 }
 
 /**

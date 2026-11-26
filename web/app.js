@@ -1,36 +1,38 @@
 // 적립식 백테스트 화면: 조건 패널, 검색, 입력 검사, 주소 공유, 결과(카드·비교 표·알림·안내),
-// 결과 탭과 조건 패널 접기(F-11), 양도세 어림 스위치(F-20).
+// 결과 탭과 조건 패널 접기(F-11), 매수 규칙(F-17), 양도세 어림 스위치(F-20).
 // 계산은 서버(/api/backtest)가 하고 여기서는 입력을 받고 결과를 그린다 (아키텍처 1절).
 
 import {
   ALL_START,
+  BUY_RULES,
+  DEFAULT_RULE,
   DEFAULT_TAB,
   MAX_SYMBOLS,
   RESULT_TABS,
   SYMBOL_PATTERN,
-  anchorOf,
+  backtestBody,
   estimateBuys,
   nextTab,
   panelFold,
   readQuery,
+  ruleFractionalNote,
   shiftYears,
   symbolStatus,
   toQuery,
   todayKst,
   validate as validateCond,
 } from "./conditions.js";
-import { sparkline } from "./chartdata.js";
+import { restCount, sparkline } from "./chartdata.js";
 import { buysSection, chartSection, clearCharts, csvButton } from "./charts.js";
 import { h, icon, keepFocus, svgEl, swatch } from "./dom.js";
 import {
   advancedText,
   condLine,
-  freqText,
   fx,
+  headTitle,
   investLabel,
   money,
   pct,
-  period,
   price,
   qty,
   signedMoney,
@@ -39,11 +41,14 @@ import { highlights, summaryParts } from "./insights.js";
 import {
   SORT_HINT,
   afterTax,
+  avgInvestNote,
+  avgInvestReason,
   bestIndexes,
   compareColumns,
   costNotice,
   fxNote,
   nextSort,
+  refStaleAlert,
   sortRows,
   underwaterText,
 } from "./results.js";
@@ -64,6 +69,7 @@ const state = {
   fractional: true,
   fee: 0,
   tax: false, // 해외주식 양도세 어림 (F-20)
+  rule: DEFAULT_RULE, // 매수 규칙 (F-17). 이평선 기간·기준 종목은 늘 200일·QQQ (결정 d43)
   loading: false,
   serverErrors: {},
   badSymbols: new Map(), // code → 이유
@@ -231,9 +237,22 @@ function renderForm() {
     $("fee").value = String(state.fee);
   }
   $("tax").setAttribute("aria-checked", String(state.tax));
+  renderRule();
   renderAdvancedSummary();
   renderSymbols();
   renderPreview();
+}
+
+/**
+ * 매수 규칙 칸 (F-17): 고른 규칙의 설명(시안 v2)과, 기본이 아닌 규칙에서 정수 주만을 골랐으면
+ * "매수 규칙은 소수점 매수로 계산합니다" (계산 규칙 9-6). 둘 다 select의 aria-describedby다.
+ */
+function renderRule() {
+  $("rule").value = state.rule;
+  $("rule-desc").textContent = BUY_RULES.find((r) => r.key === state.rule)?.desc ?? "";
+  const note = ruleFractionalNote(state);
+  $("rule-frac").textContent = note ?? "";
+  $("rule-frac").hidden = !note;
 }
 
 function renderAdvancedSummary() {
@@ -467,18 +486,7 @@ async function run() {
   setLoading(true);
   let reply;
   try {
-    reply = await post({
-      symbols: sent.codes,
-      start: sent.start,
-      end: sent.end,
-      freq: sent.freq,
-      anchor: anchorOf(sent),
-      amount: sent.amount,
-      currency: sent.currency,
-      fractional: sent.fractional,
-      fee_pct: sent.fee,
-      tax: sent.tax,
-    });
+    reply = await post(backtestBody(sent)); // 매수 규칙은 rule·ma_days·switch_ref (F-17, 결정 d43)
   } catch {
     setLoading(false);
     renderFailure("서버에 연결하지 못했습니다. 서버가 켜져 있는지 확인하고 다시 시도해 주세요.");
@@ -590,10 +598,8 @@ function header(data) {
   const fxText = foreign
     ? `, 환율 ${fx(foreign.summary.eval_fx)}${params.currency === "KRW" ? "원" : ""}`
     : "";
-  const span = params.start <= ALL_START ? "상장 이후 전체" : period(params.start, params.end);
   const from = params.start <= ALL_START ? "상장일" : params.start;
-  const each = `${freqText(params.freq, params.anchor)} ${money(params.amount, params.currency)}`;
-  const title = `${results.length}개 종목 · ${each} · ${span}`;
+  const title = headTitle(params, results.length); // 기본이 아닌 매수 규칙은 끝에 이름 (F-17)
   const copy = h(
     "button",
     { type: "button", class: "btn2" },
@@ -671,6 +677,18 @@ function alerts(data) {
       ),
     );
   }
+  // 레버리지 전환의 기준 종목을 저장본으로 판단했으면 같은 노랑 알림 하나 (F-17, F-10)
+  const ref = refStaleAlert(data.results, data.params);
+  if (ref) {
+    boxes.push(
+      h(
+        "div",
+        { class: "alert warn" },
+        alertIcon(),
+        h("div", {}, h("strong", { text: ref.title }), ` ${ref.detail}`),
+      ),
+    );
+  }
   if (data.params.start > ALL_START) {
     for (const r of data.results.filter((x) => x.listed_from)) {
       const more = data.results.length > 1 ? " 다른 종목보다 매수 횟수가 적습니다." : "";
@@ -744,24 +762,29 @@ function sparkBox(result, chart) {
   );
 }
 
-function card(result, invest, chart) {
+function card(result, params, chart) {
+  const invest = params.currency;
   const s = result.summary;
   const cur = result.currency;
   const taxCell = afterTax(result, invest); // 양도세 어림(F-20)을 켰을 때만
   const foreign = cur !== invest;
   const notes = result.notes.join(" · ");
+  // 매수 규칙(F-17) 결과는 투자 통화 평단가가 없다(null). "—"와 이유 툴팁 (결정 d39)
+  const avgTip =
+    avgInvestNote(params, s.avg_cost_invest) !== null
+      ? avgInvestReason(invest)
+      : `매수할 때마다 그날 환율로 계산한 ${investLabel(invest)} 평단가입니다. ` +
+        `달러 평단가 × 지금 환율(${fx(s.eval_fx)})과 다릅니다.`;
   const avgSub = foreign
     ? h(
         "div",
         { class: "sub" },
         `${investLabel(invest)} ${money(s.avg_cost_invest, invest, { short: false })}`,
-        infoButton(
-          `매수할 때마다 그날 환율로 계산한 ${investLabel(invest)} 평단가입니다. ` +
-            `달러 평단가 × 지금 환율(${fx(s.eval_fx)})과 다릅니다.`,
-        ),
+        infoButton(avgTip),
       )
     : h("div", { class: "sub" }, "종목 통화 그대로");
   const leftover = s.leftover_cash > 0 ? ` · 남은 현금 ${price(s.leftover_cash, cur)}` : "";
+  const rests = restCount(result.buys); // 사지 않은 회차: 레버리지 전환에서 쉰 날 등 (#41)
   return h(
     "article",
     { class: "card" },
@@ -848,6 +871,7 @@ function card(result, invest, chart) {
         "dd",
         {},
         `${s.buys.toLocaleString("ko-KR")}회 `,
+        rests ? `(${rests.toLocaleString("ko-KR")}회 쉼) ` : null,
         h("span", { class: "muted", text: `${s.first_buy} ~ ${s.last_buy}` }),
       ),
       h("dt", { text: "최고 · 최저 수익률" }),
@@ -933,6 +957,9 @@ function compareTable(data) {
       ),
     );
   };
+  // 매수 규칙(F-17) 결과의 투자 통화 평단가는 null이라 "—"이고, 이유는 툴팁(title)으로 (결정 d39)
+  const noAvg = (c, r) =>
+    c.key === "avg_cost_invest" && avgInvestNote(data.params, r.summary.avg_cost_invest) !== null;
   const row = (r) =>
     h(
       "tr",
@@ -945,11 +972,13 @@ function compareTable(data) {
       ...columns.map((c) => {
         const top = best.get(c.key).has(r.symbol);
         const tone = c.tone ? signClass(c.value(r)) : "";
+        const why = noAvg(c, r) ? avgInvestReason(invest) : null;
         return h(
           "td",
-          { class: [tone, top ? "best" : ""].filter(Boolean).join(" ") || null },
+          { class: [tone, top ? "best" : ""].filter(Boolean).join(" ") || null, title: why },
           c.text(r),
           top ? h("span", { class: "sr", text: " (가장 좋은 값)" }) : null,
+          why ? h("span", { class: "sr", text: ` (${why})` }) : null,
         );
       }),
     );
@@ -1027,7 +1056,8 @@ function renderResult(data) {
     .map((r) => r.data_through)
     .sort()
     .at(-1);
-  status.classList.add(data.results.some((r) => r.stale) ? "warn" : "ok");
+  const stale = data.results.some((r) => r.stale || r.switch_ref?.stale); // 기준 종목도 (F-17)
+  status.classList.add(stale ? "warn" : "ok");
   $("data-status-text").textContent = `Yahoo Finance · ${latest} 종가`;
   $("empty").hidden = true;
   const output = $("output");
@@ -1043,7 +1073,7 @@ function renderResult(data) {
       h(
         "div",
         { class: "cards" },
-        ...data.results.map((r) => card(r, data.params.currency, data.chart)),
+        ...data.results.map((r) => card(r, data.params, data.chart)),
       ),
       compareTable(data),
       chartSection(data, slotOf),
@@ -1199,6 +1229,8 @@ function layoutPanel() {
   $("cond-toggle").setAttribute("aria-expanded", String(!collapsed));
   $("cond-toggle-label").textContent = collapsed ? "조건 펼치기" : "조건 접기";
   $("panel").hidden = collapsed;
+  // "전략 비교" 안내 버튼(F-17)은 탭이 있을 때(결과가 보일 때)만 누를 수 있다
+  $("rule-compare").disabled = resultView.shown === null;
   if (collapsed && focusInPanel) $("cond-toggle").focus(); // 줄을 먼저 보이게 한 뒤에 옮긴다
 }
 
@@ -1286,6 +1318,17 @@ function wireForm() {
     state.tax = !state.tax;
     changed();
   });
+  $("rule").replaceChildren(...BUY_RULES.map((r) => h("option", { value: r.key, text: r.name })));
+  $("rule").addEventListener("change", (e) => {
+    state.rule = e.target.value;
+    changed();
+  });
+  // 규칙끼리 나란히 보려면 전략 비교 탭으로 (F-17). 탭으로 가면 패널이 접히므로 포커스를 탭에 둔다
+  $("rule-compare").addEventListener("click", () => {
+    if (resultView.shown === null) return;
+    selectTab("strategy");
+    $("tab-strategy")?.focus();
+  });
 }
 
 function wireCondBar() {
@@ -1322,7 +1365,17 @@ function init() {
   const fromUrl = readQuery(location.search);
   state.end = fromUrl.end ?? todayKst();
   state.start = fromUrl.start ?? shiftYears(state.end, 5);
-  const keys = ["freq", "monthDay", "weekDay", "amount", "currency", "fractional", "fee", "tax"];
+  const keys = [
+    "freq",
+    "monthDay",
+    "weekDay",
+    "amount",
+    "currency",
+    "rule",
+    "fractional",
+    "fee",
+    "tax",
+  ];
   for (const key of keys) {
     if (key in fromUrl) state[key] = fromUrl[key];
   }

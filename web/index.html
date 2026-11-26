@@ -213,6 +213,19 @@
             <p class="hint" id="amount-preview"></p>
           </div>
 
+          <!-- 매수 규칙 (F-17). 이평선 기간과 기준 종목은 고르지 않고 200일·QQQ로 보낸다 (결정 d43) -->
+          <div class="group">
+            <label for="rule" class="group-title">매수 규칙</label>
+            <select id="rule" class="field" aria-describedby="rule-desc rule-frac"></select>
+            <p class="hint" id="rule-desc"></p>
+            <p class="hint rule-frac" id="rule-frac" hidden></p>
+            <p class="hint">
+              규칙끼리 결과를 나란히 보려면
+              <!-- 결과(탭)가 있을 때만 누를 수 있다. app.js의 layoutPanel이 맞춘다 -->
+              <button type="button" class="text-btn" id="rule-compare" disabled>전략 비교</button>
+            </p>
+          </div>
+
           <details class="advanced" id="advanced">
             <summary>고급 설정 <span class="muted" id="advanced-summary"></span></summary>
             <div class="advanced-in">

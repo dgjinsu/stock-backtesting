@@ -8,6 +8,7 @@ import {
   condLine,
   freqText,
   fx,
+  headTitle,
   investLabel,
   krwShort,
   money,
@@ -16,6 +17,7 @@ import {
   price,
   qty,
   rate,
+  ruleTag,
   signedMoney,
   times,
 } from "../../web/format.js";
@@ -80,6 +82,62 @@ test("condLine: 양도세 어림(F-20)은 켰을 때만 붙인다", () => {
     condLine({ ...PARAMS, fee_pct: 0.1, tax: true }),
     `${LINE} · 수수료 0.1% · 양도세 반영`,
   );
+});
+
+// ---------- 매수 규칙 이름 (F-17): 결과 머리 줄과 접힌 조건 줄 ----------
+
+/** API 응답 params의 매수 규칙 부분 (요청 그대로, 결정 d43). */
+const RULE = { ma_days: 200, switch_ref: "QQQ" };
+const MA_DIP_TAG = "이평선 아래 2배·위 절반 (200일선)";
+
+test("ruleTag: 규칙 이름과 이평선 기간. 레버리지 전환은 기준 종목도", () => {
+  assert.equal(ruleTag({ ...PARAMS, ...RULE, rule: "ma_dip" }), MA_DIP_TAG);
+  assert.equal(ruleTag({ ...PARAMS, ...RULE, rule: "ma_hot" }), "과열 때 절반 (200일선)");
+  assert.equal(ruleTag({ ...PARAMS, ...RULE, rule: "switch" }), "레버리지 전환 (QQQ 200일선)");
+});
+
+test("ruleTag: 기본 규칙이거나 rule이 없으면(v1 응답) null", () => {
+  assert.equal(ruleTag({ ...PARAMS, ...RULE, rule: "none" }), null);
+  assert.equal(ruleTag(PARAMS), null);
+});
+
+test("condLine: 기본이 아닌 규칙은 통화 뒤에 이름을 붙인다", () => {
+  assert.equal(condLine({ ...PARAMS, ...RULE, rule: "ma_dip" }), `${LINE} · ${MA_DIP_TAG}`);
+  assert.equal(
+    condLine({ ...PARAMS, ...RULE, rule: "switch", fee_pct: 0.1, tax: true }),
+    `${LINE} · 레버리지 전환 (QQQ 200일선) · 수수료 0.1% · 양도세 반영`,
+  );
+});
+
+test("condLine: 기본 규칙이면 규칙 이름을 적지 않는다", () => {
+  assert.equal(condLine({ ...PARAMS, ...RULE, rule: "none" }), LINE);
+});
+
+test("condLine: 매수 규칙은 소수점 매수로 계산하므로 정수 주만을 적지 않는다 (9-6)", () => {
+  assert.equal(
+    condLine({ ...PARAMS, ...RULE, rule: "ma_dip", fractional: false }),
+    `${LINE} · ${MA_DIP_TAG}`,
+  );
+  assert.equal(
+    condLine({ ...PARAMS, ...RULE, rule: "none", fractional: false }),
+    `${LINE} · 정수 주만`,
+  );
+});
+
+test("headTitle: 결과 머리 줄 제목은 종목 수 · 주기와 금액 · 기간", () => {
+  assert.equal(headTitle(PARAMS, 2), "2개 종목 · 매월 1일 200만원 · 5년");
+  assert.equal(
+    headTitle({ ...PARAMS, start: "1970-01-02" }, 1),
+    "1개 종목 · 매월 1일 200만원 · 상장 이후 전체",
+  );
+});
+
+test("headTitle: 기본이 아닌 규칙이면 끝에 규칙 이름을 붙인다", () => {
+  assert.equal(
+    headTitle({ ...PARAMS, ...RULE, rule: "ma_dip" }, 1),
+    `1개 종목 · 매월 1일 200만원 · 5년 · ${MA_DIP_TAG}`,
+  );
+  assert.equal(headTitle({ ...PARAMS, ...RULE, rule: "none" }, 2), headTitle(PARAMS, 2));
 });
 
 test("advancedText: 접힌 고급 설정 제목 옆 지금 값 (F-05, 시안 v2)", () => {

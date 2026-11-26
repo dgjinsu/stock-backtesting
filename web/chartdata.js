@@ -79,6 +79,43 @@ export const BUY_COLUMNS = [
   { key: "invested", title: () => "누적 투자금", csv: (cur) => `누적 투자금(${cur})` },
 ];
 
+/** 산 수량이 0인 회차(쉰 매수일)의 표시. 매수 내역 표의 산 수량 칸에 쓴다 (#41). */
+export const REST_LABEL = "쉼";
+
+/** 사지 않은 회차인지: 레버리지 전환에서 쉰 날(F-17), 정수 주만에서 한 주 값이 모자란 날. */
+export function isRest(row) {
+  return row.qty === 0;
+}
+
+/** 쉰 회차 수. */
+export function restCount(buys) {
+  return buys.filter(isRest).length;
+}
+
+/**
+ * 매수 내역 표 위 "쉼" 설명과 회차 수. 쉰 회차가 없으면 null. params는 API 응답의 params다.
+ * 매수 규칙에서 쉬는 것은 레버리지 전환뿐이고(9-6: 다른 규칙은 늘 조금이라도 산다), 기본 규칙에서는
+ * 정수 주만 살 때 모은 돈이 한 주 값보다 적은 날이다 (4절: 남는 돈은 다음 매수에 보탠다).
+ */
+export function restNote(params, buys) {
+  const rests = restCount(buys);
+  if (!rests) return null;
+  const why =
+    params.rule === "switch"
+      ? `기준 종목 ${params.switch_ref}가 ${params.ma_days}일선 아래라 사지 않고 현금으로 모은 매수일`
+      : "모은 돈이 한 주 값보다 적어 사지 않고 다음 매수에 보탠 매수일";
+  const n = (v) => v.toLocaleString("ko-KR");
+  return `${REST_LABEL}: ${why} · ${n(buys.length)}회 중 ${n(rests)}회`;
+}
+
+/**
+ * 소수점으로 샀는지. 매수 규칙(F-17)은 정수 주만을 골라도 소수점 매수로 계산한다 (계산 규칙 9-6,
+ * params.fractional은 보낸 값 그대로). 매수 내역의 수량 자리를 맞출 때 쓴다.
+ */
+export function boughtFractional(params) {
+  return params.fractional !== false || (params.rule ?? "none") !== "none";
+}
+
 function csvCell(value) {
   if (value === null || value === undefined) return "";
   const text = String(value);
