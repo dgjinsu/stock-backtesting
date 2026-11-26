@@ -70,7 +70,7 @@ function chartTheme() {
     axis: cssVar("--axis"),
     grid: cssVar("--grid"),
     line2: cssVar("--line2"),
-    surface: cssVar("--surface"),
+    bg: cssVar("--bg"),
     acc: cssVar("--acc"),
     tip: cssVar("--tip"),
     tipfg: cssVar("--tipfg"),
@@ -130,8 +130,11 @@ const plotBoard = {
   },
 };
 
-/** 주식 분할일 세로 점선과 "2:1 분할 2025-11-20" 글자 (F-13). marks는 splitMarks 결과. */
-function splitLines(marks) {
+/**
+ * 주식 분할일 세로 점선과 "2:1 분할 2025-11-20" 글자 (F-13). marks는 splitMarks 결과, theme은
+ * chartTheme() 값이다. 마우스를 움직일 때마다 다시 그리므로 색과 글꼴은 여기서 읽지 않는다.
+ */
+function splitLines(marks, theme) {
   const xOf = (chart, mark) => chart.scales.x.getPixelForValue(mark.index);
   return {
     id: "splitLines",
@@ -141,7 +144,7 @@ function splitLines(marks) {
       ctx.save();
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 3]);
-      ctx.strokeStyle = cssVar("--muted");
+      ctx.strokeStyle = theme.muted;
       for (const mark of marks) {
         const x = Math.round(xOf(chart, mark)) + 0.5;
         ctx.beginPath();
@@ -154,16 +157,16 @@ function splitLines(marks) {
     afterDatasetsDraw(chart) {
       const { ctx, chartArea } = chart;
       ctx.save();
-      ctx.font = `11px ${cssVar("--font-mono")}`;
+      ctx.font = `11px ${theme.mono}`;
       ctx.textBaseline = "middle";
       for (const mark of marks) {
         const x = xOf(chart, mark);
         const text = `${mark.label} ${mark.date}`;
         const width = ctx.measureText(text).width + 8;
         const left = x + 4 + width > chartArea.right ? x - 4 - width : x + 4;
-        ctx.fillStyle = cssVar("--bg"); // 점 격자 판(--bg) 위에서 글자만 또렷하게
+        ctx.fillStyle = theme.bg; // 점 격자 판(--bg) 위에서 글자만 또렷하게
         ctx.fillRect(left, chartArea.top + 2, width, 16);
-        ctx.fillStyle = cssVar("--muted");
+        ctx.fillStyle = theme.muted;
         ctx.fillText(text, left + 4, chartArea.top + 10);
       }
       ctx.restore();
@@ -477,7 +480,7 @@ function newChart(ChartJs, wrap, model) {
       plotBoard,
       crosshair,
       ...(theme.dark ? [glow] : []),
-      ...(marks.length ? [splitLines(marks)] : []),
+      ...(marks.length ? [splitLines(marks, theme)] : []),
     ],
     options: {
       responsive: true,
