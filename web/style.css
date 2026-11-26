@@ -680,6 +680,7 @@ select.field,
 .search .field:not(:placeholder-shown) ~ .search-kbd {
   display: none;
 }
+/* top과 max-height는 px로 둔다. app.js revealSearch()가 읽어 Ctrl K 때 목록 자리를 맞춘다 */
 .listbox {
   position: absolute;
   z-index: 10;

@@ -445,15 +445,16 @@ function revealSearch() {
 
 /**
  * 어디서나 Ctrl+K(맥 ⌘K)로 종목 검색칸에 간다 (F-01, 결정 d49). 브라우저 주소창 검색을 막는다.
- * 패널이 접혀 있으면 먼저 편다. 이미 검색칸에 있으면 글·커서·목록을 그대로 둔다.
+ * 패널이 접혀 있으면 먼저 편다. 이미 검색칸에 있으면 글·커서·목록은 그대로 두고,
+ * 패널을 스크롤해 칸이 가려져 있으면 다시 보이게만 한다.
  */
 function onSearchShortcut(event) {
   if (!isSearchShortcut(event, MAC)) return;
   event.preventDefault();
   expandPanel();
   const input = $("sym-search");
-  if (document.activeElement === input) return;
-  input.focus({ preventScroll: true }); // 목록 자리까지 보이게 아래에서 직접 스크롤한다
+  // focus()가 스크롤하지 않게 하고, 목록 자리까지 보이게 아래에서 직접 스크롤한다
+  if (document.activeElement !== input) input.focus({ preventScroll: true });
   revealSearch();
 }
 
