@@ -5,7 +5,7 @@
 
 **v1(F-01~F-10)을 만들었다** (2026-11-25). 내 PC에서 켜서 쓰는 웹 화면이고, 데스크톱 브라우저용이다. 배포(8단계)와 v2 기능은 아직이다.
 
-- 화면 시안: [Design 캔버스](https://claude.ai/artifact/Nvxz1FH9bYPKwinAibsZmr) (비공개). "v1" 페이지가 먼저 만들 화면, "v2" 페이지가 그다음 화면이다.
+- 화면 시안: [Design 캔버스](https://claude.ai/artifact/Nvxz1FH9bYPKwinAibsZmr) (비공개). "v1" 페이지가 먼저 만들 화면, "v2" 페이지가 그다음 화면이다. 겉모습(색·글꼴·틀·부품 모양)은 [리디자인 캔버스](https://claude.ai/artifact/Ro5VPSsc1bAFiXgU8A4drM)의 "B 나이트 데스크"를 따른다.
 - 개발 현황판: [적립식 백테스트 개발 현황](https://claude.ai/artifact/4qzSDxqhz7o8zoeF2CvucF) (비공개). 단계·이슈·PR·리뷰를 이어서 기록한다.
 - 결정 보드: [개발 결정 보드](https://claude.ai/artifact/JaxQyqXbXZLdmN4houmWh5) (비공개). 개발하면서 Claude가 정한 것과 사용자가 할 일.
 
