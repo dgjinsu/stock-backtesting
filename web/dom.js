@@ -41,8 +41,15 @@ export function keepFocus(container, render) {
   if (key) container.querySelector(`[data-focus="${CSS.escape(key)}"]`)?.focus();
 }
 
-/** 종목 선 모양 견본 (색 + 점선). slot은 0~7. color를 주면 그 색(투자금·평단가는 var(--ref)). */
-export function swatch(slot, width = 20, { color = `var(--c${slot + 1})` } = {}) {
+/**
+ * 종목 선 모양 견본 (색 + 점선). slot은 0~7. color를 주면 그 색(투자금·평단가는 var(--ref)),
+ * dash를 주면 그 점선(하나로 합친 투자금은 "3 3"), cap은 선 끝 모양이다.
+ */
+export function swatch(
+  slot,
+  width = 20,
+  { color = `var(--c${slot + 1})`, dash = DASHES[slot], cap = "round" } = {},
+) {
   const svg = document.createElementNS(SVG, "svg");
   svg.setAttribute("width", String(width));
   svg.setAttribute("height", "6");
@@ -55,12 +62,12 @@ export function swatch(slot, width = 20, { color = `var(--c${slot + 1})` } = {})
     x2: width - 1,
     y2: 3,
     "stroke-width": 3,
-    "stroke-linecap": "round",
+    "stroke-linecap": cap, // 짧은 점선은 끝이 둥글면 틈이 메워져 "butt"로 준다
   })) {
     line.setAttribute(k, String(v));
   }
   line.style.stroke = color;
-  if (DASHES[slot]) line.style.strokeDasharray = DASHES[slot];
+  if (dash) line.style.strokeDasharray = dash;
   svg.append(line);
   return svg;
 }

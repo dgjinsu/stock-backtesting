@@ -68,6 +68,24 @@ export function money(value, currency, { short = true } = {}) {
   return currency === "USD" ? `${sign}$${text}` : `${sign}${text} ${currency}`;
 }
 
+/**
+ * money(value, currency)가 화면에 보여 주는 자리로 반올림한 값 (비교 표의 가장 좋은 값 견주기, PR #47).
+ * 원은 1만 이상이면 만원 단위, 아래면 원 단위. 달러 등은 1만 이상이면 정수, 아래면 소수 2자리.
+ * 절댓값을 반올림하고 부호를 다시 붙인다 (money와 같다). 값이 없으면 null.
+ */
+export function shownMoney(value, currency) {
+  if (value === null || value === undefined) return null;
+  const abs = Math.abs(value);
+  let shown;
+  if (currency === "KRW") {
+    const n = Math.round(abs);
+    shown = n >= 1e4 ? Math.round(n / 1e4) * 1e4 : n;
+  } else {
+    shown = abs >= 10000 ? Math.round(abs) : Number(abs.toFixed(2));
+  }
+  return value < 0 && shown !== 0 ? -shown : shown;
+}
+
 /** 손익처럼 부호를 늘 붙이는 금액. */
 export function signedMoney(value, currency, options) {
   const text = money(Math.abs(value), currency, options);
