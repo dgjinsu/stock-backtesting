@@ -26,6 +26,7 @@
   --field: #eef0f3;
   --fieldh: #e6e9ee;
   --ctl: #6b7380;
+  --swoff: #6b7380;
   --focus: var(--acc);
   --c1: #2a78d6;
   --c2: #eb6834;
@@ -69,6 +70,7 @@
   --field: #252c29;
   --fieldh: #2d3531;
   --ctl: #8a9690;
+  --swoff: #34403b;
   --c1: #7da2ff;
   --c2: #ff9356;
   --c3: #3fdcc4;
@@ -549,7 +551,7 @@ select.field,
   width: 40px;
   height: 24px;
   border-radius: 999px;
-  background: var(--line2);
+  background: var(--swoff);
 }
 .sw-knob {
   position: absolute;
@@ -683,8 +685,10 @@ select.field,
 .listbox li:first-child {
   border-top: 0;
 }
+/* 키보드로 고른 후보: 면 색만으로는 패널 대비 1.2:1이라 왼쪽 강조색 줄을 더한다 (WCAG 1.4.11) */
 .listbox li[aria-selected="true"] {
   background: var(--field);
+  box-shadow: inset 3px 0 0 var(--acc);
 }
 .listbox li[aria-disabled="true"] {
   color: var(--muted);
