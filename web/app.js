@@ -11,7 +11,6 @@ import {
   RESULT_TABS,
   SYMBOL_PATTERN,
   backtestBody,
-  estimateBuys,
   nextTab,
   panelFold,
   readQuery,
@@ -27,6 +26,7 @@ import { buysSection, chartSection, clearCharts, csvButton } from "./charts.js";
 import { h, icon, keepFocus, svgEl, swatch } from "./dom.js";
 import {
   advancedText,
+  amountPreview,
   condLine,
   fx,
   headTitle,
@@ -187,20 +187,7 @@ function renderSymbols() {
 }
 
 function renderPreview() {
-  const preview = $("amount-preview");
-  if (!(state.amount > 0) || !state.start || !state.end || state.start >= state.end) {
-    preview.textContent = "";
-    return;
-  }
-  if (state.start === ALL_START) {
-    preview.textContent = "상장일부터 끝날짜까지 · 매수 횟수는 종목마다 다릅니다";
-    return;
-  }
-  const count = estimateBuys(cond());
-  const each = money(count * state.amount, state.currency);
-  const n = state.symbols.length;
-  const total = n > 1 ? ` · ${n}종목 합계 ${money(count * state.amount * n, state.currency)}` : "";
-  preview.textContent = `약 ${count.toLocaleString("ko-KR")}회 · 종목당 ${each}${total}`;
+  $("amount-preview").textContent = amountPreview(cond());
 }
 
 function setOn(groupId, matches) {
@@ -231,7 +218,7 @@ function renderForm() {
   if (document.activeElement !== $("amount"))
     $("amount").value = state.amount ? state.amount.toLocaleString("ko-KR") : "";
   $("amount-unit").textContent = state.currency === "KRW" ? "원" : "$";
-  $("currency").value = state.currency;
+  setOn("currency", (b) => b.dataset.cur === state.currency);
   setOn("mode", (b) => (b.dataset.fractional === "true") === state.fractional);
   if (document.activeElement !== $("fee") && Number.isFinite(state.fee)) {
     $("fee").value = String(state.fee);
@@ -1293,14 +1280,17 @@ function wireForm() {
     showErrors(validate());
   });
   $("amount").addEventListener("blur", changed);
-  $("currency").addEventListener("change", (e) => {
-    const before = state.currency;
-    state.currency = e.target.value;
-    if (before !== state.currency && state.amount === (before === "KRW" ? 2_000_000 : 1_500)) {
-      state.amount = state.currency === "KRW" ? 2_000_000 : 1_500; // 기본 금액이면 통화에 맞춰 바꾼다
-    }
-    changed();
-  });
+  // 투자 통화 [KRW|USD] (결정 d50). 기본 금액이면 통화에 맞춰 바꾼다
+  for (const button of $("currency").querySelectorAll("button")) {
+    button.addEventListener("click", () => {
+      const before = state.currency;
+      state.currency = button.dataset.cur;
+      if (before !== state.currency && state.amount === (before === "KRW" ? 2_000_000 : 1_500)) {
+        state.amount = state.currency === "KRW" ? 2_000_000 : 1_500;
+      }
+      changed();
+    });
+  }
   for (const button of $("mode").querySelectorAll("button")) {
     button.addEventListener("click", () => {
       state.fractional = button.dataset.fractional === "true";

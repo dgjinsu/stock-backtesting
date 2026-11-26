@@ -1,6 +1,13 @@
 // 숫자·날짜·조건 표시. 손익은 부호(+/−)를 꼭 붙인다 (기능 명세 "정해 둔 것").
 
-import { ALL_START, BUY_RULES, DEFAULT_RULE, RULE_MA_DAYS, RULE_SWITCH_REF } from "./conditions.js";
+import {
+  ALL_START,
+  BUY_RULES,
+  DEFAULT_RULE,
+  RULE_MA_DAYS,
+  RULE_SWITCH_REF,
+  estimateBuys,
+} from "./conditions.js";
 
 export const MINUS = "−"; // U+2212
 const WEEKDAYS = ["월요일", "화요일", "수요일", "목요일", "금요일"];
@@ -177,4 +184,19 @@ export function headTitle(params, count) {
 export function advancedText({ fractional, fee, tax }) {
   const feeText = Number.isFinite(fee) ? `${fee}%` : "확인 필요";
   return `· ${fractional ? "소수점" : "정수 주"} · 수수료 ${feeText}${tax ? " · 양도세" : ""}`;
+}
+
+/**
+ * 금액 아래 미리보기 (F-04): "약 60회 · 종목당 1억 2,000만원 · 4종목 합계 4억 8,000만원".
+ * `cond`는 app.js의 cond() 모양(start, end, freq, monthDay, amount, currency, codes)이다.
+ * 금액이 없거나 기간이 맞지 않으면 빈 글, 시작일이 "전체"면 횟수 대신 상장일 안내다.
+ */
+export function amountPreview(cond) {
+  if (!(cond.amount > 0) || !cond.start || !cond.end || cond.start >= cond.end) return "";
+  if (cond.start === ALL_START) return "상장일부터 끝날짜까지 · 매수 횟수는 종목마다 다릅니다";
+  const count = estimateBuys(cond);
+  const each = money(count * cond.amount, cond.currency);
+  const n = cond.codes.length;
+  const total = n > 1 ? ` · ${n}종목 합계 ${money(count * cond.amount * n, cond.currency)}` : "";
+  return `약 ${count.toLocaleString("ko-KR")}회 · 종목당 ${each}${total}`;
 }
