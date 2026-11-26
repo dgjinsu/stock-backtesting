@@ -1,6 +1,6 @@
 // 숫자·날짜·조건 표시. 손익은 부호(+/−)를 꼭 붙인다 (기능 명세 "정해 둔 것").
 
-import { ALL_START } from "./conditions.js";
+import { ALL_START, BUY_RULES, DEFAULT_RULE, RULE_MA_DAYS, RULE_SWITCH_REF } from "./conditions.js";
 
 export const MINUS = "−"; // U+2212
 const WEEKDAYS = ["월요일", "화요일", "수요일", "목요일", "금요일"];
@@ -125,23 +125,49 @@ export function investLabel(currency) {
 }
 
 /**
+ * 결과 머리 줄과 접힌 조건 줄에 붙이는 매수 규칙 이름 (F-17): "이평선 아래 2배·위 절반 (200일선)",
+ * 레버리지 전환은 "레버리지 전환 (QQQ 200일선)". params는 API 응답의 params(요청 그대로)다.
+ * 기본 규칙이거나 rule이 없으면(v1 응답) null.
+ */
+export function ruleTag(params) {
+  const rule = BUY_RULES.find((r) => r.key === params.rule);
+  if (!rule || rule.key === DEFAULT_RULE) return null;
+  const ma = `${params.ma_days ?? RULE_MA_DAYS}일선`;
+  const basis = rule.key === "switch" ? `${params.switch_ref ?? RULE_SWITCH_REF} ${ma}` : ma;
+  return `${rule.name} (${basis})`;
+}
+
+/**
  * 접힌 조건 줄의 글 (F-11, 시안 v2): "기간 · 주기 · 종목마다 금액 · 통화".
- * params는 API 응답의 params(요청 그대로)다. "전체"는 상장일부터이고,
- * 정수 주, 수수료, 양도세 어림(F-20)은 기본값이 아닐 때만 붙인다.
+ * params는 API 응답의 params(요청 그대로)다. "전체"는 상장일부터이고, 매수 규칙(F-17),
+ * 정수 주, 수수료, 양도세 어림(F-20)은 기본값이 아닐 때만 조건 패널 순서로 붙인다.
+ * 매수 규칙은 정수 주만을 골라도 소수점 매수로 계산하므로(9-6) 그때는 "정수 주만"을 적지 않는다.
  */
 export function condLine(params) {
   const from = params.start <= ALL_START ? "상장일" : params.start;
+  const rule = ruleTag(params);
   return [
     `${from} ~ ${params.end}`,
     freqText(params.freq, params.anchor),
     `종목마다 ${money(params.amount, params.currency)}`,
     investLabel(params.currency),
-    params.fractional === false ? "정수 주만" : null,
+    rule,
+    params.fractional === false && !rule ? "정수 주만" : null,
     params.fee_pct > 0 ? `수수료 ${params.fee_pct}%` : null,
     params.tax ? "양도세 반영" : null,
   ]
     .filter(Boolean)
     .join(" · ");
+}
+
+/**
+ * 결과 머리 줄 제목: "2개 종목 · 매월 1일 200만원 · 5년". 기본이 아닌 매수 규칙(F-17)이면 끝에
+ * " · 이평선 아래 2배·위 절반 (200일선)"을 붙인다. count는 결과가 나온 종목 수다.
+ */
+export function headTitle(params, count) {
+  const span = params.start <= ALL_START ? "상장 이후 전체" : period(params.start, params.end);
+  const each = `${freqText(params.freq, params.anchor)} ${money(params.amount, params.currency)}`;
+  return [`${count}개 종목`, each, span, ruleTag(params)].filter(Boolean).join(" · ");
 }
 
 /**

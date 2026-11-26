@@ -232,6 +232,11 @@ a {
   padding: 20px;
   position: sticky;
   top: 16px;
+  /* 매수 규칙(F-17)까지 넣으면 창보다 길 수 있다. 붙어 있는 동안에도 계산하기에 닿게 안에서
+     스크롤하고, 스크롤 막대는 얇게 둬서 1024px에서도 날짜 칸이 잘리지 않게 한다 */
+  max-height: calc(100vh - 32px);
+  overflow-y: auto;
+  scrollbar-width: thin;
 }
 .panel form {
   display: flex;
@@ -316,6 +321,10 @@ a {
   width: 100%;
   color: var(--text);
 }
+/* 패널 스크롤 막대가 생겨도(1024px) 날짜와 달력 단추가 한 칸에 들어가게 */
+.stack .field[type="date"] {
+  padding: 0 8px;
+}
 .stack-gap {
   display: flex;
   flex-direction: column;
@@ -394,6 +403,26 @@ a {
 .currency {
   flex: none;
   width: 96px;
+}
+/* 매수 규칙 (F-17). 정수 주만 안내는 설명과 구분되게 안내 색(--info, 흰·검정 바탕 대비 4.5:1 이상) */
+.rule-frac {
+  color: var(--info);
+}
+/* 글 안의 링크 모양 버튼 ("전략 비교"). 결과가 없으면 누를 수 없다 */
+.text-btn {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--info);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+.text-btn:disabled {
+  color: var(--muted);
+  text-decoration: none;
+  cursor: default;
 }
 .advanced {
   border-top: 1px solid var(--line);
@@ -1235,6 +1264,19 @@ a {
   color: var(--muted);
   font-size: 13px;
   background: var(--sunken);
+}
+/* 사지 않은 회차 (#41, 레버리지 전환에서 쉰 날 등). 색만이 아니라 "쉼" 글자로 알린다 */
+.tbl .rest-tag {
+  display: inline-block;
+  padding: 0 8px;
+  border: 1px dashed var(--line2);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+.box-note {
+  padding: 0 20px 12px;
 }
 .link-btn {
   border: 0;

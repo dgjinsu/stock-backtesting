@@ -3,11 +3,14 @@
 import {
   BUY_COLUMNS,
   RANGES,
+  REST_LABEL,
+  boughtFractional,
   buysCsv,
   csvFileName,
   dashOf,
   dateTick,
   investedLines,
+  isRest,
   lastValue,
   logFirst,
   logFirstNote,
@@ -15,11 +18,13 @@ import {
   previewRows,
   rangeFrom,
   rangeStart,
+  restNote,
   sampledNote,
   splitMarks,
 } from "./chartdata.js";
 import { h, icon, keepFocus, swatch } from "./dom.js";
 import { fx, money, pct, price, qty } from "./format.js";
+import { avgInvestReason } from "./results.js";
 
 const TABS = [
   { key: "value", label: "평가금·투자금" },
@@ -635,22 +640,34 @@ function cell(column, row, result, invest, fractional) {
   }
 }
 
+/**
+ * 매수 내역 한 줄. 사지 않은 회차(산 수량 0, 레버리지 전환에서 쉰 날 등)는 산 수량 칸에 "쉼"을 적어
+ * 알아보게 한다 (#41). 투자 통화 평단가가 없으면(매수 규칙, 결정 d39) "—"에 이유를 툴팁으로 단다.
+ */
 function buyRow(no, row, result, params) {
+  const fractional = boughtFractional(params); // 매수 규칙은 정수 주만을 골라도 소수점 (9-6)
+  const rest = isRest(row);
   return h(
     "tr",
     {},
     h("td", { class: "left muted", text: String(no) }),
-    ...BUY_COLUMNS.map((c) =>
-      h("td", {
+    ...BUY_COLUMNS.map((c) => {
+      if (c.key === "qty" && rest) {
+        return h("td", {}, h("span", { class: "rest-tag", text: REST_LABEL }));
+      }
+      const noAvg = c.key === "avg_cost_invest" && row.avg_cost_invest === null;
+      return h("td", {
         class: c.key === "date" ? "left" : null,
-        text: cell(c, row, result, params.currency, params.fractional),
-      }),
-    ),
+        title: noAvg ? avgInvestReason(params.currency) : null,
+        text: cell(c, row, result, params.currency, fractional),
+      });
+    }),
   );
 }
 
 function buysTable(data, result) {
   const invest = data.params.currency;
+  const noAvg = result.buys.some((row) => row.avg_cost_invest === null);
   const view8 = previewRows(result.buys);
   const all = view.expanded || view8.hidden === 0;
   const rows = all
@@ -677,9 +694,15 @@ function buysTable(data, result) {
         "tr",
         {},
         h("th", { scope: "col", class: "left", text: "회차" }),
-        ...BUY_COLUMNS.map((c) =>
-          h("th", { scope: "col", class: c.key === "date" ? "left" : null, text: c.title(invest) }),
-        ),
+        ...BUY_COLUMNS.map((c) => {
+          const why = c.key === "avg_cost_invest" && noAvg ? avgInvestReason(invest) : null;
+          return h(
+            "th",
+            { scope: "col", class: c.key === "date" ? "left" : null, title: why },
+            c.title(invest),
+            why ? h("span", { class: "sr", text: ` (${why})` }) : null,
+          );
+        }),
       ),
     ),
     h("tbody", {}, ...rows),
@@ -707,6 +730,7 @@ export function buysSection(data, slotOf) {
     if (!symbols.includes(view.buySymbol)) view.buySymbol = symbols[0];
     const result = data.results.find((r) => r.symbol === view.buySymbol);
     const more = previewRows(result.buys).hidden > 0;
+    const rests = restNote(data.params, result.buys); // "쉼: … · 60회 중 15회" (#41)
     const picker =
       data.results.length > 1
         ? segButtons(
@@ -720,8 +744,9 @@ export function buysSection(data, slotOf) {
             "매수 내역 종목",
           )
         : null;
-    // 펼치기·접기는 머리에 둬서 2,500줄을 펼쳐도 버튼과 포커스가 제자리에 있다
-    section.replaceChildren(
+    // 펼치기·접기는 머리에 둬서 2,500줄을 펼쳐도 버튼과 포커스가 제자리에 있다.
+    // replaceChildren은 null을 "null" 글자로 넣으므로 빈 자리는 거른다
+    const parts = [
       h(
         "div",
         { class: "box-head" },
@@ -730,9 +755,11 @@ export function buysSection(data, slotOf) {
         more ? toggle(result) : null,
         csvButton(data, "CSV 내려받기"),
       ),
+      rests ? h("p", { class: "hint box-note", text: rests }) : null,
       h("div", { class: "scroll" }, buysTable(data, result)),
       more && !view.expanded ? h("div", { class: "box-foot" }, toggle(result)) : null,
-    );
+    ];
+    section.replaceChildren(...parts.filter(Boolean));
   };
   render();
   return section;
