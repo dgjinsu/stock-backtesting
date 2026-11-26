@@ -24,7 +24,7 @@ import {
 } from "./chartdata.js";
 import { h, icon, keepFocus, swatch } from "./dom.js";
 import { fx, money, pct, price, qty } from "./format.js";
-import { avgInvestReason } from "./results.js";
+import { avgInvestNote, avgInvestReason } from "./results.js";
 
 const TABS = [
   { key: "value", label: "평가금·투자금" },
@@ -655,10 +655,10 @@ function buyRow(no, row, result, params) {
       if (c.key === "qty" && rest) {
         return h("td", {}, h("span", { class: "rest-tag", text: REST_LABEL }));
       }
-      const noAvg = c.key === "avg_cost_invest" && row.avg_cost_invest === null;
+      const note = c.key === "avg_cost_invest" ? avgInvestNote(params, row.avg_cost_invest) : null;
       return h("td", {
         class: c.key === "date" ? "left" : null,
-        title: noAvg ? avgInvestReason(params.currency) : null,
+        title: note,
         text: cell(c, row, result, params.currency, fractional),
       });
     }),
@@ -667,7 +667,7 @@ function buyRow(no, row, result, params) {
 
 function buysTable(data, result) {
   const invest = data.params.currency;
-  const noAvg = result.buys.some((row) => row.avg_cost_invest === null);
+  const noAvg = result.buys.some((row) => avgInvestNote(data.params, row.avg_cost_invest) !== null);
   const view8 = previewRows(result.buys);
   const all = view.expanded || view8.hidden === 0;
   const rows = all

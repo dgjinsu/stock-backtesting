@@ -5,6 +5,7 @@ import { test } from "node:test";
 import {
   SORT_HINT,
   afterTax,
+  avgInvestNote,
   avgInvestReason,
   bestIndexes,
   compareColumns,
@@ -437,4 +438,15 @@ test("costNotice: 양도세를 켜면 어림값이라고 적고 환전 비용 �
   assert.ok(text.startsWith("양도세는 끝날짜에 한 번에 판다고 보고 어림한 값입니다."), text);
   assert.ok(text.endsWith("환전 비용은 고급 설정의 수수료에 합쳐 넣으세요."), text);
   assert.ok(!text.includes("세금과"), text);
+});
+
+test("avgInvestNote: 매수 규칙 결과에서 값이 없을 때만 이유를 단다 (결정 d39)", () => {
+  const ruled = { currency: "KRW", rule: "ma_dip" };
+  assert.equal(avgInvestNote(ruled, null), avgInvestReason("KRW"));
+  assert.equal(avgInvestNote(ruled, 51363), null);
+});
+
+test("avgInvestNote: 기본 규칙에서 정수 주로 아직 못 사 값이 없으면 규칙 이유를 달지 않는다", () => {
+  assert.equal(avgInvestNote({ currency: "KRW", rule: "none" }, null), null);
+  assert.equal(avgInvestNote({ currency: "KRW" }, null), null);
 });

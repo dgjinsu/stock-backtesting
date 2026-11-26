@@ -41,6 +41,7 @@ import { highlights, summaryParts } from "./insights.js";
 import {
   SORT_HINT,
   afterTax,
+  avgInvestNote,
   avgInvestReason,
   bestIndexes,
   compareColumns,
@@ -761,7 +762,8 @@ function sparkBox(result, chart) {
   );
 }
 
-function card(result, invest, chart) {
+function card(result, params, chart) {
+  const invest = params.currency;
   const s = result.summary;
   const cur = result.currency;
   const taxCell = afterTax(result, invest); // 양도세 어림(F-20)을 켰을 때만
@@ -769,7 +771,7 @@ function card(result, invest, chart) {
   const notes = result.notes.join(" · ");
   // 매수 규칙(F-17) 결과는 투자 통화 평단가가 없다(null). "—"와 이유 툴팁 (결정 d39)
   const avgTip =
-    s.avg_cost_invest === null
+    avgInvestNote(params, s.avg_cost_invest) !== null
       ? avgInvestReason(invest)
       : `매수할 때마다 그날 환율로 계산한 ${investLabel(invest)} 평단가입니다. ` +
         `달러 평단가 × 지금 환율(${fx(s.eval_fx)})과 다릅니다.`;
@@ -956,7 +958,8 @@ function compareTable(data) {
     );
   };
   // 매수 규칙(F-17) 결과의 투자 통화 평단가는 null이라 "—"이고, 이유는 툴팁(title)으로 (결정 d39)
-  const noAvg = (c, r) => c.key === "avg_cost_invest" && r.summary.avg_cost_invest === null;
+  const noAvg = (c, r) =>
+    c.key === "avg_cost_invest" && avgInvestNote(data.params, r.summary.avg_cost_invest) !== null;
   const row = (r) =>
     h(
       "tr",
@@ -1070,7 +1073,7 @@ function renderResult(data) {
       h(
         "div",
         { class: "cards" },
-        ...data.results.map((r) => card(r, data.params.currency, data.chart)),
+        ...data.results.map((r) => card(r, data.params, data.chart)),
       ),
       compareTable(data),
       chartSection(data, slotOf),

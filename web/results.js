@@ -220,6 +220,17 @@ export function avgInvestReason(invest) {
 }
 
 /**
+ * 투자 통화 평단가 칸에 달 이유. 매수 규칙(rule이 none이 아님) 결과라서 값이 없을 때만 이유를 돌려주고,
+ * 그 밖에는 null이다. 기본 규칙에서 정수 주만 살 때 아직 한 주도 못 사 값이 없는 것은 규칙 때문이 아니다.
+ * params는 API 응답의 params다.
+ */
+export function avgInvestNote(params, value) {
+  if (value !== null && value !== undefined) return null;
+  if (!params.rule || params.rule === "none") return null;
+  return avgInvestReason(params.currency);
+}
+
+/**
  * 레버리지 전환(F-17)의 기준 종목을 저장본으로 판단했으면 F-10 노랑 알림 { title, detail }, 아니면
  * null. 기준 종목은 요청 하나에 하나라 종목이 여럿이어도 알림은 하나다. switch_ref에는 날짜가 없어
  * 기준일은 적지 않는다. params는 API 응답의 params다.

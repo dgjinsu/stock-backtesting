@@ -17,7 +17,7 @@ const DAY_MS = 86_400_000;
 export const RULE_MA_DAYS = 200;
 export const RULE_SWITCH_REF = "QQQ";
 /**
- * 매수 규칙 (F-17). key는 API의 rule, name은 F-15 전략 이름(결과 머리 줄·접힌 줄에도 쓴다),
+ * 매수 규칙 (F-17). key는 API의 rule, name은 F-17 규칙 이름(결과 머리 줄·접힌 줄에도 쓴다),
  * desc는 시안 v2 조건 패널의 설명. 순서는 F-17과 같다. 계산은 계산 규칙 9-6(같은 예산)이다.
  */
 export const BUY_RULES = [
