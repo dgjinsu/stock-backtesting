@@ -95,8 +95,15 @@ test("다크 토큰: 바탕·글자·강조·손익·버튼이 B 값과 같다",
     "--neg": "#FF7D6E",
     "--btn": "#E4EAE6",
     "--btnfg": "#0A0C0B",
+    "--sel": "#27302C",
   });
   assert.deepEqual(pick(DARK, Object.keys(want)), want);
+});
+
+test("다크 토큰: 툴팁 바탕은 B 값 rgba(10, 12, 11, 0.92)다", () => {
+  // hex가 아니라 tokens()가 읽지 않으므로 :root.dark 블록 글에서 직접 찾는다
+  const block = CSS.match(/:root\.dark\s*\{([^}]*)\}/)[1];
+  assert.match(block, /--tip:\s*rgba\(\s*10,\s*12,\s*11,\s*0?\.92\s*\)\s*;/);
 });
 
 test("다크 토큰: --c1~--c4가 B 값과 같다", () => {
@@ -130,9 +137,10 @@ test("다크 종목색: --c1~--c8은 다크 --pos·--neg·--acc와 같지 않다
 });
 
 for (const name of SERIES) {
-  test(`다크 종목색: ${name}은 다크 --bg·--surface 대비 3:1 이상`, () => {
+  // 이슈 #49는 3:1이지만 docs/4 5절은 "8색 모두 4.5:1 이상"이라 더 엄한 쪽을 지킨다
+  test(`다크 종목색: ${name}은 다크 --bg·--surface 대비 4.5:1 이상`, () => {
     for (const bg of ["--bg", "--surface"]) {
-      assertContrast(DARK[name], DARK[bg], 3, `다크 ${name} on ${bg}`);
+      assertContrast(DARK[name], DARK[bg], 4.5, `다크 ${name} on ${bg}`);
     }
   });
 }
