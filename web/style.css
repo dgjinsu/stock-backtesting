@@ -829,14 +829,21 @@ select.field,
   justify-content: space-between;
   gap: 12px;
 }
+/* 결과 머리 (리디자인 B): 22px 제목, mono 둘째 줄, 오른쪽 [링크 복사][CSV] */
+.res-head > div:first-child {
+  flex: 1 1 420px;
+  min-width: 0;
+}
 .res-head h2 {
   margin: 0;
   font-size: 22px;
   font-weight: 700;
+  letter-spacing: -0.01em;
 }
 .res-head p {
-  margin: 2px 0 0;
-  font-size: 14px;
+  margin: 4px 0 0;
+  font-family: var(--font-mono);
+  font-size: 12px;
   color: var(--muted);
 }
 .actions {
@@ -844,20 +851,26 @@ select.field,
   flex-wrap: wrap;
   gap: 8px;
 }
-.btn2 {
+/* 보조 버튼 (링크 복사·CSV·조건 펼치기). B-3 채운 부품: --field 면, 위에 올리면 --acc 안쪽 테두리
+   (결정 d53) */
+.ghost {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 40px;
+  min-height: 40px;
   padding: 0 14px;
-  border: 1px solid var(--line2);
-  border-radius: 10px;
-  background: var(--surface);
-  font-size: 14px;
-  font-weight: 600;
+  border: 0;
+  border-radius: 8px;
+  background: var(--field);
+  font-size: 13px;
+  font-weight: 500;
   cursor: pointer;
 }
-.btn2 svg {
+.ghost:hover {
+  background: var(--fieldh);
+  box-shadow: inset 0 0 0 1px var(--acc);
+}
+.ghost svg {
   stroke: var(--text);
 }
 
@@ -865,7 +878,7 @@ select.field,
 .tabs {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 0;
   border-bottom: 1px solid var(--line);
 }
 .tabs [role="tab"] {
@@ -878,8 +891,8 @@ select.field,
   border-bottom: 2px solid transparent;
   background: none;
   color: var(--muted);
-  font-size: 15px;
-  font-weight: 600;
+  font-size: 14px;
+  font-weight: 500;
   cursor: pointer;
 }
 .tabs [role="tab"]:hover {
@@ -887,7 +900,8 @@ select.field,
 }
 .tabs [role="tab"][aria-selected="true"] {
   color: var(--text);
-  border-bottom-color: var(--text);
+  font-weight: 700;
+  border-bottom-color: var(--acc);
 }
 .tabs [role="tab"]:focus-visible {
   outline-offset: -2px;
@@ -908,7 +922,7 @@ select.field,
 .insights {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 16px;
+  border-radius: 12px;
   padding: 18px 20px;
   display: flex;
   flex-direction: column;
@@ -917,7 +931,7 @@ select.field,
 }
 .insights-text {
   margin: 0;
-  font-size: 16px;
+  font-size: 15px;
   line-height: 1.6;
 }
 .highlights {
@@ -937,11 +951,12 @@ select.field,
 .highlights li {
   min-width: 0;
   padding: 10px 14px;
-  border-radius: 12px;
+  border-radius: 8px;
   background: var(--sunken);
 }
 .hl-value {
-  font-size: 15px;
+  font-family: var(--font-mono);
+  font-size: 14px;
   font-weight: 700;
   overflow-wrap: anywhere;
 }
@@ -963,8 +978,8 @@ select.field,
   padding: 10px 12px 10px 16px;
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 14px;
-  font-size: 14px;
+  border-radius: 12px;
+  font-size: 13px;
 }
 .cond-bar-title {
   font-weight: 700;
@@ -983,10 +998,12 @@ select.field,
   margin-left: auto;
 }
 
+/* 알림 (F-10): 색·아이콘·문장은 그대로, 상자만 B 모양 (글자색 30% 테두리) */
 .alert {
   display: flex;
   gap: 12px;
   padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, currentColor 30%, transparent);
   border-radius: 12px;
   font-size: 14px;
 }
@@ -1033,55 +1050,93 @@ select.field,
   grid-template-columns: repeat(auto-fit, minmax(min(100%, 380px), 1fr));
   gap: 16px;
 }
+/* 종목 카드 (리디자인 B 배치, 결정 d51): 머리 → 수익률 → XIRR·손익 줄 → 2열 칸 → 목록 → 바닥 그래프.
+   ⓘ 설명이 카드 밖으로 나가야 하므로 overflow:hidden을 두지 않는다 */
 .card {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 16px;
-  padding: 18px 20px;
+  border-radius: 12px;
+  padding: 16px 16px 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   min-width: 0;
-  container-type: inline-size;
+}
+/* 작은 그래프가 없으면(그릴 값이 없음) 바닥 여백을 둔다 */
+.card > :last-child:not(.spark) {
+  margin-bottom: 16px;
 }
 .card-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 4px 10px;
+  gap: 4px 8px;
+  min-width: 0;
 }
 .card-head h3 {
   margin: 0;
-  font-size: 18px;
-  font-weight: 700;
+  font-size: 15px;
+  font-weight: 800;
 }
-.card-head .note {
-  margin-left: auto;
+.card-head .nm {
+  flex: 1 1 0;
+  min-width: 0;
   font-size: 12px;
   color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.stats {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
+.card-head .note {
+  font-size: 12px;
+  color: var(--muted);
 }
 .lbl {
   font-size: 12px;
   color: var(--muted);
 }
-.big {
-  font-size: 26px;
-  font-weight: 700;
-  letter-spacing: -0.02em;
-  line-height: 1.25;
+.ret {
+  font-size: 34px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.15;
   overflow-wrap: anywhere;
 }
-.sub {
-  display: flex;
-  align-items: center;
-  gap: 2px;
+.ret-sub {
   font-size: 12px;
   color: var(--muted);
+  overflow-wrap: anywhere;
+}
+.ret-sub .strong {
+  color: var(--text);
+}
+/* 2열 칸: 평단가·평가금 / 투자 통화 평단가·최고점 대비 / 투자금·세후 손익 */
+.kv {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.kv .v {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  overflow-wrap: anywhere;
+}
+.kv .v.light {
+  font-weight: 400;
+}
+.kv .info-btn {
+  margin: -6px 0;
+}
+.sub {
+  font-size: 12px;
+  color: var(--muted);
+  overflow-wrap: anywhere;
 }
 .info-btn {
   width: 28px;
@@ -1117,44 +1172,51 @@ select.field,
 .info-btn:focus .tip {
   visibility: visible;
 }
-.strip {
+.facts {
+  margin: 0;
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  padding: 12px 14px;
-  background: var(--sunken);
-  border-radius: 12px;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 16px;
+  font-size: 12.5px;
 }
-.strip .v {
-  font-size: 15px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
+.facts dt {
+  color: var(--muted);
 }
-/* 세후 손익(F-20)을 더하면 4칸. 카드가 좁으면 2×2 */
-.strip.four {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-@container (max-width: 500px) {
-  .strip.four {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
+.facts dd {
+  margin: 0;
+  text-align: right;
+  font-family: var(--font-mono);
 }
 
-/* 카드의 작은 수익률 그래프 (F-12, 시안 v2). 0% 점선과 종목 색 선, 모서리에 글 */
+/* 카드 바닥의 작은 수익률 그래프 (F-12, B): 글은 바로 위 줄, 그래프는 카드 좌우 끝까지 높이 54.
+   선 아래 면은 종목색 12%, 0% 점선 */
 .spark {
-  position: relative;
-  height: 56px;
-  border-radius: 10px;
-  background: var(--sunken);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.spark-meta {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 2px 8px;
+  font-size: 11px;
+  color: var(--muted);
+}
+.spark-plot {
+  height: 54px;
+  margin: 0 -16px;
+  border-radius: 0 0 11px 11px; /* 카드 둥근 12px에서 테두리 1px을 뺀 값 */
   overflow: hidden;
 }
 .spark-svg {
-  position: absolute;
-  left: 0;
-  top: 4px;
   display: block;
   width: 100%;
-  height: 48px;
+  height: 100%;
+}
+.spark-area {
+  stroke: none;
+  fill-opacity: 0.12;
 }
 .spark-zero {
   stroke: var(--ref);
@@ -1163,39 +1225,8 @@ select.field,
 }
 .spark-line {
   fill: none;
-  stroke-width: 2;
+  stroke-width: 1.6;
   stroke-linejoin: round;
-}
-.spark-title,
-.spark-range {
-  position: absolute;
-  padding: 0 4px;
-  border-radius: 4px;
-  background: var(--sunken);
-  font-size: 11px;
-  color: var(--muted);
-}
-.spark-title {
-  left: 6px;
-  top: 4px;
-}
-.spark-range {
-  right: 6px;
-  bottom: 4px;
-}
-.facts {
-  margin: 0;
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
-  gap: 6px 16px;
-  font-size: 13px;
-}
-.facts dt {
-  color: var(--muted);
-}
-.facts dd {
-  margin: 0;
-  text-align: right;
 }
 
 .box {
@@ -1422,14 +1453,23 @@ select.field,
   background: var(--sunken);
 }
 
+/* 고정 안내 (F-10). B 바닥 띠 모양: 위 선, mono 11.5px, 항목을 이어 놓고 넘치면 다음 줄 (결정 d50) */
 .notice {
   border-top: 1px solid var(--line);
-  padding-top: 16px;
-  font-size: 13px;
+  padding-top: 12px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
   color: var(--muted);
-  line-height: 1.8;
+  line-height: 1.6;
 }
 .notice ul {
   margin: 0;
-  padding-left: 18px;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 20px;
+}
+.notice li {
+  min-width: 0;
 }

@@ -2,7 +2,7 @@
 // 비교 표 열, 정렬, 열마다 가장 좋은 값, 원금 아래·세후 손익 글자, 환율·비용 안내.
 
 import { RULE_MA_DAYS } from "./conditions.js";
-import { investLabel, money, pct, price, qty, rate, signedMoney } from "./format.js";
+import { fx, investLabel, money, pct, price, qty, rate, signedMoney } from "./format.js";
 
 /** 비교 표 위 안내 (시안 v2). */
 export const SORT_HINT = "열 제목을 누르면 정렬 · 굵은 값은 그 열에서 가장 좋은 값";
@@ -228,6 +228,28 @@ export function avgInvestNote(params, value) {
   if (value !== null && value !== undefined) return null;
   if (!params.rule || params.rule === "none") return null;
   return avgInvestReason(params.currency);
+}
+
+/** 기본 규칙에 정수 주만 사서 끝날짜까지 한 주도 못 산 경우의 평단가 칸 이유 (결정 d52 ⑥). */
+export const NO_WHOLE_SHARE_REASON =
+  "정수 주만 사서 모은 돈이 한 주 값보다 적어 끝날짜까지 한 주도 사지 못했습니다. " +
+  "그래서 평단가가 없습니다.";
+
+/**
+ * 카드 투자 통화 평단가 ⓘ 글 (F-06, 결정 d39·d52 ⑥). params는 API 응답의 params, summary는 결과 summary.
+ * - 값이 없고 매수 규칙 결과면 규칙 이유 (avgInvestNote와 같은 글)
+ * - 값이 없고 기본 규칙에 정수 주만이면 한 주도 못 산 이유
+ * - 그 밖에는 매수할 때마다 그날 환율로 계산했다는 설명과 지금 환율
+ */
+export function avgInvestTip(params, summary) {
+  const ruleNote = avgInvestNote(params, summary.avg_cost_invest);
+  if (ruleNote !== null) return ruleNote;
+  const missing = summary.avg_cost_invest === null || summary.avg_cost_invest === undefined;
+  if (missing && params.fractional === false) return NO_WHOLE_SHARE_REASON;
+  return (
+    `매수할 때마다 그날 환율로 계산한 ${investLabel(params.currency)} 평단가입니다. ` +
+    `달러 평단가 × 지금 환율(${fx(summary.eval_fx)})과 다릅니다.`
+  );
 }
 
 /**

@@ -43,7 +43,7 @@ import {
   SORT_HINT,
   afterTax,
   avgInvestNote,
-  avgInvestReason,
+  avgInvestTip,
   bestIndexes,
   compareColumns,
   costNotice,
@@ -636,7 +636,7 @@ function header(data) {
   const title = headTitle(params, results.length); // 기본이 아닌 매수 규칙은 끝에 이름 (F-17)
   const copy = h(
     "button",
-    { type: "button", class: "btn2" },
+    { type: "button", class: "ghost" },
     icon([
       "M10 14a5 5 0 0 0 7 0l3-3a5 5 0 0 0-7-7l-1 1",
       "M14 10a5 5 0 0 0-7 0l-3 3a5 5 0 0 0 7 7l1-1",
@@ -753,22 +753,29 @@ function infoButton(text) {
   );
 }
 
+/** 카드 바닥 작은 그래프의 높이 (B 카드). SVG viewBox 높이와 sparkline의 바닥이 같다. */
+const SPARK_H = 54;
+
 /**
- * 카드의 작은 수익률 그래프 (F-12, 시안 v2): chart.series[종목].return_pct 선과 0% 점선.
+ * 카드의 작은 수익률 그래프 (F-12, 리디자인 B): chart.series[종목].return_pct 선, 선 아래 면(종목색
+ * 12%), 0% 점선. 카드 바닥 좌우 끝까지 채운다. 글("수익률 추이", 최고·최저)은 그래프 바로 위 줄이다.
  * 카드가 여러 개라 Chart.js 인스턴스를 늘리지 않게 SVG로 그린다 (Chart.js를 못 불러와도 보인다).
  * 좌표는 chartdata.js의 sparkline이 만들고, aria-label에 그래프의 마지막 수익률을 적는다.
  */
 function sparkBox(result, chart) {
-  const line = sparkline(chart.series[result.symbol]?.return_pct);
+  const line = sparkline(chart.series[result.symbol]?.return_pct, { height: SPARK_H });
   if (!line) return null;
   const s = result.summary;
+  const color = `var(--c${slotOf(result.symbol) + 1})`;
   const graph = svgEl("svg", {
     class: "spark-svg",
-    viewBox: "0 0 300 48",
+    viewBox: `0 0 300 ${SPARK_H}`,
     preserveAspectRatio: "none",
     role: "img",
     "aria-label": `${result.symbol} 수익률 추이 그래프. 마지막 수익률 ${pct(line.last)}`,
   });
+  const area = svgEl("path", { class: "spark-area", d: line.area });
+  area.style.fill = color;
   const zero = svgEl("line", {
     class: "spark-zero",
     x1: 0,
@@ -782,20 +789,41 @@ function sparkBox(result, chart) {
     d: line.path,
     "vector-effect": "non-scaling-stroke",
   });
-  path.style.stroke = `var(--c${slotOf(result.symbol) + 1})`;
-  graph.append(zero, path);
+  path.style.stroke = color;
+  graph.append(area, zero, path); // 점선이 면 위에, 선이 맨 위에 보이게
   return h(
     "div",
     { class: "spark" },
-    graph,
-    h("span", { class: "spark-title", "aria-hidden": "true", text: "수익률 추이" }),
-    h("span", {
-      class: "spark-range",
-      text: `최고 ${pct(s.best.return_pct, 1)} · 최저 ${pct(s.worst.return_pct, 1)}`,
-    }),
+    h(
+      "div",
+      { class: "spark-meta" },
+      h("span", { class: "spark-title", "aria-hidden": "true", text: "수익률 추이" }),
+      h("span", {
+        class: "spark-range mono",
+        text: `최고 ${pct(s.best.return_pct, 1)} · 최저 ${pct(s.worst.return_pct, 1)}`,
+      }),
+    ),
+    h("div", { class: "spark-plot" }, graph),
   );
 }
 
+/** 카드 2열 칸 하나: 이름, 값(mono), 둘째 줄(있으면). */
+function kvCell(label, value, { tone = "", light = false, sub = null } = {}) {
+  const cls = ["v", tone, light ? "light" : ""].filter(Boolean).join(" ");
+  return h(
+    "div",
+    {},
+    h("div", { class: "lbl", text: label }),
+    h("div", { class: cls }, ...[value].flat()),
+    sub ? h("div", { class: "sub", text: sub }) : null,
+  );
+}
+
+/**
+ * 종목 카드 (F-06, 리디자인 B 배치, 결정 d51). 위에서부터
+ * ① 머리(선 견본·코드·이름·분할 반영) ② 수익률 ③ XIRR·손익 한 줄 ④ 2열 칸 ⑤ 목록 ⑥ 작은 그래프.
+ * v1·v2 카드의 항목과 글은 하나도 빼지 않는다 (손익은 ③ 한 곳에 둔다).
+ */
 function card(result, params, chart) {
   const invest = params.currency;
   const s = result.summary;
@@ -803,20 +831,14 @@ function card(result, params, chart) {
   const taxCell = afterTax(result, invest); // 양도세 어림(F-20)을 켰을 때만
   const foreign = cur !== invest;
   const notes = result.notes.join(" · ");
-  // 매수 규칙(F-17) 결과는 투자 통화 평단가가 없다(null). "—"와 이유 툴팁 (결정 d39)
-  const avgTip =
-    avgInvestNote(params, s.avg_cost_invest) !== null
-      ? avgInvestReason(invest)
-      : `매수할 때마다 그날 환율로 계산한 ${investLabel(invest)} 평단가입니다. ` +
-        `달러 평단가 × 지금 환율(${fx(s.eval_fx)})과 다릅니다.`;
-  const avgSub = foreign
-    ? h(
-        "div",
-        { class: "sub" },
-        `${investLabel(invest)} ${money(s.avg_cost_invest, invest, { short: false })}`,
-        infoButton(avgTip),
+  // 투자 통화 평단가: 값이 없으면 "—"와 이유(매수 규칙 d39, 정수 주만 d52 ⑥), 있으면 환율 설명
+  const avgCell = foreign
+    ? kvCell(
+        `${investLabel(invest)} 평단가`,
+        [money(s.avg_cost_invest, invest, { short: false }), infoButton(avgInvestTip(params, s))],
+        { light: true },
       )
-    : h("div", { class: "sub" }, "종목 통화 그대로");
+    : kvCell(`${investLabel(invest)} 평단가`, "종목 통화 그대로", { light: true });
   const leftover = s.leftover_cash > 0 ? ` · 남은 현금 ${price(s.leftover_cash, cur)}` : "";
   const rests = restCount(result.buys); // 사지 않은 회차: 레버리지 전환에서 쉰 날 등 (#41)
   return h(
@@ -825,66 +847,44 @@ function card(result, params, chart) {
     h(
       "header",
       { class: "card-head" },
-      swatch(slotOf(result.symbol), 24),
-      h("h3", { text: result.symbol }),
-      h("span", { class: "muted small", text: result.name }),
-      notes ? h("span", { class: "note", text: notes }) : null,
+      swatch(slotOf(result.symbol), 18),
+      h("h3", { class: "mono", text: result.symbol }),
+      h("span", { class: "nm", title: result.name, text: result.name }),
+      notes ? h("span", { class: "note mono", text: notes }) : null,
     ),
     h(
       "div",
-      { class: "stats" },
+      { class: "card-ret" },
+      h("div", { class: "lbl", text: "수익률" }),
+      h("div", { class: `ret mono ${signClass(s.return_pct)}`, text: pct(s.return_pct) }),
       h(
         "div",
-        {},
-        h("div", { class: "lbl", text: "평단가" }),
-        h("div", { class: "big", text: price(s.avg_cost_asset, cur) }),
-        avgSub,
-      ),
-      h(
-        "div",
-        {},
-        h("div", { class: "lbl", text: "수익률" }),
-        h("div", { class: `big ${signClass(s.return_pct)}`, text: pct(s.return_pct) }),
-        h("div", { class: "sub", text: `손익 ${signedMoney(s.profit, invest)}` }),
-      ),
-      h(
-        "div",
-        {},
-        h("div", { class: "lbl", text: "연환산 (XIRR)" }),
-        h("div", { class: "big", text: pct(s.xirr_pct) }),
-        h("div", { class: "sub", text: "돈 넣은 시점을 반영" }),
+        { class: "ret-sub mono" },
+        h(
+          "span",
+          { title: "연환산 (XIRR): 돈 넣은 시점을 반영" },
+          "XIRR ",
+          h("span", { class: "strong", text: pct(s.xirr_pct) }),
+          h("span", { class: "sr", text: " (연환산, 돈 넣은 시점을 반영)" }),
+        ),
+        " · 손익 ",
+        h("span", { class: signClass(s.profit), text: signedMoney(s.profit, invest) }),
       ),
     ),
-    sparkBox(result, chart),
     h(
       "div",
-      { class: taxCell ? "strip four" : "strip" },
-      h(
-        "div",
-        {},
-        h("div", { class: "lbl", text: "투자금" }),
-        h("div", { class: "v", text: money(s.invested, invest) }),
-      ),
-      h(
-        "div",
-        {},
-        h("div", { class: "lbl", text: "평가금" }),
-        h("div", { class: "v", text: money(s.value, invest) }),
-      ),
-      h(
-        "div",
-        {},
-        h("div", { class: "lbl", text: "손익" }),
-        h("div", { class: `v ${signClass(s.profit)}`, text: signedMoney(s.profit, invest) }),
-      ),
+      { class: "kv" },
+      kvCell("평단가", price(s.avg_cost_asset, cur)),
+      kvCell("평가금", money(s.value, invest)),
+      avgCell,
+      kvCell("평가금 최고점 대비", pct(s.from_peak_pct, 1), {
+        tone: signClass(s.from_peak_pct),
+        light: true,
+        sub: `최고 ${money(s.peak_value.value, invest)}, ${s.peak_value.date}`,
+      }),
+      kvCell("투자금", money(s.invested, invest)),
       taxCell
-        ? h(
-            "div",
-            {},
-            h("div", { class: "lbl", text: taxCell.label }),
-            h("div", { class: `v ${taxCell.tone}`, text: taxCell.text }),
-            h("div", { class: "sub", text: taxCell.note }),
-          )
+        ? kvCell(taxCell.label, taxCell.text, { tone: taxCell.tone, sub: taxCell.note })
         : null,
     ),
     h(
@@ -920,17 +920,6 @@ function card(result, params, chart) {
         " ",
         h("span", { class: "muted", text: s.worst.date }),
       ),
-      h("dt", { text: "평가금 최고점 대비" }),
-      h(
-        "dd",
-        {},
-        h("span", { class: signClass(s.from_peak_pct), text: pct(s.from_peak_pct, 1) }),
-        " ",
-        h("span", {
-          class: "muted",
-          text: `최고 ${money(s.peak_value.value, invest)}, ${s.peak_value.date}`,
-        }),
-      ),
       h("dt", { text: "원금 아래" }),
       h(
         "dd",
@@ -938,6 +927,7 @@ function card(result, params, chart) {
         underwaterText(s),
       ),
     ),
+    sparkBox(result, chart),
   );
 }
 
@@ -991,9 +981,6 @@ function compareTable(data) {
       ),
     );
   };
-  // 매수 규칙(F-17) 결과의 투자 통화 평단가는 null이라 "—"이고, 이유는 툴팁(title)으로 (결정 d39)
-  const noAvg = (c, r) =>
-    c.key === "avg_cost_invest" && avgInvestNote(data.params, r.summary.avg_cost_invest) !== null;
   const row = (r) =>
     h(
       "tr",
@@ -1006,7 +993,11 @@ function compareTable(data) {
       ...columns.map((c) => {
         const top = best.get(c.key).has(r.symbol);
         const tone = c.tone ? signClass(c.value(r)) : "";
-        const why = noAvg(c, r) ? avgInvestReason(invest) : null;
+        // 매수 규칙(F-17) 결과의 투자 통화 평단가는 null이라 "—"이고, 이유는 title로 (결정 d39)
+        const why =
+          c.key === "avg_cost_invest"
+            ? avgInvestNote(data.params, r.summary.avg_cost_invest)
+            : null;
         return h(
           "td",
           { class: [tone, top ? "best" : ""].filter(Boolean).join(" ") || null, title: why },
@@ -1062,9 +1053,10 @@ function notice(data) {
   return h(
     "aside",
     { class: "notice", "aria-label": "안내" },
+    // 띠 모양이라 list-style을 지우면 일부 낭독기가 목록 뜻을 버려서 role을 적는다
     h(
       "ul",
-      {},
+      { role: "list" },
       h("li", {
         text: `데이터: Yahoo Finance 일별 종가(비공식), ${latest} 종가 기준.${fxText ? ` ${fxText}` : ""}`,
       }),

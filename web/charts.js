@@ -24,7 +24,7 @@ import {
 } from "./chartdata.js";
 import { h, icon, keepFocus, swatch } from "./dom.js";
 import { fx, money, pct, price, qty } from "./format.js";
-import { avgInvestNote, avgInvestReason } from "./results.js";
+import { avgInvestNote } from "./results.js";
 
 const TABS = [
   { key: "value", label: "평가금·투자금" },
@@ -611,7 +611,7 @@ export function csvButton(data, label = "CSV") {
     "button",
     {
       type: "button",
-      class: "btn2",
+      class: "ghost",
       title: "모든 종목의 매수 내역 (엑셀에서 열 수 있는 UTF-8 CSV)",
       onclick: () => downloadCsv(data),
     },
@@ -667,7 +667,10 @@ function buyRow(no, row, result, params) {
 
 function buysTable(data, result) {
   const invest = data.params.currency;
-  const noAvg = result.buys.some((row) => avgInvestNote(data.params, row.avg_cost_invest) !== null);
+  // 매수 규칙(F-17) 결과라 투자 통화 평단가가 없는 행이 있으면 그 이유를 열 제목에 단다 (결정 d39)
+  const avgWhy =
+    result.buys.map((row) => avgInvestNote(data.params, row.avg_cost_invest)).find(Boolean) ??
+    null;
   const view8 = previewRows(result.buys);
   const all = view.expanded || view8.hidden === 0;
   const rows = all
@@ -695,7 +698,7 @@ function buysTable(data, result) {
         {},
         h("th", { scope: "col", class: "left", text: "회차" }),
         ...BUY_COLUMNS.map((c) => {
-          const why = c.key === "avg_cost_invest" && noAvg ? avgInvestReason(invest) : null;
+          const why = c.key === "avg_cost_invest" ? avgWhy : null;
           return h(
             "th",
             { scope: "col", class: c.key === "date" ? "left" : null, title: why },
