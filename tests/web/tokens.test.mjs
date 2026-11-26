@@ -237,3 +237,15 @@ test("라이트 종목색·손익색: docs/4 5절 값 그대로", () => {
   });
   assert.deepEqual(pick(LIGHT, Object.keys(want)), want);
 });
+
+// ---------- 그래프 툴팁 강조색 (이슈 #53) ----------
+
+test("툴팁 강조색: --tipacc는 두 테마 모두 라임 #C5F04A이고 툴팁 바탕 대비 4.5:1 이상", () => {
+  // 라이트 툴팁도 어두운 바탕(#15181D)이라 라이트 --acc(#4D6B00)로는 날짜 글자가 모자란다
+  assert.equal(LIGHT["--tipacc"], "#c5f04a");
+  assert.equal(DARK["--tipacc"], "#c5f04a");
+  assertContrast(LIGHT["--tipacc"], LIGHT["--tip"], 4.5, "라이트 툴팁 날짜");
+  // 다크 --tip은 rgba(10, 12, 11, 0.92)라 바탕 #121614 위에 겹친 색(#0B0D0C)으로 잰다
+  assertContrast(DARK["--tipacc"], "#0b0d0c", 4.5, "다크 툴팁 날짜");
+  assert.ok(contrast(LIGHT["--acc"], LIGHT["--tip"]) < 4.5, "라이트 --acc를 쓰지 않는 이유");
+});
