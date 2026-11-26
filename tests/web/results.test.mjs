@@ -15,6 +15,7 @@ import {
   nextSort,
   refStaleAlert,
   sortRows,
+  staleAlerts,
   underwaterText,
 } from "../../web/results.js";
 
@@ -497,8 +498,16 @@ test("avgInvestReason: 원화 평단가가 없는 이유 (결정 d39). 투자 �
   assert.match(avgInvestReason("USD"), /달러 평단가는 정하지 않습니다/);
 });
 
-/** 레버리지 전환 결과의 switch_ref (상세 설계 4절, /api/strategy와 같은 모양). */
-const ref = (stale) => ({ symbol: "QQQ", basis: "same_day", stale });
+/**
+ * 레버리지 전환 결과의 switch_ref (상세 설계 4절, /api/strategy와 같은 모양). data_through는 기준 종목의
+ * 끝날짜 당일 또는 그 이전 마지막 거래일이고, 없으면 null이다 (이슈 #59).
+ */
+const ref = (stale, dataThrough = null) => ({
+  symbol: "QQQ",
+  basis: "same_day",
+  stale,
+  data_through: dataThrough,
+});
 const RULE_PARAMS = {
   currency: "KRW",
   tax: false,
@@ -507,10 +516,18 @@ const RULE_PARAMS = {
   switch_ref: "QQQ",
 };
 
-test("refStaleAlert: 기준 종목이 저장본이면 F-10 노랑 알림 문구", () => {
+test("refStaleAlert: 기준 종목이 저장본이고 기준일(data_through)이 null이면 지금 글", () => {
   const results = [{ ...QLD, switch_ref: ref(true) }];
   assert.deepEqual(refStaleAlert(results, RULE_PARAMS), {
     title: "기준 종목 QQQ는 저장된 데이터로 판단했습니다.",
+    detail: "Yahoo Finance에서 새로 받지 못해 저장해 둔 주가로 200일선 위아래를 봤습니다.",
+  });
+});
+
+test("refStaleAlert: 기준일(data_through)이 있으면 제목에 그 날짜 (이슈 #59)", () => {
+  const results = [{ ...QLD, switch_ref: ref(true, "2026-11-20") }];
+  assert.deepEqual(refStaleAlert(results, RULE_PARAMS), {
+    title: "기준 종목 QQQ는 2026-11-20까지 저장된 데이터로 판단했습니다.",
     detail: "Yahoo Finance에서 새로 받지 못해 저장해 둔 주가로 200일선 위아래를 봤습니다.",
   });
 });
@@ -533,6 +550,120 @@ test("refStaleAlert: 새로 받았거나 레버리지 전환이 아니면(switch
     null,
   );
   assert.equal(refStaleAlert([QLD], { currency: "KRW", tax: false }), null); // switch_ref 없음
+});
+
+// ---------- 저장본 노랑 알림: 종목·환율·양도세 환율·기준 종목 (F-10, 이슈 #59) ----------
+
+/** stale_sources 한 줄 (상세 설계 4절). 기준일은 이슈 #59 알림 문구 예의 2026-11-20이다. */
+const source = (symbol, kind) => ({ symbol, kind, data_through: "2026-11-20" });
+
+/**
+ * 저장본 출처를 단 결과. stale은 stale_sources가 비어 있지 않은 것과 같다 (상세 설계 4절).
+ * 종목 주가(price)가 저장본이면 결과의 data_through는 그 줄과 같고, 아니면 새로 받은 날(11-23)이다.
+ */
+function withSources(base, sources, switchRef = null) {
+  const price = sources.find((s) => s.kind === "price");
+  return {
+    ...base,
+    data_through: price ? price.data_through : "2026-11-23",
+    stale: sources.length > 0,
+    stale_sources: sources,
+    switch_ref: switchRef,
+  };
+}
+
+const KRW_PARAMS = { currency: "KRW", tax: false, rule: "none" };
+const USD_TAX_PARAMS = { currency: "USD", tax: true, rule: "none" };
+const SAMSUNG = { ...QQQ, symbol: "005930.KS", currency: "KRW" };
+
+// 이슈 #59 "할 일 (다)"의 문구 그대로. 굵은 글이 title, 나머지가 detail이다
+const QQQ_PRICE_ALERT = {
+  title: "QQQ는 2026-11-20까지 저장된 데이터로 계산했습니다.",
+  detail: "Yahoo Finance에서 새로 받지 못했습니다. 평가 기준일도 2026-11-20입니다.",
+};
+const QLD_PRICE_ALERT = {
+  title: "QLD는 2026-11-20까지 저장된 데이터로 계산했습니다.",
+  detail: "Yahoo Finance에서 새로 받지 못했습니다. 평가 기준일도 2026-11-20입니다.",
+};
+const FX_ALERT = {
+  title: "환율 USDKRW=X는 2026-11-20까지 저장된 데이터로 계산했습니다.",
+  detail: "Yahoo Finance에서 새로 받지 못했습니다. 평가 환율도 2026-11-20 값입니다.",
+};
+const KRWUSD_FX_ALERT = {
+  title: "환율 KRWUSD=X는 2026-11-20까지 저장된 데이터로 계산했습니다.",
+  detail: "Yahoo Finance에서 새로 받지 못했습니다. 평가 환율도 2026-11-20 값입니다.",
+};
+const TAX_FX_ALERT = {
+  title: "양도세 환율 USDKRW=X는 2026-11-20까지 저장된 데이터로 계산했습니다.",
+  detail:
+    "Yahoo Finance에서 새로 받지 못했습니다. 양도세 원화 환산에 쓴 환율도 2026-11-20 값입니다.",
+};
+const REF_ALERT = {
+  title: "기준 종목 QQQ는 2026-11-20까지 저장된 데이터로 판단했습니다.",
+  detail: "Yahoo Finance에서 새로 받지 못해 저장해 둔 주가로 200일선 위아래를 봤습니다.",
+};
+
+test("staleAlerts: 종목 주가(price)만 저장본이면 지금 종목 알림 하나", () => {
+  const results = [withSources(QLD, [source("QLD", "price")])];
+  assert.deepEqual(staleAlerts(results, KRW_PARAMS), [QLD_PRICE_ALERT]);
+});
+
+test("staleAlerts: QQQ·QLD가 같은 환율(fx) USDKRW=X를 저장본으로 쓰면 환율 알림 하나", () => {
+  const results = [
+    withSources(QQQ, [source("USDKRW=X", "fx")]),
+    withSources(QLD, [source("USDKRW=X", "fx")]),
+  ];
+  assert.deepEqual(staleAlerts(results, KRW_PARAMS), [FX_ALERT]);
+});
+
+test("staleAlerts: 달러 투자 양도세 환율(tax_fx)이면 양도세 환율 알림", () => {
+  const results = [withSources(QQQ, [source("USDKRW=X", "tax_fx")])];
+  assert.deepEqual(staleAlerts(results, USD_TAX_PARAMS), [TAX_FX_ALERT]);
+});
+
+test("staleAlerts: price와 fx가 섞이면 종목 알림을 먼저, 환율 알림은 하나", () => {
+  const results = [
+    withSources(QQQ, [source("USDKRW=X", "fx")]), // 환율이 결과 순서로 먼저 나와도 종목 알림이 앞
+    withSources(QLD, [source("QLD", "price"), source("USDKRW=X", "fx")]),
+  ];
+  assert.deepEqual(staleAlerts(results, KRW_PARAMS), [QLD_PRICE_ALERT, FX_ALERT]);
+});
+
+test("staleAlerts: 종목 알림은 결과 순서대로 종목마다 하나", () => {
+  const results = [
+    withSources(QQQ, [source("QQQ", "price"), source("USDKRW=X", "fx")]),
+    withSources(QLD, [source("QLD", "price"), source("USDKRW=X", "fx")]),
+  ];
+  const want = [QQQ_PRICE_ALERT, QLD_PRICE_ALERT, FX_ALERT];
+  assert.deepEqual(staleAlerts(results, KRW_PARAMS), want);
+});
+
+test("staleAlerts: 서로 다른 환율 코드는 처음 나온 순서로 하나씩", () => {
+  const results = [
+    withSources(SAMSUNG, [source("KRWUSD=X", "fx")]),
+    withSources(QQQ, [source("USDKRW=X", "tax_fx")]),
+    withSources(QLD, [source("USDKRW=X", "tax_fx")]),
+  ];
+  assert.deepEqual(staleAlerts(results, USD_TAX_PARAMS), [KRWUSD_FX_ALERT, TAX_FX_ALERT]);
+});
+
+test("staleAlerts: 모두 새로 받았으면 []", () => {
+  const results = [withSources(QQQ, []), withSources(QLD, [])];
+  assert.deepEqual(staleAlerts(results, KRW_PARAMS), []);
+});
+
+test("staleAlerts: 기준 종목 알림은 종목·환율 알림 뒤 맨 끝에 하나", () => {
+  const stale = ref(true, "2026-11-20");
+  const results = [
+    withSources(QQQ, [source("USDKRW=X", "fx")], stale),
+    withSources(QLD, [source("QLD", "price"), source("USDKRW=X", "fx")], stale),
+  ];
+  assert.deepEqual(staleAlerts(results, RULE_PARAMS), [QLD_PRICE_ALERT, FX_ALERT, REF_ALERT]);
+});
+
+test("staleAlerts: 기준 종목만 저장본이면 기준 종목 알림 하나", () => {
+  const results = [withSources(QLD, [], ref(true, "2026-11-20"))];
+  assert.deepEqual(staleAlerts(results, RULE_PARAMS), [REF_ALERT]);
 });
 
 // ---------- 결과 아래 안내 (F-10) ----------
@@ -603,32 +734,83 @@ const FX_TIP =
 
 test("avgInvestTip: 매수 규칙 결과라 값이 없으면 규칙 이유 (결정 d39)", () => {
   for (const rule of ["ma_dip", "ma_hot", "switch"]) {
-    assert.equal(avgInvestTip({ ...TIP_PARAMS, rule }, NOT_BOUGHT), avgInvestReason("KRW"), rule);
+    const tip = avgInvestTip({ ...TIP_PARAMS, rule }, NOT_BOUGHT, "USD");
+    assert.equal(tip, avgInvestReason("KRW"), rule);
   }
   const usd = { ...TIP_PARAMS, currency: "USD", rule: "ma_dip" };
-  assert.equal(avgInvestTip(usd, NOT_BOUGHT), avgInvestReason("USD"));
+  assert.equal(avgInvestTip(usd, NOT_BOUGHT, "KRW"), avgInvestReason("USD"));
 });
 
 test("avgInvestTip: 매수 규칙은 정수 주만을 골랐어도 규칙 이유 (규칙은 소수점 매수, 9-6)", () => {
   const ruled = { ...TIP_PARAMS, rule: "ma_dip", fractional: false };
-  assert.equal(avgInvestTip(ruled, NOT_BOUGHT), avgInvestReason("KRW"));
+  assert.equal(avgInvestTip(ruled, NOT_BOUGHT, "USD"), avgInvestReason("KRW"));
 });
 
 test("avgInvestTip: 기본 규칙에 정수 주만이라 끝날짜까지 한 주도 못 사면 그 이유 (결정 d52 ⑥)", () => {
   const whole = { ...TIP_PARAMS, fractional: false };
-  assert.equal(avgInvestTip(whole, NOT_BOUGHT), WHOLE_SHARE_TIP);
+  assert.equal(avgInvestTip(whole, NOT_BOUGHT, "USD"), WHOLE_SHARE_TIP);
 });
 
 test("avgInvestTip: rule이 없으면(v1 응답) 기본 규칙과 같다", () => {
   const v1 = { currency: "KRW", fractional: false };
-  assert.equal(avgInvestTip(v1, NOT_BOUGHT), WHOLE_SHARE_TIP);
+  assert.equal(avgInvestTip(v1, NOT_BOUGHT, "USD"), WHOLE_SHARE_TIP);
 });
 
 test("avgInvestTip: 값이 있으면 그날 환율로 계산했다는 설명과 지금 환율", () => {
-  assert.equal(avgInvestTip(TIP_PARAMS, BOUGHT), FX_TIP);
-  assert.equal(avgInvestTip({ ...TIP_PARAMS, fractional: false }, BOUGHT), FX_TIP); // 정수 주로 샀다
+  assert.equal(avgInvestTip(TIP_PARAMS, BOUGHT, "USD"), FX_TIP);
+  const whole = { ...TIP_PARAMS, fractional: false };
+  assert.equal(avgInvestTip(whole, BOUGHT, "USD"), FX_TIP); // 정수 주로 샀다
 });
 
 test("avgInvestTip: 매수 규칙 결과라도 값이 있으면 평소 설명", () => {
-  assert.equal(avgInvestTip({ ...TIP_PARAMS, rule: "ma_dip" }, BOUGHT), FX_TIP);
+  assert.equal(avgInvestTip({ ...TIP_PARAMS, rule: "ma_dip" }, BOUGHT, "USD"), FX_TIP);
 });
+
+/**
+ * 값이 있을 때 투자 통화 × 종목 통화 (이슈 #59 표). 앞 문장은 투자 통화 이름, 뒤 문장은 종목 통화 이름이다.
+ * 이름은 원화·달러이고 그 밖의 통화는 코드 그대로다. 환율은 지금 환율(eval_fx) 표시 그대로.
+ * 평단가 값은 있는지만 본다.
+ */
+const TIP_PAIRS = [
+  {
+    label: "원화 × 달러 (QLD): 지금 글 그대로",
+    invest: "KRW",
+    asset: "USD",
+    evalFx: 1344.16,
+    want: FX_TIP,
+  },
+  {
+    label: "달러 × 원화 (005930.KS): 원화 평단가 × 지금 환율",
+    invest: "USD",
+    asset: "KRW",
+    evalFx: 0.000743959,
+    want:
+      "매수할 때마다 그날 환율로 계산한 달러 평단가입니다. " +
+      "원화 평단가 × 지금 환율(0.000744)과 다릅니다.",
+  },
+  {
+    label: "원화 × JPY: 그 밖의 통화는 코드 그대로",
+    invest: "KRW",
+    asset: "JPY",
+    evalFx: 9.12,
+    want:
+      "매수할 때마다 그날 환율로 계산한 원화 평단가입니다. " +
+      "JPY 평단가 × 지금 환율(9.12)과 다릅니다.",
+  },
+  {
+    label: "달러 × JPY: 그 밖의 통화는 코드 그대로",
+    invest: "USD",
+    asset: "JPY",
+    evalFx: 0.006412,
+    want:
+      "매수할 때마다 그날 환율로 계산한 달러 평단가입니다. " +
+      "JPY 평단가 × 지금 환율(0.006412)과 다릅니다.",
+  },
+];
+
+for (const { label, invest, asset, evalFx, want } of TIP_PAIRS) {
+  test(`avgInvestTip: 값이 있으면 투자 통화·종목 통화 이름을 쓴다, ${label}`, () => {
+    const params = { ...TIP_PARAMS, currency: invest };
+    assert.equal(avgInvestTip(params, { ...BOUGHT, eval_fx: evalFx }, asset), want);
+  });
+}

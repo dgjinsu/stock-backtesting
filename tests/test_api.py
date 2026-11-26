@@ -289,12 +289,47 @@ def test_backtest_krw_stock_bought_in_usd_keeps_small_fx(api: Api) -> None:
 
 
 def test_backtest_with_stale_cache_marks_result(api: Api) -> None:
+    """Yahoo가 모두 실패하면 저장본으로 계산한다. stale_sources는 종목 주가(price)와 매수·평가 환율(fx) 두 줄이다
+    (F-10, 이슈 #59). 기준일은 계산 규칙 7절: 평가 가격 2026-11-23 종가, 평가 환율 11-24 값.
+
+    같은 USDKRW=X를 쓰는 QQQ에도 자기 줄이 있다 (하나로 합치는 일은 화면이 한다). price 줄의 기준일은 결과의
+    data_through와 같다 (엔진의 기준일과 main의 기준일이 어긋나지 않는지)."""
     assert _post(api.client).status_code == 200
     api.clock.now += 7 * 3600
     api.yahoo.fail = True
-    qld = _result(_post(api.client).json(), "QLD")
+    body = _post(api.client).json()
+    qld = _result(body, "QLD")
     assert qld["stale"] is True
     assert qld["data_through"] == "2026-11-23"
+    assert qld["stale_sources"] == [
+        {"symbol": "QLD", "kind": "price", "data_through": "2026-11-23"},
+        {"symbol": "USDKRW=X", "kind": "fx", "data_through": "2026-11-24"},
+    ]
+    qqq = _result(body, "QQQ")
+    assert qqq["stale_sources"] == [
+        {"symbol": "QQQ", "kind": "price", "data_through": "2026-11-23"},
+        {"symbol": "USDKRW=X", "kind": "fx", "data_through": "2026-11-24"},
+    ]
+    for result in body["results"]:
+        price = result["stale_sources"][0]
+        assert price["data_through"] == result["data_through"], result["symbol"]
+
+
+def test_backtest_stale_sources_sunday_end_date_back_to_friday(api: Api) -> None:
+    """data_through는 그 코드의 끝날짜 당일 또는 그 이전 마지막 거래일이다 (계산 규칙 3절 평가 환율과 같은
+    규칙). 끝날짜가 2026-11-22(일)이면 종목 주가와 USDKRW=X 모두 그 전 금요일 11-20이다. 저장본의 마지막 날
+    (11-23, 11-24)을 그대로 적으면 이 테스트가 깨진다."""
+    assert _post(api.client, symbols=["QLD"]).status_code == 200
+    api.clock.now += 7 * 3600
+    api.yahoo.fail = True
+    body = _post(api.client, symbols=["QLD"], end="2026-11-22").json()
+    assert body["errors"] == []
+    qld = _result(body, "QLD")
+    assert qld["data_through"] == "2026-11-20"
+    assert qld["stale_sources"] == [
+        {"symbol": "QLD", "kind": "price", "data_through": "2026-11-20"},
+        {"symbol": "USDKRW=X", "kind": "fx", "data_through": "2026-11-20"},
+    ]
 
 
 def test_backtest_listed_after_start_reports_listing_date(api: Api) -> None:
@@ -541,9 +576,15 @@ def test_strategy_request_allowed_ma_days_is_kept(ma_days: int) -> None:
 
 
 def test_strategy_same_timezone_reference_uses_same_day_basis(api: Api) -> None:
-    """9-8: QLD와 QQQ는 둘 다 America/New_York이라 매수일 종가를 본다."""
+    """9-8: QLD와 QQQ는 둘 다 America/New_York이라 매수일 종가를 본다. 기준 종목의 기준일(data_through)은
+    끝날짜 2026-11-24 당일 또는 그 이전 마지막 거래일 2026-11-23이다 (계산 규칙 7절, 이슈 #59)."""
     switch_ref = _strategy(api.client)["result"]["switch_ref"]
-    assert switch_ref == {"symbol": "QQQ", "basis": "same_day", "stale": False}
+    assert switch_ref == {
+        "symbol": "QQQ",
+        "basis": "same_day",
+        "stale": False,
+        "data_through": "2026-11-23",
+    }
 
 
 def test_strategy_cross_exchange_reference_matches_v2_and_uses_previous_day(api: Api) -> None:
@@ -593,7 +634,12 @@ def test_strategy_usd_qqq_none_matches_dollar_reference(api: Api) -> None:
 def test_strategy_usd_qqq_with_qqq_reference_fetches_qqq_once_without_fx(api: Api) -> None:
     """달러 종목을 달러로 사면 환율을 받지 않고, 기준 종목이 종목과 같으면 한 번만 받는다."""
     body = _strategy(api.client, symbol="QQQ", amount=1500, currency="USD")
-    assert body["result"]["switch_ref"] == {"symbol": "QQQ", "basis": "same_day", "stale": False}
+    assert body["result"]["switch_ref"] == {
+        "symbol": "QQQ",
+        "basis": "same_day",
+        "stale": False,
+        "data_through": "2026-11-23",
+    }
     assert _called(api.yahoo) == Counter({"QQQ": 1})
 
 
@@ -730,7 +776,8 @@ def test_strategy_symbol_and_reference_failing_lists_symbol_first(api: Api) -> N
 
 
 def test_strategy_stale_reference_only_marks_switch_ref(api: Api) -> None:
-    """기준 종목만 저장본이면 switch_ref.stale만 True다. 종목·환율은 새로 받았으니 result.stale은 False."""
+    """기준 종목만 저장본이면 switch_ref.stale만 True다. 종목·환율은 새로 받았으니 result.stale은 False.
+    저장본이어도 기준일은 끝날짜 이전 마지막 거래일 2026-11-23이다 (이슈 #59)."""
     _strategy(api.client)
     api.clock.now += 7 * 3600
     api.yahoo.missing.add("QQQ")
@@ -738,7 +785,12 @@ def test_strategy_stale_reference_only_marks_switch_ref(api: Api) -> None:
     assert body["errors"] == []
     result = body["result"]
     assert result["stale"] is False
-    assert result["switch_ref"] == {"symbol": "QQQ", "basis": "same_day", "stale": True}
+    assert result["switch_ref"] == {
+        "symbol": "QQQ",
+        "basis": "same_day",
+        "stale": True,
+        "data_through": "2026-11-23",
+    }
     _assert_strategy(result["strategies"]["switch"], V2["strategies"]["switch"])
 
 
@@ -1171,16 +1223,24 @@ def test_backtest_dollar_tax_without_usdkrw_fails_non_krw_symbols_only(api: Api)
 
 def test_backtest_saved_usdkrw_for_tax_marks_stale_only_when_tax_is_on(api: Api) -> None:
     """stale의 "환율"에는 양도세용 USDKRW=X도 들어간다. 달러 종목을 달러로 사면 종목은 새로 받았어도 양도세
-    환율이 저장본이면 stale이다. tax가 꺼져 있으면 USDKRW=X를 쓰지 않으니 stale이 아니다."""
+    환율이 저장본이면 stale이다. tax가 꺼져 있으면 USDKRW=X를 쓰지 않으니 stale이 아니다.
+
+    이슈 #59: stale_sources는 양도세 환율(tax_fx) 한 줄이고 기준일은 끝날짜 2026-11-24의 값이다 (계산 규칙
+    9-8 달러 양도세의 원/달러 환율). tax를 끄면 []다."""
     usd: dict[str, Any] = {"symbols": ["QQQ"], **USD_REQUEST}
     assert _backtest(api.client, **usd)["errors"] == []  # 종목과 USDKRW=X 저장본을 채운다
     api.clock.now += 7 * 3600
     api.yahoo.missing.add("USDKRW=X")
     taxed = _backtest(api.client, **usd)
     assert taxed["errors"] == []
-    assert _result(taxed, "QQQ")["stale"] is True
-    untaxed = _backtest(api.client, **usd, tax=False)
-    assert _result(untaxed, "QQQ")["stale"] is False
+    qqq = _result(taxed, "QQQ")
+    assert qqq["stale"] is True
+    assert qqq["stale_sources"] == [
+        {"symbol": "USDKRW=X", "kind": "tax_fx", "data_through": "2026-11-24"}
+    ]
+    untaxed = _result(_backtest(api.client, **usd, tax=False), "QQQ")
+    assert untaxed["stale"] is False
+    assert untaxed["stale_sources"] == []
 
 
 def test_backtest_korean_stock_with_tax_has_zero_tax(api: Api) -> None:
@@ -1347,8 +1407,21 @@ CHOSEN_RULES = [rule for rule in BACKTEST_RULES if rule != "none"]  # 9-6 규칙
 NON_SWITCH_RULES = [rule for rule in BACKTEST_RULES if rule != "switch"]  # 기준 종목을 받지 않는다
 # 9-8 끝날짜는 7절과 같아 평가 환율도 같다 (1,344.16원). 남은 현금(원) 기준값을 종목 통화로 바꿀 때 쓴다
 V2_EVAL_FX = _v1_result("monthly1-krw2m", "QLD")["eval_fx"]
-SAME_DAY_QQQ = {"symbol": V2["switch_ref"], "basis": "same_day", "stale": False}
-PREVIOUS_DAY_QQQ = {"symbol": V2["switch_ref"], "basis": "previous_day", "stale": False}
+# 기준 종목의 기준일(data_through, 이슈 #59): 9-8 끝날짜 2026-11-24 당일 또는 그 이전 마지막 거래일. 평가 가격이
+# 2026-11-23 종가인 것과 같다 (계산 규칙 7절)
+REF_THROUGH = "2026-11-23"
+SAME_DAY_QQQ = {
+    "symbol": V2["switch_ref"],
+    "basis": "same_day",
+    "stale": False,
+    "data_through": REF_THROUGH,
+}
+PREVIOUS_DAY_QQQ = {
+    "symbol": V2["switch_ref"],
+    "basis": "previous_day",
+    "stale": False,
+    "data_through": REF_THROUGH,
+}
 REF_QQQ_FAILED = "기준 종목 QQQ를 받지 못해 계산하지 못했습니다."
 
 
@@ -1626,7 +1699,9 @@ def test_backtest_switch_reference_symbol_fx_failure_keeps_other_symbol(api: Api
 
 def test_backtest_switch_stale_reference_only_marks_switch_ref(api: Api) -> None:
     """기준 종목만 저장본이면 switch_ref.stale만 true다. 종목·환율은 새로 받았으니 results[].stale은 false
-    (/api/strategy와 같다). 값은 9-8 레버리지 전환 그대로다."""
+    (/api/strategy와 같다). 값은 9-8 레버리지 전환 그대로다.
+
+    이슈 #59: 기준 종목은 stale_sources에 넣지 않아 []이고, switch_ref에 기준일 2026-11-23이 있다."""
     assert _backtest(api.client, rule="switch")["errors"] == []  # 저장본을 채운다
     api.clock.now += 7 * 3600
     api.yahoo.missing.add("QQQ")
@@ -1634,5 +1709,126 @@ def test_backtest_switch_stale_reference_only_marks_switch_ref(api: Api) -> None
     assert body["errors"] == []
     qld = _result(body, "QLD")
     assert qld["stale"] is False
-    assert qld["switch_ref"] == {**SAME_DAY_QQQ, "stale": True}
+    assert qld["stale_sources"] == []
+    assert qld["switch_ref"] == {
+        "symbol": "QQQ",
+        "basis": "same_day",
+        "stale": True,
+        "data_through": "2026-11-23",
+    }
     assert qld["summary"]["value"] == pytest.approx(V2["strategies"]["switch"]["value"], abs=1)
+
+
+# ---------- 저장본 출처 stale_sources와 기준 종목 기준일 (F-10, F-17, 이슈 #59) ----------
+
+# 새로 받으면 stale_sources가 비는 조건. 9-8 조건(양도세 켬)에 종목·통화·매수 규칙만 바꾼다
+FRESH_CASES: dict[str, dict[str, Any]] = {
+    "krw-qld-tax": {},  # 9-8 조건 그대로: 매수·평가 환율(fx)을 쓴다
+    "krw-three-symbols": {"symbols": ["QQQ", "QLD", "005930.KS"]},  # 환율이 필요 없는 종목도 섞는다
+    "usd-qqq-tax": {"symbols": ["QQQ"], **USD_REQUEST},  # 양도세 환율(tax_fx)을 쓴다
+    "krw-qld-switch": {"rule": "switch"},  # 기준 종목을 쓴다
+}
+
+
+def _switch_ref_of(api: Api, endpoint: str, **changes: Any) -> dict[str, Any]:
+    """9-8 조건을 레버리지 전환으로 /api/backtest 또는 /api/strategy에 보내 QLD의 switch_ref를 돌려준다."""
+    if endpoint == "backtest":
+        body = _backtest(api.client, rule="switch", **changes)
+        assert body["errors"] == []
+        backtest_ref: dict[str, Any] = _result(body, "QLD")["switch_ref"]
+        return backtest_ref
+    body = _strategy(api.client, **changes)
+    assert body["errors"] == []
+    strategy_ref: dict[str, Any] = body["result"]["switch_ref"]
+    return strategy_ref
+
+
+def test_stale_kind_is_price_fx_tax_fx_in_order() -> None:
+    """stale_sources의 kind는 종목 주가, 매수·평가 환율, 양도세 환율이고 줄 순서도 이 순서다 (설계 메모)."""
+    assert get_args(schemas.StaleKind) == ("price", "fx", "tax_fx")
+
+
+@pytest.mark.parametrize("changes", list(FRESH_CASES.values()), ids=list(FRESH_CASES))
+def test_backtest_fresh_data_has_empty_stale_sources(api: Api, changes: dict[str, Any]) -> None:
+    """모두 새로 받으면 모든 결과의 stale_sources는 []이고 stale은 false다 (stale은 stale_sources가 비어 있지
+    않은 것과 같다)."""
+    body = _backtest(api.client, **changes)
+    assert body["errors"] == []
+    assert body["results"]
+    for result in body["results"]:
+        assert result["stale_sources"] == [], result["symbol"]
+        assert result["stale"] is False, result["symbol"]
+
+
+def test_backtest_krw_qld_with_saved_usdkrw_lists_only_fx_source(api: Api) -> None:
+    """원화 투자 9-8 QLD에서 USDKRW=X만 저장본이면 stale_sources는 매수·평가 환율(fx) 한 줄이다. 종목은 새로
+    받아 price 줄이 없고, 원화 투자라 양도세 환율(tax_fx)은 따로 없다. 기준일은 평가 환율 날 11-24 (7절)."""
+    assert _backtest(api.client)["errors"] == []  # 종목과 USDKRW=X 저장본을 채운다
+    api.clock.now += 7 * 3600
+    api.yahoo.missing.add("USDKRW=X")
+    body = _backtest(api.client)
+    assert body["errors"] == []
+    qld = _result(body, "QLD")
+    assert qld["stale"] is True
+    assert qld["stale_sources"] == [
+        {"symbol": "USDKRW=X", "kind": "fx", "data_through": "2026-11-24"}
+    ]
+
+
+def test_backtest_usd_qqq_tax_all_saved_lists_price_before_tax_fx(api: Api) -> None:
+    """줄 순서는 price, fx, tax_fx다. 달러로 QQQ를 사고 양도세를 켠 채 Yahoo가 모두 실패하면 종목 주가 다음에
+    양도세 환율이 온다. 달러 종목을 달러로 사서 fx 줄은 없다."""
+    usd: dict[str, Any] = {"symbols": ["QQQ"], **USD_REQUEST}
+    assert _backtest(api.client, **usd)["errors"] == []
+    api.clock.now += 7 * 3600
+    api.yahoo.fail = True
+    body = _backtest(api.client, **usd)
+    assert body["errors"] == []
+    qqq = _result(body, "QQQ")
+    assert qqq["stale"] is True
+    assert qqq["stale_sources"] == [
+        {"symbol": "QQQ", "kind": "price", "data_through": "2026-11-23"},
+        {"symbol": "USDKRW=X", "kind": "tax_fx", "data_through": "2026-11-24"},
+    ]
+
+
+def test_backtest_switch_stale_reference_among_symbols_lists_only_own_price(api: Api) -> None:
+    """기준 종목은 stale_sources에 넣지 않는다 (switch_ref에 따로 있다). QQQ가 요청 종목이면서 기준 종목이고
+    저장본이면 QQQ 결과에는 자기 주가(price) 한 줄만 있고 QLD 결과는 []다. switch_ref는 둘 다 저장본이다."""
+    request: dict[str, Any] = {"symbols": ["QQQ", "QLD"], "rule": "switch"}
+    assert _backtest(api.client, **request)["errors"] == []  # 저장본을 채운다
+    api.clock.now += 7 * 3600
+    api.yahoo.missing.add("QQQ")
+    body = _backtest(api.client, **request)
+    assert body["errors"] == []
+    qqq, qld = _result(body, "QQQ"), _result(body, "QLD")
+    assert qqq["stale_sources"] == [
+        {"symbol": "QQQ", "kind": "price", "data_through": "2026-11-23"}
+    ]
+    assert qld["stale_sources"] == []
+    assert (qqq["stale"], qld["stale"]) == (True, False)
+    assert qqq["switch_ref"] == qld["switch_ref"] == {**SAME_DAY_QQQ, "stale": True}
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "end", "want"),
+    [
+        ("backtest", V2["period"][1], REF_THROUGH),
+        ("strategy", V2["period"][1], REF_THROUGH),
+        ("backtest", "2024-12-31", "2024-12-31"),
+        ("strategy", "2024-12-31", "2024-12-31"),
+    ],
+    ids=[
+        "backtest-v2-end",
+        "strategy-v2-end",
+        "backtest-end-2024-12-31",
+        "strategy-end-2024-12-31",
+    ],
+)
+def test_switch_ref_data_through_is_last_trading_day_on_or_before_end(
+    api: Api, endpoint: str, end: str, want: str
+) -> None:
+    """switch_ref.data_through는 기준 종목의 끝날짜 당일 또는 그 이전 마지막 거래일이다. 저장본 마지막 날
+    (2026-11-23)을 그대로 적지 않는다. 같은 모델(SwitchRefOut)이라 두 API 모두에 붙는다 (이슈 #59 (라))."""
+    ref = _switch_ref_of(api, endpoint, end=end)
+    assert ref == {"symbol": "QQQ", "basis": "same_day", "stale": False, "data_through": want}
