@@ -2,7 +2,17 @@
 // 비교 표 열, 정렬, 열마다 가장 좋은 값, 원금 아래·세후 손익 글자, 환율·비용 안내.
 
 import { RULE_MA_DAYS } from "./conditions.js";
-import { fx, investLabel, money, pct, price, qty, rate, signedMoney } from "./format.js";
+import {
+  fx,
+  investLabel,
+  money,
+  pct,
+  price,
+  qty,
+  rate,
+  shownMoney,
+  signedMoney,
+} from "./format.js";
 
 /** 비교 표 위 안내 (시안 v2). */
 export const SORT_HINT = "열 제목을 누르면 정렬 · 굵은 값은 그 열에서 가장 좋은 값";
@@ -13,7 +23,8 @@ export const SORT_HINT = "열 제목을 누르면 정렬 · 굵은 값은 그 �
  * 세후 손익은 양도세 어림(F-20)을 켰을 때만 둔다.
  * - value(result): 정렬하고 견주는 값 (없으면 null). text(result): 칸 글자 (카드와 같은 형식).
  * - better: "high"는 높을수록, "low"는 적을수록 좋은 열이고, null은 종목마다 단위나 투자금이 달라
- *   견줄 수 없는 열(굵게 하지 않는다). digits는 화면에 보이는 자리로, 가장 좋은 값을 견줄 때 쓴다.
+ *   견줄 수 없는 열(굵게 하지 않는다). digits는 화면에 보이는 자리로, 가장 좋은 값을 견줄 때 쓴다
+ *   (소수 자리 수, 또는 금액 열이면 화면 금액을 돌려주는 함수).
  * - tone: 손익 색(이익 초록, 손실 빨강)을 칠하는 열.
  */
 export function compareColumns(invest, { tax = false } = {}) {
@@ -58,7 +69,7 @@ export function compareColumns(invest, { tax = false } = {}) {
       key: "profit",
       title: "손익",
       better: "high",
-      digits: 2,
+      digits: (v) => shownMoney(v, invest), // 화면 금액(만원·정수)으로 견준다 (PR #47 권장 1)
       tone: true,
       value: pick((s) => s.profit),
       text: (r) => signedMoney(r.summary.profit, invest),
@@ -68,7 +79,7 @@ export function compareColumns(invest, { tax = false } = {}) {
           key: "profit_after_tax",
           title: "세후 손익",
           better: "high",
-          digits: 2,
+          digits: (v) => shownMoney(v, invest),
           tone: true,
           value: pick((s) => s.profit_after_tax),
           text: (r) => afterTaxText(r.summary.profit_after_tax, invest),
@@ -156,12 +167,14 @@ export function sortRows(rows, valueOf, dir) {
 
 /**
  * 열에서 가장 좋은 값의 위치들(Set). better가 "high"면 가장 큰 값, "low"면 가장 작은 값이고,
- * 같은 값이 여럿이면 모두다. 견주는 값은 화면에 보이는 자리(digits)로 반올림한다.
+ * 같은 값이 여럿이면 모두다. 견주는 값은 화면에 보이는 자리로 반올림한다: digits가 숫자면 소수
+ * 그 자리, 함수면 그 함수가 돌려준 화면 값(손익 열은 shownMoney, 만원·정수 단위)이다.
  * 값이 없는 칸은 건너뛴다. 견줄 수 없는 열(better가 null)이거나 줄이 둘보다 적으면 빈 Set.
  */
 export function bestIndexes(values, better, digits = 2) {
   if (!better || values.length < 2) return new Set();
-  const shown = values.map((v) => (missing(v) ? null : Number(v.toFixed(digits))));
+  const round = typeof digits === "function" ? digits : (v) => Number(v.toFixed(digits));
+  const shown = values.map((v) => (missing(v) ? null : round(v)));
   const present = shown.filter((v) => v !== null);
   if (!present.length) return new Set();
   const best = better === "high" ? Math.max(...present) : Math.min(...present);
