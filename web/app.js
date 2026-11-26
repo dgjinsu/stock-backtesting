@@ -426,18 +426,20 @@ function wireSearch() {
  * 검색칸과 그 아래 목록 자리(최대 높이)가 조건 패널 안에 보이게 패널만 스크롤한다.
  * 패널은 스크롤 영역이라 목록이 패널 바닥을 넘으면 잘린다. 창은 스크롤하지 않는다.
  * 목록의 top·max-height는 CSS에서 읽는다 (값을 여기 다시 적지 않는다).
+ * 패널 끝에 붙으면 포커스 테두리가 잘리므로 위아래로 여백(GAP)을 둔다.
  */
 function revealSearch() {
+  const GAP = 16;
   const panel = $("panel");
   const box = panel.getBoundingClientRect();
-  const top = $("sym-search").closest(".search").getBoundingClientRect().top;
+  const top = $("sym-search").closest(".search").getBoundingClientRect().top - GAP;
   const list = getComputedStyle($("sym-results"));
-  const listBottom = top + parseFloat(list.top) + parseFloat(list.maxHeight);
+  const bottom = top + GAP + parseFloat(list.top) + parseFloat(list.maxHeight) + GAP;
   if (top < box.top) {
     panel.scrollTop -= box.top - top; // 칸이 패널 위로 숨어 있으면 되올린다
-  } else if (listBottom > box.bottom) {
+  } else if (bottom > box.bottom) {
     // 넘친 만큼 내리되, 칸 위끝이 패널 위로 올라가지는 않게 한다
-    panel.scrollTop += Math.min(listBottom - box.bottom, top - box.top);
+    panel.scrollTop += Math.min(bottom - box.bottom, top - box.top);
   }
 }
 
