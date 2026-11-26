@@ -5,11 +5,13 @@ import { test } from "node:test";
 import {
   SORT_HINT,
   afterTax,
+  avgInvestReason,
   bestIndexes,
   compareColumns,
   costNotice,
   fxNote,
   nextSort,
+  refStaleAlert,
   sortRows,
   underwaterText,
 } from "../../web/results.js";
@@ -339,6 +341,61 @@ test("afterTax: 손실이면 빼기와 손실 색", () => {
   const cell = afterTax(loss, "KRW");
   assert.equal(cell.text, `${MINUS}150만원`);
   assert.equal(cell.tone, "neg");
+});
+
+// ---------- 매수 규칙 결과 (F-17) ----------
+
+test("compareColumns: 원화 평단가가 없으면(매수 규칙, 결정 d39) 칸은 —", () => {
+  const ruled = { ...QLD, summary: { ...QLD.summary, avg_cost_invest: null } };
+  assert.equal(column("avg_cost_invest").text(ruled), "—");
+  assert.equal(column("avg_cost_invest").value(ruled), null);
+});
+
+test("avgInvestReason: 원화 평단가가 없는 이유 (결정 d39). 투자 통화 이름을 쓴다", () => {
+  assert.equal(
+    avgInvestReason("KRW"),
+    "매수 규칙은 넣은 돈 일부를 현금으로 두었다가 나중에 사서 넣은 돈과 산 돈이 달라, " +
+      "원화 평단가는 정하지 않습니다. 평단가(종목 통화)는 그대로입니다.",
+  );
+  assert.match(avgInvestReason("USD"), /달러 평단가는 정하지 않습니다/);
+});
+
+/** 레버리지 전환 결과의 switch_ref (상세 설계 4절, /api/strategy와 같은 모양). */
+const ref = (stale) => ({ symbol: "QQQ", basis: "same_day", stale });
+const RULE_PARAMS = {
+  currency: "KRW",
+  tax: false,
+  rule: "switch",
+  ma_days: 200,
+  switch_ref: "QQQ",
+};
+
+test("refStaleAlert: 기준 종목이 저장본이면 F-10 노랑 알림 문구", () => {
+  const results = [{ ...QLD, switch_ref: ref(true) }];
+  assert.deepEqual(refStaleAlert(results, RULE_PARAMS), {
+    title: "기준 종목 QQQ는 저장된 데이터로 판단했습니다.",
+    detail: "Yahoo Finance에서 새로 받지 못해 저장해 둔 주가로 200일선 위아래를 봤습니다.",
+  });
+});
+
+test("refStaleAlert: 종목이 여럿이어도 기준 종목 알림은 하나", () => {
+  const results = [
+    { ...QQQ, switch_ref: ref(true) },
+    { ...QLD, switch_ref: ref(true) },
+  ];
+  assert.equal(
+    refStaleAlert(results, RULE_PARAMS).title,
+    "기준 종목 QQQ는 저장된 데이터로 판단했습니다.",
+  );
+});
+
+test("refStaleAlert: 새로 받았거나 레버리지 전환이 아니면(switch_ref null) null", () => {
+  assert.equal(refStaleAlert([{ ...QLD, switch_ref: ref(false) }], RULE_PARAMS), null);
+  assert.equal(
+    refStaleAlert([{ ...QLD, switch_ref: null }], { ...RULE_PARAMS, rule: "none" }),
+    null,
+  );
+  assert.equal(refStaleAlert([QLD], { currency: "KRW", tax: false }), null); // switch_ref 없음
 });
 
 // ---------- 결과 아래 안내 (F-10) ----------

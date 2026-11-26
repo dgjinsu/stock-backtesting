@@ -3,15 +3,22 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  BUY_RULES,
+  DEFAULT_RULE,
   DEFAULT_TAB,
   MAX_SYMBOLS,
   RESULT_TABS,
+  RULE_FRACTIONAL_NOTE,
+  RULE_MA_DAYS,
+  RULE_SWITCH_REF,
   anchorOf,
+  backtestBody,
   estimateBuys,
   isDate,
   nextTab,
   panelFold,
   readQuery,
+  ruleFractionalNote,
   shiftYears,
   symbolStatus,
   toQuery,
@@ -211,6 +218,141 @@ test("readQuery: tax가 1이 아니면 버린다 (꺼짐이 기본)", () => {
     assert.equal("tax" in found, false, JSON.stringify(bad));
   }
   assert.equal("tax" in readQuery(`?${V1_QUERY}`), false);
+});
+
+// ---------- 매수 규칙 (F-17) ----------
+
+/** 이슈 #41 완료 기준의 주소 (12단계 키 tab·tax·rule을 모두 넣었다). */
+const STEP12_QUERY =
+  "s=QLD&from=2021-11-25&to=2026-11-24&freq=monthly&day=1&amt=2000000&cur=KRW" +
+  "&rule=ma_dip&tax=1&tab=buys";
+
+test("BUY_RULES: F-17 순서와 이름, 시안 v2 설명", () => {
+  assert.deepEqual(BUY_RULES, [
+    { key: "none", name: "기본", desc: "매번 같은 금액" },
+    { key: "ma_dip", name: "이평선 아래 2배·위 절반", desc: "200일선 아래면 2배, 위면 절반" },
+    { key: "ma_hot", name: "과열 때 절반", desc: "200일선보다 20% 넘게 위면 절반" },
+    { key: "switch", name: "레버리지 전환", desc: "QQQ가 200일선 위일 때만 사기" },
+  ]);
+});
+
+test("DEFAULT_RULE·RULE_MA_DAYS·RULE_SWITCH_REF: 기본, 200일선, QQQ (결정 d43)", () => {
+  assert.equal(DEFAULT_RULE, "none");
+  assert.equal(RULE_MA_DAYS, 200);
+  assert.equal(RULE_SWITCH_REF, "QQQ");
+});
+
+test("toQuery: 기본 규칙은 rule을 넣지 않는다", () => {
+  assert.equal(toQuery({ ...BASE, rule: "none" }), V1_QUERY);
+  assert.equal(toQuery(BASE), V1_QUERY);
+});
+
+test("toQuery: rule은 통화 뒤, 정수 주·수수료·양도세·탭 앞에 둔다 (조건 패널 순서)", () => {
+  assert.equal(toQuery({ ...BASE, rule: "ma_dip" }), `${V1_QUERY}&rule=ma_dip`);
+  assert.equal(
+    toQuery({ ...BASE, rule: "switch", fractional: false, fee: 0.1, tax: true, tab: "buys" }),
+    `${V1_QUERY}&rule=switch&frac=0&fee=0.1&tax=1&tab=buys`,
+  );
+});
+
+test("toQuery·readQuery: 기본이 아닌 규칙 셋은 주소로 왕복한다", () => {
+  for (const rule of ["ma_dip", "ma_hot", "switch"]) {
+    const query = toQuery({ ...BASE, rule });
+    assert.equal(new URLSearchParams(query).get("rule"), rule, rule);
+    assert.equal(readQuery(`?${query}`).rule, rule, rule);
+  }
+});
+
+test("toQuery: 모르는 규칙 값은 넣지 않는다", () => {
+  for (const bad of ["lump_sum", "abc", "", undefined]) {
+    assert.equal(toQuery({ ...BASE, rule: bad }), V1_QUERY, String(bad));
+  }
+});
+
+test("readQuery: rule=lump_sum, rule=abc 같은 잘못된 값은 버린다 (기본값을 쓴다)", () => {
+  for (const bad of ["lump_sum", "abc", "", "MA_DIP", "ma_dip ", "Switch"]) {
+    const found = readQuery(`?s=QLD&rule=${encodeURIComponent(bad)}`);
+    assert.equal("rule" in found, false, JSON.stringify(bad));
+  }
+});
+
+test("readQuery: rule=none은 기본으로 읽고, rule이 없는 v1 주소에는 rule이 없다", () => {
+  assert.equal(readQuery("?s=QLD&rule=none").rule, "none");
+  assert.equal("rule" in readQuery(`?${V1_QUERY}`), false);
+});
+
+test("toQuery: 12단계 키(rule·tax·tab)를 모두 넣으면 이슈 #41 완료 기준 주소", () => {
+  const cond = { ...BASE, codes: ["QLD"], rule: "ma_dip", tax: true, tab: "buys" };
+  assert.equal(toQuery(cond), STEP12_QUERY);
+});
+
+test("readQuery: 12단계 키를 모두 넣은 주소의 조건과 tab이 그대로 돌아온다", () => {
+  const found = readQuery(`?${STEP12_QUERY}`);
+  assert.deepEqual(found, {
+    codes: ["QLD"],
+    start: "2021-11-25",
+    end: "2026-11-24",
+    freq: "monthly",
+    monthDay: 1,
+    amount: 2_000_000,
+    currency: "KRW",
+    rule: "ma_dip",
+    tax: true,
+    tab: "buys",
+  });
+  // 읽은 값을 기본 조건에 얹어 다시 주소로 만들면 같은 주소 (새 탭에 붙여 열어도 같다)
+  const { tab, ...rest } = found;
+  assert.equal(toQuery({ ...BASE, ...rest, tab }), STEP12_QUERY);
+});
+
+test("backtestBody: 요청에 rule·ma_days·switch_ref를 싣는다 (기본 200일선·QQQ, 결정 d43)", () => {
+  assert.deepEqual(backtestBody(BASE), {
+    symbols: ["QQQ", "QLD"],
+    start: "2021-11-25",
+    end: "2026-11-24",
+    freq: "monthly",
+    anchor: 1,
+    amount: 2_000_000,
+    currency: "KRW",
+    fractional: true,
+    fee_pct: 0,
+    tax: false,
+    rule: "none",
+    ma_days: 200,
+    switch_ref: "QQQ",
+  });
+});
+
+test("backtestBody: 고른 규칙과 양도세를 싣고, 탭은 싣지 않는다", () => {
+  const body = backtestBody({ ...BASE, rule: "switch", tax: true, tab: "buys" });
+  assert.equal(body.rule, "switch");
+  assert.equal(body.ma_days, 200);
+  assert.equal(body.switch_ref, "QQQ");
+  assert.equal(body.tax, true);
+  assert.equal("tab" in body, false);
+});
+
+test("backtestBody: 매주는 요일, 매일은 anchor null", () => {
+  assert.equal(backtestBody({ ...BASE, freq: "weekly", weekDay: 4 }).anchor, 4);
+  assert.equal(backtestBody({ ...BASE, freq: "daily" }).anchor, null);
+});
+
+test("backtestBody: 모르는 규칙 값이면 기본으로 보낸다", () => {
+  assert.equal(backtestBody({ ...BASE, rule: "lump_sum" }).rule, "none");
+});
+
+test("ruleFractionalNote: 기본이 아닌 규칙에서 정수 주만을 골랐을 때만 안내 (계산 규칙 9-6)", () => {
+  assert.equal(RULE_FRACTIONAL_NOTE, "매수 규칙은 소수점 매수로 계산합니다");
+  for (const rule of ["ma_dip", "ma_hot", "switch"]) {
+    assert.equal(
+      ruleFractionalNote({ rule, fractional: false }),
+      "매수 규칙은 소수점 매수로 계산합니다",
+      rule,
+    );
+    assert.equal(ruleFractionalNote({ rule, fractional: true }), null, rule);
+  }
+  assert.equal(ruleFractionalNote({ rule: "none", fractional: false }), null);
+  assert.equal(ruleFractionalNote({ fractional: false }), null);
 });
 
 test("nextTab: →는 다음 탭, 마지막에서는 처음으로", () => {

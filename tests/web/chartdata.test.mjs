@@ -6,11 +6,14 @@ import {
   BUY_COLUMNS,
   DASHES,
   RANGES,
+  REST_LABEL,
+  boughtFractional,
   buysCsv,
   csvFileName,
   dashOf,
   dateTick,
   investedLines,
+  isRest,
   lastValue,
   logFirst,
   logFirstNote,
@@ -18,6 +21,8 @@ import {
   previewRows,
   rangeFrom,
   rangeStart,
+  restCount,
+  restNote,
   sampledNote,
   sparkline,
   splitMarks,
@@ -149,6 +154,52 @@ test("buysCsv: 값이 없으면 빈 칸", () => {
   const rows = [{ symbol: "X", currency: "USD", buys: [buy(1, { avg_cost_asset: null })] }];
   const line = buysCsv(rows, "KRW").slice(1).split("\r\n")[1];
   assert.equal(line.split(",")[8], "");
+});
+
+// ---------- 쉰 매수일 (F-17, #41 댓글: 레버리지 전환에서 qty 0인 줄) ----------
+
+/** 레버리지 전환 결과처럼 60회 중 15회는 사지 않은 매수 내역 (9-8: 쉰 매수일 15번). */
+const SWITCH_BUYS = Array.from({ length: 60 }, (_, i) => buy(1, { qty: i % 4 === 1 ? 0 : 1.25 }));
+const RULE_PARAMS = { fractional: true, rule: "switch", ma_days: 200, switch_ref: "QQQ" };
+
+test("REST_LABEL·isRest: 산 수량이 0인 회차는 '쉼'", () => {
+  assert.equal(REST_LABEL, "쉼");
+  assert.equal(isRest(buy(1, { qty: 0 })), true);
+  assert.equal(isRest(buy(1, { qty: 0.0001 })), false);
+  assert.equal(isRest(buy(1)), false);
+});
+
+test("restCount: 쉰 회차 수", () => {
+  assert.equal(restCount(SWITCH_BUYS), 15);
+  assert.equal(restCount([buy(1), buy(2)]), 0);
+  assert.equal(restCount([]), 0);
+});
+
+test("restNote: 레버리지 전환은 기준 종목이 이평선 아래라 현금으로 모은 날", () => {
+  assert.equal(
+    restNote(RULE_PARAMS, SWITCH_BUYS),
+    "쉼: 기준 종목 QQQ가 200일선 아래라 사지 않고 현금으로 모은 매수일 · 60회 중 15회",
+  );
+});
+
+test("restNote: 정수 주만 살 때 한 주 값이 모자라 못 산 날도 쉼으로 알린다", () => {
+  const buys = [buy(1), buy(2, { qty: 0 }), buy(3)];
+  assert.equal(
+    restNote({ fractional: false, rule: "none" }, buys),
+    "쉼: 모은 돈이 한 주 값보다 적어 사지 않고 다음 매수에 보탠 매수일 · 3회 중 1회",
+  );
+});
+
+test("restNote: 쉰 회차가 없으면 null", () => {
+  assert.equal(restNote(RULE_PARAMS, [buy(1), buy(2)]), null);
+  assert.equal(restNote({ fractional: true }, [buy(1)]), null);
+});
+
+test("boughtFractional: 매수 규칙은 정수 주만을 골라도 소수점으로 샀다 (9-6)", () => {
+  assert.equal(boughtFractional({ fractional: true, rule: "none" }), true);
+  assert.equal(boughtFractional({ fractional: false, rule: "none" }), false);
+  assert.equal(boughtFractional({ fractional: false, rule: "ma_dip" }), true);
+  assert.equal(boughtFractional({ fractional: false }), false); // rule이 없는 v1 응답
 });
 
 test("csvFileName: 종목과 기간을 넣는다", () => {
