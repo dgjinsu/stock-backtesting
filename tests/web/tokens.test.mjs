@@ -1,5 +1,5 @@
-// web/style.css 색 토큰 (리디자인 B 바탕, 결정 d47·d48). node --test로 돈다.
-// 값은 이슈 #49와 docs/4_상세설계.md 5절에서, 대비는 WCAG 2 상대 휘도로 잰다.
+// web/style.css 색 토큰 (리디자인 B 바탕, 결정 d47·d48, B-3 채운 컨트롤 결정 d53). node --test로 돈다.
+// 값은 이슈 #49·#50과 docs/4_상세설계.md 5절에서, 대비는 WCAG 2 상대 휘도로 잰다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
@@ -77,25 +77,29 @@ test("style.css: :root와 :root.dark 블록이 있다", () => {
   assert.ok(tokens(":root.dark"), ":root.dark { … } 블록이 있어야 한다");
 });
 
-// ---------- 다크: 리디자인 B 값 ----------
+// ---------- 다크: 리디자인 B-3 값 (결정 d53) ----------
 
-test("다크 토큰: 바탕·글자·강조·손익·버튼이 B 값과 같다", () => {
+test("다크 토큰: 바탕·글자·강조·손익·버튼·채운 컨트롤이 B-3 값과 같다 (결정 d53)", () => {
   // panel → --surface, panel2 → --sunken, 버튼 글자 → --btnfg (이슈 #49 "할 일")
+  // 이슈 #50: 바탕 다섯과 --sel을 올리고, 입력칸 면 --field·--fieldh와 밑줄 --ctl을 새로 둔다
   const want = lower({
-    "--bg": "#0A0C0B",
-    "--surface": "#101412",
-    "--sunken": "#171C1A",
-    "--line": "#232A27",
+    "--bg": "#121614",
+    "--surface": "#181D1B",
+    "--sunken": "#1F2522",
+    "--line": "#2D3632",
     "--line2": "#34403B",
     "--text": "#E4EAE6",
-    "--muted": "#909A95",
+    "--muted": "#A3ADA8",
     "--acc": "#C5F04A",
     "--accfg": "#0A0C0B",
     "--pos": "#6BE39A",
     "--neg": "#FF7D6E",
     "--btn": "#E4EAE6",
     "--btnfg": "#0A0C0B",
-    "--sel": "#27302C",
+    "--sel": "#3A4641",
+    "--field": "#252C29",
+    "--fieldh": "#2D3531",
+    "--ctl": "#8A9690",
   });
   assert.deepEqual(pick(DARK, Object.keys(want)), want);
 });
@@ -117,6 +121,11 @@ test("다크 토큰: --c1~--c4가 B 값과 같다", () => {
 });
 
 // ---------- 다크 종목 8색 (결정 d48) ----------
+
+test("다크 종목색: --c8은 #E64E84다 (새 패널 #181D1B 위 4.5:1, 결정 d53)", () => {
+  // 옛 값 #E0457B는 새 --surface 위에서 4.31:1이라 바꿨다 (이슈 #50)
+  assert.equal(DARK["--c8"], "#e64e84");
+});
 
 test("다크 종목색: --c1~--c8이 모두 있고 8개가 서로 다르다", () => {
   const missing = SERIES.filter((name) => !DARK[name]);
@@ -169,6 +178,40 @@ for (const fg of ["--pos", "--neg"]) {
     }
   });
 }
+
+// ---------- 입력칸 경계: 채운 컨트롤 (결정 d53, WCAG 1.4.11) ----------
+
+const FIELD_TOKENS = ["--field", "--fieldh", "--ctl"];
+
+test("다크 --ctl: 입력칸 밑줄은 다크 --field·--surface 대비 3:1 이상 (WCAG 1.4.11)", () => {
+  for (const bg of ["--field", "--surface"]) {
+    assertContrast(DARK["--ctl"], DARK[bg], 3, `다크 --ctl on ${bg}`);
+  }
+});
+
+test("라이트 토큰: 다크와 같은 이름의 --field·--fieldh·--ctl이 있다", () => {
+  const missing = FIELD_TOKENS.filter((name) => !LIGHT[name]);
+  assert.deepEqual(missing, [], ":root에 없는 채운 컨트롤 토큰");
+});
+
+test("라이트 --ctl: 입력칸 밑줄은 라이트 --field·--surface 대비 3:1 이상 (WCAG 1.4.11)", () => {
+  for (const bg of ["--field", "--surface"]) {
+    assertContrast(LIGHT["--ctl"], LIGHT[bg], 3, `라이트 --ctl on ${bg}`);
+  }
+});
+
+// 양도세 스위치 꺼짐 (docs/4 5절): 손잡이는 트랙 대비 3:1 이상. 라이트는 트랙이 패널 대비
+// 3:1 이상이고, 다크는 트랙이 패널과 가까워(1.58:1) 손잡이가 패널 대비 3:1 이상으로 경계를 알린다
+test("스위치 꺼짐: 두 테마 모두 --knob은 --swoff 대비 3:1 이상", () => {
+  for (const [theme, t] of [["라이트", LIGHT], ["다크", DARK]]) {
+    assertContrast(t["--knob"], t["--swoff"], 3, `${theme} --knob on --swoff`);
+  }
+});
+
+test("스위치 꺼짐: 라이트 --swoff는 --surface, 다크 --knob은 --surface 대비 3:1 이상", () => {
+  assertContrast(LIGHT["--swoff"], LIGHT["--surface"], 3, "라이트 --swoff on --surface");
+  assertContrast(DARK["--knob"], DARK["--surface"], 3, "다크 --knob on --surface");
+});
 
 // ---------- 라이트 ----------
 

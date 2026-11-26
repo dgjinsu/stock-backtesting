@@ -1,5 +1,7 @@
 /* 적립식 백테스트 화면. 겉모습은 리디자인 캔버스 B "나이트 데스크", 기능·문구는 시안 v1/v2를 따른다
    (상세 설계 5절, 결정 d46). 다크가 기본이고(결정 d47) 라이트는 v1 라이트 색을 B의 틀에 입힌다.
+   다크 바탕과 입력 부품은 B-3 "채운 컨트롤"이다 (결정 d53): 입력칸·버튼은 테두리 대신 면(--field)이고,
+   입력칸은 아래 2px 선(--ctl, 면·패널 대비 3:1 이상)으로 경계를 알린다.
    손익 색은 미국식(이익 초록, 손실 빨강). charts.js가 이름으로 읽는 토큰은 이름을 바꾸지 않는다.
    그래프가 투명도를 입히는 토큰(--pos, --neg, --c1~--c8, --acc)은 6자리 hex로 둔다 (withAlpha) */
 
@@ -20,7 +22,11 @@
   --btnfg: #ffffff;
   --acc: #4d6b00;
   --accfg: #ffffff;
-  --sel: #e6e9ee;
+  --sel: #ffffff;
+  --field: #eef0f3;
+  --fieldh: #e6e9ee;
+  --ctl: #6b7380;
+  --swoff: #6b7380;
   --focus: var(--acc);
   --c1: #2a78d6;
   --c2: #eb6834;
@@ -46,21 +52,25 @@
   color-scheme: light;
 }
 :root.dark {
-  --bg: #0a0c0b;
-  --surface: #101412;
-  --sunken: #171c1a;
-  --line: #232a27;
+  --bg: #121614;
+  --surface: #181d1b;
+  --sunken: #1f2522;
+  --line: #2d3632;
   --line2: #34403b;
   --text: #e4eae6;
-  --muted: #909a95;
-  --axis: #909a95;
+  --muted: #a3ada8;
+  --axis: #a3ada8;
   --pos: #6be39a;
   --neg: #ff7d6e;
   --btn: #e4eae6;
   --btnfg: #0a0c0b;
   --acc: #c5f04a;
   --accfg: #0a0c0b;
-  --sel: #27302c;
+  --sel: #3a4641;
+  --field: #252c29;
+  --fieldh: #2d3531;
+  --ctl: #8a9690;
+  --swoff: #34403b;
   --c1: #7da2ff;
   --c2: #ff9356;
   --c3: #3fdcc4;
@@ -68,9 +78,9 @@
   --c5: #f58bd0;
   --c6: #5bbf3f;
   --c7: #a98bff;
-  --c8: #e0457b;
+  --c8: #e64e84;
   --ref: #7d8782;
-  --grid: #1c2320;
+  --grid: #232a27;
   --tip: rgba(10, 12, 11, 0.92);
   --tipfg: #e4eae6;
   --info: #8db8f0;
@@ -80,7 +90,7 @@
   --negbg: #2a1512;
   --shadow-sm: rgba(0, 0, 0, 0.3);
   --shadow-lg: rgba(0, 0, 0, 0.5);
-  --knob: #ffffff;
+  --knob: #a3ada8;
   color-scheme: dark;
 }
 
@@ -194,8 +204,8 @@ a:hover {
   gap: 8px;
   min-height: 32px;
   padding: 0 12px;
-  border: 1px solid var(--line);
   border-radius: 999px;
+  background: var(--field);
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--muted);
@@ -218,12 +228,15 @@ a:hover {
   margin-left: auto;
   width: 40px;
   height: 40px;
-  border: 1px solid var(--line2);
+  border: 0;
   border-radius: 8px;
-  background: transparent;
+  background: var(--field);
   display: grid;
   place-items: center;
   cursor: pointer;
+}
+.icon-btn:hover {
+  background: var(--fieldh);
 }
 .icon-btn svg {
   stroke: var(--text);
@@ -287,40 +300,71 @@ a:hover {
   }
 }
 
-/* ---------- 입력 ---------- */
+/* ---------- 입력 (리디자인 B-3 "채운 컨트롤", 결정 d53) ---------- */
 .group {
   display: flex;
   flex-direction: column;
   gap: 8px;
 }
+/* 구역 제목: 라임 mono 번호(꾸밈, aria-hidden) + 제목 + 오른쪽 덧붙임 (B) */
 .group-head {
   display: flex;
-  justify-content: space-between;
-  font-size: 14px;
+  align-items: baseline;
+  gap: 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+.sec-no {
+  flex: none;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--acc);
 }
 .group-title {
-  font-size: 14px;
-  font-weight: 600;
-}
-.chip {
-  margin-left: 6px;
-  padding: 2px 8px;
-  border-radius: 999px;
-  background: var(--sunken);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: 700;
 }
+label.group-title {
+  flex: 1;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+}
+.aside {
+  margin-left: auto;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--muted);
+}
+/* 입력칸: 면으로 채우고 아래 2px 선으로 경계를 알린다 (면·패널 대비 3:1 이상, WCAG 1.4.11) */
 .field {
-  height: 44px;
-  border: 1px solid var(--line2);
-  border-radius: 10px;
-  background: var(--surface);
-  padding: 0 12px;
-  font-size: 15px;
+  height: 40px;
+  border: 0;
+  border-bottom: 2px solid var(--ctl);
+  border-radius: 8px 8px 2px 2px;
+  background: var(--field);
+  padding: 0 10px;
+  font-family: var(--font-mono);
+  font-size: 13px;
   min-width: 0;
+  color: var(--text);
+}
+.field:hover {
+  background: var(--fieldh);
+}
+select.field,
+.search .field {
+  font-family: var(--font-sans);
+  cursor: pointer;
+}
+.search .field {
+  cursor: text;
 }
 .field[aria-invalid="true"] {
-  border: 2px solid var(--neg);
+  border-bottom-color: var(--neg);
+  box-shadow: inset 0 0 0 1px var(--neg);
 }
 .field-error {
   margin: 0;
@@ -341,7 +385,6 @@ a:hover {
 }
 .stack .field {
   width: 100%;
-  color: var(--text);
 }
 /* 패널 스크롤 막대가 생겨도(1024px) 날짜와 달력 단추가 한 칸에 들어가게 */
 .stack .field[type="date"] {
@@ -356,38 +399,42 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  font-size: 14px;
+  font-size: 13px;
 }
 .inline .field {
   flex: 1;
 }
+/* 선택 버튼 묶음: 면 안에 칸이 떨어져 있고, 고른 칸은 한 단 밝은 면 + 굵은 글자 + 아래 흰 줄
+   (색만으로 구분하지 않는다) */
 .seg {
   display: flex;
   flex-wrap: wrap;
-  gap: 2px;
+  gap: 3px;
   padding: 3px;
-  background: var(--sunken);
-  border-radius: 10px;
+  background: var(--field);
+  border-radius: 9px;
 }
 .seg button {
   flex: 1 1 auto;
   border: 0;
   background: transparent;
-  min-height: 36px;
-  padding: 0 12px;
-  border-radius: 8px;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 6px;
   cursor: pointer;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 500;
 }
-.seg button.on {
-  background: var(--surface);
+.seg button:hover {
   color: var(--text);
-  font-weight: 600;
-  box-shadow:
-    0 0 0 1px var(--line),
-    0 1px 2px var(--shadow-sm);
+  background: var(--fieldh);
+}
+.seg button.on {
+  background: var(--sel);
+  color: var(--text);
+  font-weight: 700;
+  box-shadow: inset 0 -2px 0 var(--btn);
 }
 .seg.inline-seg {
   display: inline-flex;
@@ -404,29 +451,39 @@ a:hover {
 .with-unit .field {
   width: 100%;
   text-align: right;
-  padding-right: 40px;
-  font-weight: 600;
+  padding-right: 34px;
 }
 .with-unit .unit {
   position: absolute;
   right: 12px;
-  top: 11px;
-  font-size: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 13px;
   color: var(--muted);
+}
+/* 금액 (B: 높이 48, mono 20px 굵게) */
+.with-unit.amount .field {
+  height: 48px;
+  font-size: 20px;
+  font-weight: 700;
 }
 .with-unit.fee {
   flex: none;
-  width: 112px;
-}
-.with-unit.fee .field {
-  padding-right: 30px;
-  font-weight: 400;
-}
-.currency {
-  flex: none;
   width: 96px;
 }
-/* 매수 규칙 (F-17). 정수 주만 안내는 설명과 구분되게 안내 색(--info, 흰·검정 바탕 대비 4.5:1 이상) */
+.with-unit.fee .field {
+  padding-right: 26px;
+}
+/* 투자 통화 [KRW|USD] (결정 d50). 금액 칸과 높이를 맞춘다 (3 + 42 + 3) */
+.cur-seg {
+  flex: none;
+  flex-wrap: nowrap;
+}
+.cur-seg button {
+  min-height: 42px;
+  font-family: var(--font-mono);
+}
+/* 매수 규칙 (F-17). 정수 주만 안내는 설명과 구분되게 안내 색(--info) */
 .rule-frac {
   color: var(--info);
 }
@@ -435,7 +492,7 @@ a:hover {
   padding: 0;
   border: 0;
   background: none;
-  color: var(--info);
+  color: var(--acc);
   font-weight: 600;
   text-decoration: underline;
   text-underline-offset: 2px;
@@ -447,16 +504,20 @@ a:hover {
   cursor: default;
 }
 .advanced {
-  border-top: 1px solid var(--line);
+  border-top: 1px dashed var(--line2);
   padding-top: 14px;
 }
 .advanced summary {
   cursor: pointer;
   min-height: 32px;
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 12px;
+  font-weight: 700;
+}
+.advanced summary .sec-no {
+  margin: 0 8px 0 2px;
 }
 .advanced summary .muted {
+  font-family: var(--font-mono);
   font-weight: 400;
 }
 .advanced-in {
@@ -471,7 +532,7 @@ a:hover {
   justify-content: space-between;
   gap: 12px;
 }
-/* 켜고 끄는 스위치 (F-20 양도세, 시안 v2). 상태는 색만이 아니라 손잡이 자리로도 보인다 */
+/* 켜고 끄는 스위치 (F-20 양도세). 상태는 색만이 아니라 손잡이 자리로도 보인다 */
 .sw {
   display: inline-flex;
   align-items: center;
@@ -480,7 +541,7 @@ a:hover {
   padding: 0;
   border: 0;
   background: transparent;
-  font-size: 14px;
+  font-size: 13px;
   text-align: left;
   cursor: pointer;
 }
@@ -490,7 +551,7 @@ a:hover {
   width: 40px;
   height: 24px;
   border-radius: 999px;
-  background: var(--line2);
+  background: var(--swoff);
 }
 .sw-knob {
   position: absolute;
@@ -507,9 +568,10 @@ a:hover {
 }
 .sw[aria-checked="true"] .sw-knob {
   left: 19px;
+  background: var(--btnfg);
 }
 
-/* 종목 줄과 검색 */
+/* 종목 줄과 검색 (B-3: 채운 줄) */
 .sym-list {
   list-style: none;
   margin: 0;
@@ -522,10 +584,10 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 10px;
-  min-height: 44px;
+  min-height: 40px;
   padding-left: 12px;
-  border-radius: 10px;
-  background: var(--sunken);
+  border-radius: 8px;
+  background: var(--field);
 }
 .sym.bad {
   box-shadow: inset 0 0 0 2px var(--neg);
@@ -547,12 +609,14 @@ a:hover {
   color: var(--warn);
 }
 .sym strong {
-  font-size: 14px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
 }
 .sym .nm {
   flex: 1;
   min-width: 0;
-  font-size: 13px;
+  font-size: 12px;
   color: var(--muted);
   white-space: nowrap;
   overflow: hidden;
@@ -571,6 +635,9 @@ a:hover {
 .sym .x svg {
   stroke: var(--muted);
 }
+.sym .x:hover svg {
+  stroke: var(--text);
+}
 .swatch {
   flex: none;
 }
@@ -584,7 +651,7 @@ a:hover {
 .search-icon {
   position: absolute;
   left: 12px;
-  top: 14px;
+  top: 12px;
   stroke: var(--muted);
 }
 .listbox {
@@ -592,12 +659,12 @@ a:hover {
   z-index: 10;
   left: 0;
   right: 0;
-  top: 48px;
+  top: 44px;
   margin: 0;
   padding: 0;
   list-style: none;
-  border: 1px solid var(--line);
-  border-radius: 12px;
+  border: 1px solid var(--line2);
+  border-radius: 10px;
   background: var(--surface);
   box-shadow: 0 8px 24px var(--shadow-lg);
   overflow: hidden;
@@ -618,8 +685,10 @@ a:hover {
 .listbox li:first-child {
   border-top: 0;
 }
+/* 키보드로 고른 후보: 면 색만으로는 패널 대비 1.2:1이라 왼쪽 강조색 줄을 더한다 (WCAG 1.4.11) */
 .listbox li[aria-selected="true"] {
-  background: var(--sunken);
+  background: var(--field);
+  box-shadow: inset 3px 0 0 var(--acc);
 }
 .listbox li[aria-disabled="true"] {
   color: var(--muted);
@@ -643,7 +712,7 @@ a:hover {
   cursor: default;
 }
 
-/* 계산하기 */
+/* 계산하기 (B: 높이 52, 둥근 10px, 글 옆 꾸밈 "Enter" 표시) */
 .run {
   display: flex;
   flex-direction: column;
@@ -653,19 +722,30 @@ a:hover {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 10px;
+  gap: 12px;
   height: 52px;
   border: 0;
-  border-radius: 12px;
+  border-radius: 10px;
   background: var(--btn);
   color: var(--btnfg);
-  font-size: 16px;
+  font-size: 15px;
   font-weight: 700;
   cursor: pointer;
 }
 .primary:disabled {
   opacity: 0.55;
   cursor: not-allowed;
+}
+.kbd-enter {
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: color-mix(in srgb, var(--btnfg) 14%, transparent);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 400;
+}
+.primary:disabled .kbd-enter {
+  display: none;
 }
 .status {
   margin: 0;

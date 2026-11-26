@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"
     />
     <link rel="stylesheet" href="style.css" />
     <script>
@@ -95,8 +95,10 @@
           <h2 id="cond-h">조건</h2>
 
           <div class="group">
+            <!-- 구역 번호(01~06)는 꾸밈이라 aria-hidden. 컨트롤 이름에 들어가지 않는다 (리디자인 B) -->
             <div class="group-head">
-              <span class="group-title">종목</span><span class="muted" id="sym-count">0 / 8</span>
+              <span class="sec-no" aria-hidden="true">01</span><span class="group-title">종목</span
+              ><span class="aside" id="sym-count">0 / 8</span>
             </div>
             <ul class="sym-list" id="sym-list" aria-label="넣은 종목"></ul>
             <div class="search">
@@ -143,7 +145,9 @@
           </div>
 
           <div class="group">
-            <span class="group-title">기간</span>
+            <div class="group-head">
+              <span class="sec-no" aria-hidden="true">02</span><span class="group-title">기간</span>
+            </div>
             <div class="two">
               <label class="stack"
                 >시작일<input type="date" id="start" class="field" aria-describedby="start-error"
@@ -164,7 +168,10 @@
           </div>
 
           <div class="group">
-            <span class="group-title" id="freq-label">주기</span>
+            <div class="group-head">
+              <span class="sec-no" aria-hidden="true">03</span
+              ><span class="group-title" id="freq-label">주기</span>
+            </div>
             <div class="seg" role="group" aria-labelledby="freq-label" id="freq">
               <button type="button" data-freq="daily">매일</button>
               <button type="button" data-freq="weekly">매주</button>
@@ -189,11 +196,14 @@
           </div>
 
           <div class="group">
-            <label for="amount" class="group-title"
-              >금액 <span class="chip">종목마다 매번</span></label
-            >
+            <div class="group-head">
+              <span class="sec-no" aria-hidden="true">04</span
+              ><label for="amount" class="group-title"
+                >금액 <span class="aside">종목마다 매번</span></label
+              >
+            </div>
             <div class="amount-row">
-              <div class="with-unit">
+              <div class="with-unit amount">
                 <input
                   id="amount"
                   inputmode="numeric"
@@ -203,19 +213,22 @@
                 />
                 <span class="unit" id="amount-unit" aria-hidden="true">원</span>
               </div>
-              <label for="currency" class="sr">투자 통화</label>
-              <select id="currency" class="field currency">
-                <option value="KRW">원화</option>
-                <option value="USD">달러</option>
-              </select>
+              <!-- 투자 통화 (결정 d50). 주소·요청 값 cur는 select일 때와 같다 -->
+              <div class="seg cur-seg" role="group" aria-label="투자 통화" id="currency">
+                <button type="button" data-cur="KRW">KRW</button>
+                <button type="button" data-cur="USD">USD</button>
+              </div>
             </div>
             <p class="field-error" id="amount-error" hidden></p>
-            <p class="hint" id="amount-preview"></p>
+            <p class="hint mono" id="amount-preview"></p>
           </div>
 
           <!-- 매수 규칙 (F-17). 이평선 기간과 기준 종목은 고르지 않고 200일·QQQ로 보낸다 (결정 d43) -->
           <div class="group">
-            <label for="rule" class="group-title">매수 규칙</label>
+            <div class="group-head">
+              <span class="sec-no" aria-hidden="true">05</span
+              ><label for="rule" class="group-title">매수 규칙</label>
+            </div>
             <select id="rule" class="field" aria-describedby="rule-desc rule-frac"></select>
             <p class="hint" id="rule-desc"></p>
             <p class="hint rule-frac" id="rule-frac" hidden></p>
@@ -227,7 +240,10 @@
           </div>
 
           <details class="advanced" id="advanced">
-            <summary>고급 설정 <span class="muted" id="advanced-summary"></span></summary>
+            <summary>
+              <span class="sec-no" aria-hidden="true">06</span>고급 설정
+              <span class="muted" id="advanced-summary"></span>
+            </summary>
             <div class="advanced-in">
               <div class="stack-gap">
                 <span class="small muted" id="mode-label">매수 방식</span>
@@ -281,7 +297,8 @@
           <div class="run">
             <button type="submit" class="primary" id="run">
               <span class="spinner" aria-hidden="true" hidden></span
-              ><span id="run-label">계산하기</span>
+              ><span id="run-label">계산하기</span
+              ><span class="kbd-enter" aria-hidden="true">Enter</span>
             </button>
             <!-- 읽어 주는 안내는 패널 밖 #status-live가 맡는다 (패널을 접어도 읽힌다) -->
             <p class="status" id="status"></p>
