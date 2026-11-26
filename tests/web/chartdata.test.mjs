@@ -441,7 +441,7 @@ test("sparkline: 그릴 값이 없으면 null", () => {
   assert.equal(sparkline(undefined, BOX), null);
 });
 
-test("sparkline: 기본 상자는 300×48 (카드 SVG viewBox)", () => {
+test("sparkline: 기본 상자는 300×48 (카드는 높이 54로 부른다)", () => {
   const line = sparkline([0, 100]);
   assert.equal(line.path, "M0 46L300 2");
   assert.equal(line.zeroY, 46);
