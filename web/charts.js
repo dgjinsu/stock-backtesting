@@ -61,22 +61,72 @@ function withAlpha(hex, alpha) {
   return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
 }
 
-/** 마우스를 올린 날의 세로 기준선. */
+/** 그래프를 만들 때 한 번 읽는 테마 값 (리디자인 B). 테마를 바꾸면 그래프를 새로 만들어 다시 읽는다. */
+function chartTheme() {
+  return {
+    dark: document.documentElement.classList.contains("dark"),
+    mono: cssVar("--font-mono"),
+    muted: cssVar("--muted"),
+    axis: cssVar("--axis"),
+    grid: cssVar("--grid"),
+    line2: cssVar("--line2"),
+    surface: cssVar("--surface"),
+    acc: cssVar("--acc"),
+    tip: cssVar("--tip"),
+    tipfg: cssVar("--tipfg"),
+    tipacc: cssVar("--tipacc"),
+  };
+}
+
+/** 마우스를 올린 날의 세로 기준선: 강조색 실선, 투명도 0.6 (B). 색은 플러그인 옵션 color. */
 const crosshair = {
   id: "crosshair",
-  afterDatasetsDraw(chart) {
+  afterDatasetsDraw(chart, _args, options) {
     const active = chart.tooltip?.getActiveElements() ?? [];
     if (!active.length) return;
     const { ctx, chartArea } = chart;
+    const x = Math.round(active[0].element.x) + 0.5;
     ctx.save();
     ctx.beginPath();
-    ctx.moveTo(active[0].element.x, chartArea.top);
-    ctx.lineTo(active[0].element.x, chartArea.bottom);
+    ctx.moveTo(x, chartArea.top);
+    ctx.lineTo(x, chartArea.bottom);
     ctx.lineWidth = 1;
-    ctx.setLineDash([3, 3]);
-    ctx.strokeStyle = cssVar("--axis");
+    ctx.globalAlpha = 0.6;
+    ctx.strokeStyle = options.color;
     ctx.stroke();
     ctx.restore();
+  },
+};
+
+/**
+ * 다크에서 종목 선에 그 색의 빛을 준다 (B, CSS drop-shadow 0 0 3px와 비슷하게). 데이터셋에 glow가
+ * 있는 선만이다. 라이트에서는 이 플러그인을 넣지 않는다 (결정 d52 ③). 캔버스 그림자는 배율을 따르지
+ * 않아 화면 배율을 곱한다.
+ */
+const glow = {
+  id: "glow",
+  beforeDatasetDraw(chart, { index }) {
+    const dataset = chart.data.datasets[index];
+    if (!dataset.glow) return;
+    chart.ctx.save();
+    chart.ctx.shadowColor = dataset.borderColor;
+    chart.ctx.shadowBlur = 3 * chart.currentDevicePixelRatio;
+  },
+  afterDatasetDraw(chart, { index }) {
+    if (chart.data.datasets[index].glow) chart.ctx.restore();
+  },
+};
+
+/**
+ * 그리는 판 자리(chartArea)를 그래프 상자의 CSS 변수 --plot으로 넘긴다. .chart-wrap::before가
+ * 그 자리에 점 격자를 깐다 (B). 캔버스 안에 그리지 않아 마우스를 움직여도 다시 그리지 않는다.
+ */
+const plotBoard = {
+  id: "plotBoard",
+  afterLayout(chart) {
+    const { top, right, bottom, left } = chart.chartArea;
+    const inset = `${top}px ${chart.width - right}px ${chart.height - bottom}px ${left}px`;
+    chart.canvas.parentNode?.style.setProperty("--plot", inset);
   },
 };
 
@@ -104,14 +154,14 @@ function splitLines(marks) {
     afterDatasetsDraw(chart) {
       const { ctx, chartArea } = chart;
       ctx.save();
-      ctx.font = `11px ${getComputedStyle(document.body).fontFamily}`;
+      ctx.font = `11px ${cssVar("--font-mono")}`;
       ctx.textBaseline = "middle";
       for (const mark of marks) {
         const x = xOf(chart, mark);
         const text = `${mark.label} ${mark.date}`;
         const width = ctx.measureText(text).width + 8;
         const left = x + 4 + width > chartArea.right ? x - 4 - width : x + 4;
-        ctx.fillStyle = cssVar("--surface");
+        ctx.fillStyle = cssVar("--bg"); // 점 격자 판(--bg) 위에서 글자만 또렷하게
         ctx.fillRect(left, chartArea.top + 2, width, 16);
         ctx.fillStyle = cssVar("--muted");
         ctx.fillText(text, left + 4, chartArea.top + 10);
@@ -123,33 +173,43 @@ function splitLines(marks) {
 
 // ---------- 그래프 데이터 ----------
 
+/** 종목 선 (B): 1.8px, 다크에서 빛(glow 플러그인), 마우스를 올린 점은 바탕색 속에 종목색 2px 테두리. */
 function symbolLine(label, values, slot, extra = {}) {
+  const color = cssVar(`--c${slot + 1}`);
   return {
     label,
     data: values,
-    borderColor: cssVar(`--c${slot + 1}`),
-    backgroundColor: cssVar(`--c${slot + 1}`),
+    borderColor: color,
+    backgroundColor: color,
     borderDash: dashOf(slot),
-    borderWidth: 2,
+    borderWidth: 1.8,
+    glow: true,
     pointRadius: 0,
-    pointHoverRadius: 3,
+    pointHoverRadius: 3.5,
+    pointHoverBorderWidth: 2,
+    pointHoverBorderColor: color,
+    pointHoverBackgroundColor: cssVar("--bg"),
     ...extra,
   };
 }
 
-function refLine(label, values, dash = []) {
+/** 평단가·투자금 계단선. 하나로 합친 투자금은 회색(muted) 점선이다 (B). */
+function refLine(label, values, { dash = [], color = cssVar("--ref"), width = 1.5 } = {}) {
   return {
     label,
     data: values,
-    borderColor: cssVar("--ref"),
-    backgroundColor: cssVar("--ref"),
+    borderColor: color,
+    backgroundColor: color,
     borderDash: dash,
-    borderWidth: 1.5,
+    borderWidth: width,
     stepped: true,
     pointRadius: 0,
     pointHoverRadius: 2,
   };
 }
+
+/** 하나로 합친 투자금 선과 범례 견본의 점선 (B). */
+const INVEST_DASH = [3, 3];
 
 /**
  * 종목마다 선 하나인 그래프(수익률, 낙폭). 범례로 숨긴 종목은 datasets에서 빼서
@@ -246,11 +306,15 @@ function tabModel(data, slotOf) {
       ...invested
         .filter((line) => !off(line.symbol))
         .map((line) =>
-          refLine(
-            line.symbol ? `투자금 ${line.symbol}` : "투자금",
-            prep(line.values),
-            line.symbol ? dashOf(slotOf(line.symbol)) : [],
-          ),
+          line.symbol
+            ? refLine(`투자금 ${line.symbol}`, prep(line.values), {
+                dash: dashOf(slotOf(line.symbol)),
+              })
+            : refLine("투자금", prep(line.values), {
+                dash: INVEST_DASH,
+                color: cssVar("--muted"),
+                width: 1.4,
+              }),
         ),
     ],
     legend: [
@@ -264,6 +328,10 @@ function tabModel(data, slotOf) {
       ...invested.map((line) => ({
         ref: true,
         slot: line.symbol ? slotOf(line.symbol) : 0, // 종목마다 나뉘면 회색 선을 선 모양으로 가른다
+        // 하나로 합친 선은 그래프와 같은 회색 점선 견본
+        look: line.symbol
+          ? null
+          : { color: "var(--muted)", dash: INVEST_DASH.join(" "), cap: "butt" },
         label: line.symbol ? `투자금 ${line.symbol}` : "투자금",
         value: money(lastValue(line.values), invest),
         hidden: off(line.symbol),
@@ -283,7 +351,7 @@ function tabModel(data, slotOf) {
 function legendItems(items) {
   return items.map((item) => {
     const content = [
-      swatch(item.slot, 22, item.ref ? { color: "var(--ref)" } : {}),
+      swatch(item.slot, 22, item.look ?? (item.ref ? { color: "var(--ref)" } : {})),
       h("span", { class: "lg-label", text: item.label }),
       h("strong", { text: item.value }),
       // 버튼 안에서는 aria-pressed가 상태를 알리므로 이름이 바뀌지 않게 읽지 않는다 (APG 토글
@@ -399,14 +467,18 @@ function newChart(ChartJs, wrap, model) {
     "aria-label": `${TABS.find((t) => t.key === view.tab).label} 그래프${span}. ${values}.${splits}`,
   });
   wrap.replaceChildren(canvas);
-  const axis = cssVar("--axis");
-  const grid = cssVar("--grid");
-  ChartJs.defaults.font.family = getComputedStyle(document.body).fontFamily;
+  const theme = chartTheme();
+  ChartJs.defaults.font.family = theme.mono; // 축 글자·툴팁은 mono (B)
   const tickText = dateTick(model.labels);
   return new ChartJs(canvas, {
     type: "line",
     data: { labels: model.labels, datasets: model.datasets },
-    plugins: marks.length ? [crosshair, splitLines(marks)] : [crosshair],
+    plugins: [
+      plotBoard,
+      crosshair,
+      ...(theme.dark ? [glow] : []),
+      ...(marks.length ? [splitLines(marks)] : []),
+    ],
     options: {
       responsive: true,
       maintainAspectRatio: false,
@@ -416,9 +488,10 @@ function newChart(ChartJs, wrap, model) {
       scales: {
         x: {
           grid: { display: false },
-          border: { color: cssVar("--line2") },
+          border: { color: theme.line2 },
           ticks: {
-            color: axis,
+            color: theme.muted,
+            font: { size: 11 },
             maxRotation: 0,
             autoSkip: true,
             maxTicksLimit: 8,
@@ -431,20 +504,39 @@ function newChart(ChartJs, wrap, model) {
           type: model.log ? "logarithmic" : "linear",
           border: { display: false },
           grid: {
-            color: (ctx) => (model.zeroLine && ctx.tick?.value === 0 ? axis : grid),
+            color: (ctx) => (model.zeroLine && ctx.tick?.value === 0 ? theme.axis : theme.grid),
             lineWidth: (ctx) => (model.zeroLine && ctx.tick?.value === 0 ? 2 : 1),
+            drawTicks: false,
           },
-          ticks: { color: axis, maxTicksLimit: 7, callback: (value) => model.tick(Number(value)) },
+          ticks: {
+            color: theme.muted,
+            font: { size: 11 },
+            padding: 8,
+            maxTicksLimit: 7,
+            callback: (value) => model.tick(Number(value)),
+          },
         },
       },
       plugins: {
         legend: { display: false },
+        crosshair: { color: theme.acc },
+        // 툴팁 (B): mono 12px, 강조색 테두리, 날짜는 강조색 굵게. 라이트 툴팁도 어두워서 날짜와
+        // 테두리는 두 테마 모두 라임(--tipacc)이다 (라이트 --acc는 어두운 바탕에서 대비가 모자란다)
         tooltip: {
-          backgroundColor: cssVar("--tip"),
-          titleColor: cssVar("--tipfg"),
-          bodyColor: cssVar("--tipfg"),
-          padding: 10,
-          boxPadding: 4,
+          backgroundColor: theme.tip,
+          borderColor: theme.tipacc,
+          borderWidth: 1,
+          cornerRadius: 8,
+          caretSize: 0,
+          padding: { x: 12, y: 10 },
+          titleColor: theme.tipacc,
+          titleFont: { size: 12, weight: 700 },
+          titleMarginBottom: 6,
+          bodyColor: theme.tipfg,
+          bodyFont: { size: 12 },
+          boxWidth: 8,
+          boxHeight: 8,
+          boxPadding: 6,
           usePointStyle: false,
           filter: (item) => item.raw !== null && item.raw !== undefined,
           callbacks: {
@@ -587,6 +679,11 @@ export function chartSection(data, slotOf) {
 }
 
 document.addEventListener("themechange", () => draw());
+// 캔버스 글자(축·툴팁·분할일)는 그릴 때의 글꼴로 남는다. JetBrains Mono가 늦게 오면 한 번 다시 그린다
+document.fonts?.load(`11px "JetBrains Mono"`).then(
+  () => draw(),
+  () => {},
+);
 
 // ---------- 매수 내역과 CSV (F-08) ----------
 
