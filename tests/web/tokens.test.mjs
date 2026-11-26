@@ -200,6 +200,19 @@ test("라이트 --ctl: 입력칸 밑줄은 라이트 --field·--surface 대비 3
   }
 });
 
+// 양도세 스위치 꺼짐 (docs/4 5절): 손잡이는 트랙 대비 3:1 이상. 라이트는 트랙이 패널과,
+// 다크는 트랙이 패널과 가까워 손잡이가 패널과 3:1 이상으로 경계를 알린다
+test("스위치 꺼짐: 두 테마 모두 --knob은 --swoff 대비 3:1 이상", () => {
+  for (const [theme, t] of [["라이트", LIGHT], ["다크", DARK]]) {
+    assertContrast(t["--knob"], t["--swoff"], 3, `${theme} --knob on --swoff`);
+  }
+});
+
+test("스위치 꺼짐: 라이트 --swoff는 --surface, 다크 --knob은 --surface 대비 3:1 이상", () => {
+  assertContrast(LIGHT["--swoff"], LIGHT["--surface"], 3, "라이트 --swoff on --surface");
+  assertContrast(DARK["--knob"], DARK["--surface"], 3, "다크 --knob on --surface");
+});
+
 // ---------- 라이트 ----------
 
 test("라이트 --acc: 있고, #FFFFFF와 라이트 --bg 대비 4.5:1 이상", () => {
