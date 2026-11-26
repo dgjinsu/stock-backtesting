@@ -849,7 +849,7 @@ function card(result, params, chart) {
       { class: "card-head" },
       swatch(slotOf(result.symbol), 18),
       h("h3", { class: "mono", text: result.symbol }),
-      h("span", { class: "nm", text: result.name }),
+      h("span", { class: "nm", title: result.name, text: result.name }),
       notes ? h("span", { class: "note mono", text: notes }) : null,
     ),
     h(
