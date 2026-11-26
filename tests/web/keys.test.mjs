@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { isSearchShortcut, shortcutLabel } from "../../web/keys.js";
+import { isSearchShortcut, shortcutAria, shortcutLabel } from "../../web/keys.js";
 
 // ---------- isSearchShortcut: 맥이 아닐 때 (Ctrl+K) ----------
 
@@ -45,6 +45,16 @@ const NOT_MAC = [
   },
   { label: 'Ctrl+J (code "KeyJ")', event: { ctrlKey: true, code: "KeyJ", key: "j" }, want: false },
   { label: "수식키 없이 K만", event: { code: "KeyK", key: "k" }, want: false },
+  {
+    label: 'Ctrl+K 한글 조합 중 (key "Process")',
+    event: { ctrlKey: true, code: "KeyK", key: "Process" },
+    want: true,
+  },
+  {
+    label: "Ctrl+Meta+K",
+    event: { ctrlKey: true, metaKey: true, code: "KeyK", key: "k" },
+    want: false,
+  },
 ];
 
 for (const { label, event, want } of NOT_MAC) {
@@ -66,6 +76,11 @@ const MAC = [
   },
   { label: "⌘+Alt+K", event: { metaKey: true, altKey: true, code: "KeyK", key: "k" }, want: false },
   { label: "수식키 없이 K만", event: { code: "KeyK", key: "k" }, want: false },
+  {
+    label: "⌘+Ctrl+K",
+    event: { metaKey: true, ctrlKey: true, code: "KeyK", key: "k" },
+    want: false,
+  },
 ];
 
 for (const { label, event, want } of MAC) {
@@ -82,4 +97,14 @@ test('shortcutLabel: 맥이 아니면 "Ctrl K"', () => {
 
 test('shortcutLabel: 맥이면 "⌘K"', () => {
   assert.equal(shortcutLabel(true), "⌘K");
+});
+
+// ---------- shortcutAria: 검색칸 aria-keyshortcuts 값 (화면 글과 표기가 다르다) ----------
+
+test('shortcutAria: 맥이 아니면 "Control+K"', () => {
+  assert.equal(shortcutAria(false), "Control+K");
+});
+
+test('shortcutAria: 맥이면 "Meta+K"', () => {
+  assert.equal(shortcutAria(true), "Meta+K");
 });
