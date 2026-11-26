@@ -1,6 +1,11 @@
-/* 적립식 백테스트 화면. 색 토큰은 시안 "v1"과 같다 (상세 설계 5절). 손익 색은 미국식(이익 초록, 손실 빨강). */
+/* 적립식 백테스트 화면. 겉모습은 리디자인 캔버스 B "나이트 데스크", 기능·문구는 시안 v1/v2를 따른다
+   (상세 설계 5절, 결정 d46). 다크가 기본이고(결정 d47) 라이트는 v1 라이트 색을 B의 틀에 입힌다.
+   손익 색은 미국식(이익 초록, 손실 빨강). charts.js가 이름으로 읽는 토큰은 이름을 바꾸지 않는다.
+   그래프가 투명도를 입히는 토큰(--pos, --neg, --c1~--c8, --acc)은 6자리 hex로 둔다 (withAlpha) */
 
 :root {
+  --font-sans: "Noto Sans KR", system-ui, -apple-system, "Malgun Gothic", sans-serif;
+  --font-mono: "JetBrains Mono", "Noto Sans KR", ui-monospace, Consolas, monospace;
   --bg: #f5f6f8;
   --surface: #ffffff;
   --sunken: #eff1f4;
@@ -13,7 +18,10 @@
   --neg: #c42b2b;
   --btn: #15181d;
   --btnfg: #ffffff;
-  --focus: #2a78d6;
+  --acc: #4d6b00;
+  --accfg: #ffffff;
+  --sel: #e6e9ee;
+  --focus: var(--acc);
   --c1: #2a78d6;
   --c2: #eb6834;
   --c3: #1baf7a;
@@ -34,39 +42,42 @@
   --shadow-sm: rgba(0, 0, 0, 0.06);
   --shadow-lg: rgba(0, 0, 0, 0.12);
   --knob: #ffffff;
+  --head: 60px;
   color-scheme: light;
 }
 :root.dark {
-  --bg: #0d0f13;
-  --surface: #15181e;
-  --sunken: #1c2028;
-  --line: #262b34;
-  --line2: #3b424d;
-  --text: #e8eaee;
-  --muted: #a3abb7;
-  --axis: #9aa2ae;
-  --pos: #43c08a;
-  --neg: #f27a74;
-  --btn: #e8eaee;
-  --btnfg: #0d0f13;
-  --focus: #3987e5;
-  --c1: #3987e5;
-  --c2: #d95926;
-  --c3: #199e70;
-  --c4: #c98500;
-  --c5: #d55181;
-  --c6: #0ca30c;
-  --c7: #9085e9;
-  --c8: #e66767;
-  --ref: #7d8693;
-  --grid: #1f232b;
-  --tip: #e8eaee;
-  --tipfg: #0d0f13;
+  --bg: #0a0c0b;
+  --surface: #101412;
+  --sunken: #171c1a;
+  --line: #232a27;
+  --line2: #34403b;
+  --text: #e4eae6;
+  --muted: #909a95;
+  --axis: #909a95;
+  --pos: #6be39a;
+  --neg: #ff7d6e;
+  --btn: #e4eae6;
+  --btnfg: #0a0c0b;
+  --acc: #c5f04a;
+  --accfg: #0a0c0b;
+  --sel: #27302c;
+  --c1: #7da2ff;
+  --c2: #ff9356;
+  --c3: #3fdcc4;
+  --c4: #f5d25a;
+  --c5: #f58bd0;
+  --c6: #5bbf3f;
+  --c7: #a98bff;
+  --c8: #e0457b;
+  --ref: #7d8782;
+  --grid: #1c2320;
+  --tip: rgba(10, 12, 11, 0.92);
+  --tipfg: #e4eae6;
   --info: #8db8f0;
-  --infobg: #132236;
+  --infobg: #111c26;
   --warn: #f1cb73;
-  --warnbg: #2a2210;
-  --negbg: #2c1716;
+  --warnbg: #221d0e;
+  --negbg: #2a1512;
   --shadow-sm: rgba(0, 0, 0, 0.3);
   --shadow-lg: rgba(0, 0, 0, 0.5);
   --knob: #ffffff;
@@ -80,13 +91,13 @@ html,
 body {
   margin: 0;
 }
+/* 머리가 위에 붙어 있어, 키보드로 옮긴 포커스가 머리 밑에 숨지 않게 그 높이만큼 띄운다 (WCAG C43) */
+html {
+  scroll-padding-top: var(--head);
+}
 body {
-  font-family:
-    "IBM Plex Sans KR",
-    system-ui,
-    -apple-system,
-    "Malgun Gothic",
-    sans-serif;
+  font-family: var(--font-sans);
+  font-size: 14px;
   color: var(--text);
   background: var(--bg);
   font-variant-numeric: tabular-nums;
@@ -104,7 +115,14 @@ select {
   outline-offset: 2px;
 }
 a {
-  color: var(--c1);
+  color: var(--acc);
+}
+a:hover {
+  color: var(--text);
+}
+/* 숫자·코드·날짜 (B). 한글은 목록 둘째의 Noto Sans KR로 이어 그린다 */
+.mono {
+  font-family: var(--font-mono);
 }
 [hidden] {
   display: none !important;
@@ -138,66 +156,71 @@ a {
   color: var(--neg);
 }
 
-/* ---------- 머리 ---------- */
+/* ---------- 머리 (B: 높이 60px 띠, 화면 전체 폭, 위에 붙음) ---------- */
 .topbar {
+  position: sticky;
+  top: 0;
+  z-index: 20;
+  height: var(--head);
   background: var(--surface);
   border-bottom: 1px solid var(--line);
 }
 .topbar-in {
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 12px 24px;
+  height: 100%;
+  padding: 0 20px;
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 12px 20px;
 }
 .brand {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 12px;
 }
 .brand h1 {
   margin: 0;
-  font-size: 19px;
+  font-size: 16px;
   font-weight: 700;
 }
 .brand-bg {
-  fill: var(--btn);
+  fill: var(--acc);
 }
 .brand-fg {
-  stroke: var(--btnfg);
+  stroke: var(--accfg);
 }
 .pill {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 30px;
+  min-height: 32px;
   padding: 0 12px;
+  border: 1px solid var(--line);
   border-radius: 999px;
-  background: var(--sunken);
-  font-size: 13px;
+  font-family: var(--font-mono);
+  font-size: 12px;
   color: var(--muted);
 }
 .dot {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
   background: var(--line2);
 }
 .pill.ok .dot {
   background: var(--pos);
+  box-shadow: 0 0 8px var(--pos);
 }
 .pill.warn .dot {
   background: var(--warn);
+  box-shadow: 0 0 8px var(--warn);
 }
 .icon-btn {
   margin-left: auto;
-  width: 44px;
-  height: 44px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
+  width: 40px;
+  height: 40px;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: transparent;
   display: grid;
   place-items: center;
   cursor: pointer;
@@ -215,26 +238,24 @@ a {
   display: none;
 }
 
-/* ---------- 틀 ---------- */
+/* ---------- 틀 (B: 왼쪽 조건 띠 + 나머지 결과) ---------- */
 .layout {
-  max-width: 1440px;
-  margin: 0 auto;
-  padding: 24px;
   display: flex;
   align-items: flex-start;
-  gap: 24px;
+  min-height: calc(100vh - var(--head));
 }
 .panel {
   flex: 0 0 340px;
+  /* 긴 종목 이름(Direxion Daily Semiconductor Bull 3X)에도 정한 폭보다 넓어지지 않게 */
+  min-width: 0;
   background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 16px;
+  border-right: 1px solid var(--line);
   padding: 20px;
   position: sticky;
-  top: 16px;
-  /* 매수 규칙(F-17)까지 넣으면 창보다 길 수 있다. 붙어 있는 동안에도 계산하기에 닿게 안에서
-     스크롤하고, 스크롤 막대는 얇게 둬서 1024px에서도 날짜 칸이 잘리지 않게 한다 */
-  max-height: calc(100vh - 32px);
+  top: var(--head);
+  /* 머리 바로 아래에서 창 바닥까지. 페이지 맨 위에서도 바닥이 창 바닥과 맞아 계산하기에 늘 닿는다.
+     매수 규칙(F-17)까지 넣으면 창보다 길 수 있어 안에서 스크롤하고, 스크롤 막대는 얇게 둔다 */
+  height: calc(100vh - var(--head));
   overflow-y: auto;
   scrollbar-width: thin;
 }
@@ -245,23 +266,24 @@ a {
 }
 .panel h2 {
   margin: 0;
-  font-size: 17px;
+  font-size: 13px;
   font-weight: 700;
+  color: var(--muted);
 }
 .results {
   flex: 1 1 auto;
   min-width: 0;
+  padding: 22px 24px 28px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 16px;
 }
 @media (max-width: 1100px) {
   .panel {
     flex-basis: 320px;
   }
-  .layout {
-    gap: 16px;
-    padding: 16px;
+  .results {
+    padding: 18px 16px 24px;
   }
 }
 
@@ -969,7 +991,8 @@ a {
 }
 .info-btn .tip {
   position: absolute;
-  z-index: 5;
+  /* 위에 붙은 머리(z-index 20)보다 위에 그려 머리 바로 아래 ⓘ의 설명이 가리지 않게 */
+  z-index: 30;
   bottom: 30px;
   left: 50%;
   transform: translateX(-50%);

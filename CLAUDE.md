@@ -14,7 +14,7 @@ PC 웹 브라우저만 대상으로 하고, 지금은 v1(F-01~F-10)을 만든다
 | 단계와 완료 기준 | [docs/5_개발계획.md](docs/5_개발계획.md) |
 | 일하는 순서 | [docs/7_개발워크플로우.md](docs/7_개발워크플로우.md) |
 | 코드 규칙 | [docs/8_코드컨벤션.md](docs/8_코드컨벤션.md) |
-| 화면 시안 | https://claude.ai/artifact/Nvxz1FH9bYPKwinAibsZmr (Artifact 도구 `read`로 연다. "v1" 페이지가 기준) |
+| 화면 시안 | 겉모습(색·글꼴·틀·부품 모양): https://claude.ai/artifact/Ro5VPSsc1bAFiXgU8A4drM 의 "B" 보드. 기능·문구·항목: https://claude.ai/artifact/Nvxz1FH9bYPKwinAibsZmr 의 "v1"·"v2" 페이지 (둘 다 Artifact 도구 `read`로 연다. 결정 d46) |
 | 개발 현황판 | https://claude.ai/artifact/4qzSDxqhz7o8zoeF2CvucF (기록 방법은 `.claude/skills/dev-board/SKILL.md`) |
 | 결정 보드 | https://claude.ai/artifact/JaxQyqXbXZLdmN4houmWh5 (Claude가 혼자 정한 것과 사용자가 할 일. 사용자 답은 `data/dev/answers`) |
 

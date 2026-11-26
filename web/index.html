@@ -8,11 +8,12 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
       rel="stylesheet"
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&display=swap"
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400&family=Noto+Sans+KR:wght@400;500;600;700&display=swap"
     />
     <link rel="stylesheet" href="style.css" />
     <script>
-      // 다크 모드를 그리기 전에 정해 깜빡임을 막는다 (저장한 값 → 운영체제 설정)
+      // 테마를 그리기 전에 정해 깜빡임을 막는다. 저장한 값이 "light"일 때만 라이트이고,
+      // 그 밖(저장 없음·읽기 실패)은 다크다. 운영체제 설정은 따르지 않는다 (결정 d47)
       (() => {
         let saved = null;
         try {
@@ -20,8 +21,7 @@
         } catch {
           saved = null;
         }
-        const dark = saved ? saved === "dark" : matchMedia("(prefers-color-scheme: dark)").matches;
-        document.documentElement.classList.toggle("dark", dark);
+        document.documentElement.classList.toggle("dark", saved !== "light");
       })();
     </script>
     <!-- Chart.js 4.5.1 (버전 고정 + SRI). async라 늦거나 막혀도 화면은 먼저 뜨고, 그래프 자리에만 안내가 나온다 -->
@@ -41,11 +41,11 @@
     <header class="topbar">
       <div class="topbar-in">
         <div class="brand">
-          <svg width="32" height="32" viewBox="0 0 36 36" aria-hidden="true">
-            <rect width="36" height="36" rx="10" class="brand-bg"></rect>
+          <svg width="30" height="30" viewBox="0 0 30 30" aria-hidden="true">
+            <rect width="30" height="30" rx="7" class="brand-bg"></rect>
             <path
-              d="M9 25V21M15 25V17M21 25V14M27 25V10"
-              stroke-width="3"
+              d="M8 21v-3M12.5 21v-6M17 21v-9M21.5 21v-12"
+              stroke-width="2.6"
               stroke-linecap="round"
               class="brand-fg"
             ></path>
@@ -56,7 +56,7 @@
           ><span class="dot" aria-hidden="true"></span
           ><span id="data-status-text">Yahoo Finance</span></span
         >
-        <button type="button" class="icon-btn" id="theme-toggle" aria-label="다크 모드로 바꾸기">
+        <button type="button" class="icon-btn" id="theme-toggle" aria-label="라이트 모드로 바꾸기">
           <svg
             class="when-light"
             width="20"
