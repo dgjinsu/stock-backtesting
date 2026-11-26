@@ -38,6 +38,7 @@ import {
   signedMoney,
 } from "./format.js";
 import { highlights, summaryParts } from "./insights.js";
+import { isSearchShortcut, shortcutAria, shortcutLabel } from "./keys.js";
 import {
   SORT_HINT,
   afterTax,
@@ -56,6 +57,9 @@ import {
 const DEFAULT_SYMBOLS = ["QQQ", "QLD"];
 
 const $ = (id) => document.getElementById(id);
+
+/** 맥이면 검색 단축키가 ⌘K, 아니면 Ctrl+K다 (결정 d52 ②). userAgentData는 크로미움의 보안 문맥에만 있다. */
+const MAC = /^mac/i.test(navigator.userAgentData?.platform || navigator.platform || "");
 
 const state = {
   symbols: [], // { code, name, slot }
@@ -416,6 +420,46 @@ function wireSearch() {
     search.blurTimer = setTimeout(closeList, 150);
   });
   input.addEventListener("focus", () => clearTimeout(search.blurTimer));
+}
+
+/**
+ * 검색칸과 그 아래 목록 자리(최대 높이)가 조건 패널 안에 보이게 패널만 스크롤한다.
+ * 패널은 스크롤 영역이라 목록이 패널 바닥을 넘으면 잘린다. 창은 스크롤하지 않는다.
+ * 목록의 top·max-height는 CSS에서 읽는다 (값을 여기 다시 적지 않는다).
+ */
+function revealSearch() {
+  const panel = $("panel");
+  const box = panel.getBoundingClientRect();
+  const top = $("sym-search").closest(".search").getBoundingClientRect().top;
+  const list = getComputedStyle($("sym-results"));
+  const listBottom = top + parseFloat(list.top) + parseFloat(list.maxHeight);
+  if (top < box.top) {
+    panel.scrollTop -= box.top - top; // 칸이 패널 위로 숨어 있으면 되올린다
+  } else if (listBottom > box.bottom) {
+    // 넘친 만큼 내리되, 칸 위끝이 패널 위로 올라가지는 않게 한다
+    panel.scrollTop += Math.min(listBottom - box.bottom, top - box.top);
+  }
+}
+
+/**
+ * 어디서나 Ctrl+K(맥 ⌘K)로 종목 검색칸에 간다 (F-01, 결정 d49). 브라우저 주소창 검색을 막는다.
+ * 패널이 접혀 있으면 먼저 편다. 이미 검색칸에 있으면 글·커서·목록을 그대로 둔다.
+ */
+function onSearchShortcut(event) {
+  if (!isSearchShortcut(event, MAC)) return;
+  event.preventDefault();
+  expandPanel();
+  const input = $("sym-search");
+  if (document.activeElement === input) return;
+  input.focus({ preventScroll: true }); // 목록 자리까지 보이게 아래에서 직접 스크롤한다
+  revealSearch();
+}
+
+function wireShortcut() {
+  $("sym-kbd").textContent = shortcutLabel(MAC);
+  $("sym-search").setAttribute("aria-keyshortcuts", shortcutAria(MAC));
+  // capture로 단다. 다른 처리기가 전파를 막아도 단축키가 살아 있다
+  document.addEventListener("keydown", onSearchShortcut, true);
 }
 
 // ---------- 계산하기 ----------
@@ -1221,6 +1265,16 @@ function layoutPanel() {
   if (collapsed && focusInPanel) $("cond-toggle").focus(); // 줄을 먼저 보이게 한 뒤에 옮긴다
 }
 
+/**
+ * 접혀 있으면 "조건 펼치기"를 누른 것처럼 편다 (Ctrl+K). 탭과 주소는 그대로다.
+ * 버튼의 click()은 토글이라 이미 펼쳐져 있으면 접히므로 쓰지 않는다.
+ */
+function expandPanel() {
+  if (!$("panel").hidden) return;
+  resultView.expanded = true;
+  layoutPanel();
+}
+
 /** 접힌 줄의 종목과 조건 한 줄. 폼이 아니라 보이는 결과를 계산한 조건(params)으로 만든다. */
 function renderCondBar(data) {
   $("cond-syms").replaceChildren(
@@ -1375,6 +1429,7 @@ function init() {
   if (fromUrl.codes.length && fromUrl.tab) resultView.tab = fromUrl.tab;
   wireForm();
   wireSearch();
+  wireShortcut();
   wireCondBar();
   wireTheme();
   changed();
