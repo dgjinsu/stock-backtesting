@@ -501,3 +501,35 @@ test("sparkline: area 바닥은 height다. 기본 48, 카드 그래프 높이 54
   assertAreaUnder(sparkline(values), 48);
   assertAreaUnder(sparkline(values, { height: 54 }), 54);
 });
+
+// ---------- 작은 그래프의 세로 범위 지정 (F-14 낙폭 그래프, #60) ----------
+
+test("sparkline: domain을 주면 그 범위로 y를 잡는다 (위 끝은 pad, 아래 끝은 height − pad)", () => {
+  // [−100, 0]: y = 1 + (0 − v) / 100 × 20. −50은 값 범위로는 맨 아래지만 domain에서는 가운데
+  const domain = [-100, 0];
+  assert.equal(sparkline([0, -50], { ...BOX, domain }).path, "M0 1L40 11");
+  const line = sparkline([0, -50, -100], { ...BOX, domain });
+  assert.equal(line.path, "M0 1L20 11L40 21");
+  assert.equal(line.zeroY, 1);
+});
+
+test("sparkline: domain은 값 범위와 상관없이 쓴다 (값이 범위의 일부만 차지해도)", () => {
+  // 값만 보면 [−20, 0]이라 −20이 맨 아래(21)지만, domain [−100, 0]에서는 위쪽 5에 놓인다
+  const line = sparkline([-10, -20], { ...BOX, domain: [-100, 0] });
+  assert.equal(line.path, "M0 3L40 5");
+  assert.equal(line.zeroY, 1);
+  assert.equal(line.area, "M0 22L0 3L40 5L40 22Z");
+});
+
+test("sparkline: 여러 선에 같은 domain을 주면 같은 값은 같은 y (공통 축)", () => {
+  const box = { width: 30, height: 300, pad: 0, domain: [-50, 0] };
+  const a = sparkline([0, -10, -50, -25], box);
+  const b = sparkline([null, -10, -24.9, -25], box);
+  assert.equal(a.path, "M0 0L10 60L20 300L30 150");
+  assert.equal(b.path, "M10 60L20 149.4L30 150");
+});
+
+test("sparkline: domain null은 주지 않은 것과 같다 (카드 그래프)", () => {
+  const values = [null, 0, 10, -5];
+  assert.deepEqual(sparkline(values, { ...BOX, domain: null }), sparkline(values, BOX));
+});

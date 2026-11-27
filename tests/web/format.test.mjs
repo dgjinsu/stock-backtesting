@@ -386,3 +386,31 @@ for (const { id, cond } of PREVIEW_EMPTY) {
     assert.equal(amountPreview(cond), "");
   });
 }
+
+// ---------- 짧은 날짜 (F-14 분석 탭 표, #60) ----------
+
+// shortDate·shortMonth는 #60에서 format.js 끝에 더한다. 위 import 목록에 이름으로 넣으면 함수가
+// 생기기 전에는 모듈을 잇지 못해 이 파일의 시험이 모두 멈추므로, 모듈 전체를 받아 꺼낸다.
+// 바뀌는 자리를 파일 끝에 모아 #59와 겹치지 않게 한다 (설계 메모).
+import * as formatModule from "../../web/format.js";
+
+const { shortDate, shortMonth } = formatModule;
+
+const SHORT_DATES = [
+  { id: "최저 수익률 날 (시안 QQQ)", iso: "2022-12-28", date: "22-12-28", month: "22-12" },
+  {
+    id: "가장 길게 원금 아래 칸의 달 (이슈 #60 예)",
+    iso: "2022-09-19",
+    date: "22-09-19",
+    month: "22-09",
+  },
+  { id: "최대 낙폭 날 (QLD)", iso: "2026-11-20", date: "26-11-20", month: "26-11" },
+  { id: "2000년대 첫해도 두 자리", iso: "2005-01-03", date: "05-01-03", month: "05-01" },
+];
+
+for (const { id, iso, date, month } of SHORT_DATES) {
+  test(`shortDate·shortMonth: ${id} ${iso} → ${date}, ${month}`, () => {
+    assert.equal(shortDate(iso), date);
+    assert.equal(shortMonth(iso), month);
+  });
+}
