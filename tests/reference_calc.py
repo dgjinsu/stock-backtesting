@@ -102,17 +102,31 @@ def xirr(flows):
 
 
 # ---------- 시뮬레이션 ----------
-def simulate(asset, fx, start, end, freq, anchor, amount, fractional=True, fee=0.0):
-    """종목 하나에 매번 amount(투자 통화)씩. fx=None 이면 종목 통화 = 투자 통화."""
+def value_fx(fx, day, invested, dollar_cost, include_fx=True):
+    """평가에 쓰는 환율. 3절: day 당일 또는 그 이전 마지막 환율, 같은 통화면 1.
+
+    환율 변동을 빼면(include_fx=False) 그 대신 day까지의 평균 매수 환율 = 투자금 ÷ 달러 원가 (9-9절).
+    """
+    if not fx:
+        return 1.0
+    return asof(fx, day) if include_fx else invested / dollar_cost
+
+
+def simulate(asset, fx, start, end, freq, anchor, amount, fractional=True, fee=0.0, include_fx=True):
+    """종목 하나에 매번 amount(투자 통화)씩. fx=None 이면 종목 통화 = 투자 통화.
+
+    include_fx=False면 평가 환율 자리에 평균 매수 환율(투자금 ÷ 달러 원가)을 쓴다 (9-9절).
+    """
     buys = buy_days(asset["dates"], start, end, freq, anchor)
     if not buys:
         raise ValueError("기간 안에 매수일이 없다")
-    shares = cash = cost_asset = cost_inv = invested = 0.0
+    shares = cash = cost_asset = cost_inv = invested = dollar_cost = 0.0
     flows = []
     for d in buys:
         p = asof(asset, d)
         r = asof(fx, d) if fx else 1.0
         invested += amount
+        dollar_cost += amount / r  # 9-4 달러 원가: 넣은 돈을 매수일 환율로 바꾼 금액
         flows.append((d, -amount))
         net = amount * (1 - fee) / r  # 수수료를 뺀 뒤 종목 통화 금액
         if fractional:
@@ -127,7 +141,7 @@ def simulate(asset, fx, start, end, freq, anchor, amount, fractional=True, fee=0
             cost_asset += q * p / (1 - fee)
             cost_inv += q * p / (1 - fee) * r
     pe = asof(asset, end)
-    re_ = asof(fx, end) if fx else 1.0
+    re_ = value_fx(fx, end, invested, dollar_cost, include_fx)
     value = (shares * pe + cash) * re_
     flows.append((end, value))
     return {
@@ -195,13 +209,14 @@ def plan_buys(asset, fx, ref, buys, amount, rule, ma_days=200):
     return plan, days
 
 
-def hold(asset, fx, plan, end):
+def hold(asset, fx, plan, end, include_fx=True):
     """plan대로 샀을 때 첫 매수일부터 end까지 거래일마다 (날짜, 평가금, 투자금)과 끝의 수량·현금·원가.
 
-    마지막 거래일은 평가 환율(end 기준)로 다시 평가한다 (5절 끝).
+    마지막 거래일은 평가 환율(end 기준)로 다시 평가한다 (5절 끝). include_fx=False면 거래일마다 그날까지의
+    평균 매수 환율로 평가한다 (9-9절). 끝의 fx는 평가에 쓴 환율이다.
     """
     by_day = {d: (put, spend) for d, put, spend in plan}
-    shares = cash = cost = invested = 0.0
+    shares = cash = cost = invested = dollar_cost = 0.0
     rows = []
     for d, p in zip(asset["dates"], asset["close"]):
         if d < plan[0][0] or d > end:
@@ -210,23 +225,25 @@ def hold(asset, fx, plan, end):
         if d in by_day:
             put, spend = by_day[d]
             invested += put
+            dollar_cost += put / r
             shares += spend / p
             cash += put / r - spend
             cost += spend
-        rows.append([d, (shares * p + cash) * r, invested])
-    value = (shares * asof(asset, end) + cash) * (asof(fx, end) if fx else 1.0)
+        rows.append([d, (shares * p + cash) * value_fx(fx, d, invested, dollar_cost, include_fx), invested])
+    re_ = value_fx(fx, end, invested, dollar_cost, include_fx)
+    value = (shares * asof(asset, end) + cash) * re_
     rows[-1][1] = value  # 마지막 거래일의 종가 그대로, 환율만 평가 환율
-    return rows, {"shares": shares, "cash": cash, "cost": cost, "value": value}
+    return rows, {"shares": shares, "cash": cash, "cost": cost, "value": value, "fx": re_}
 
 
-def strategy(asset, fx, ref, start, end, anchor, amount, rule, ma_days=200):
-    """9-6절 같은 예산 전략 하나의 결과."""
+def strategy(asset, fx, ref, start, end, anchor, amount, rule, ma_days=200, include_fx=True):
+    """9-6절 같은 예산 전략 하나의 결과. include_fx=False면 9-9절 평가."""
     buys = buy_days(asset["dates"], start, end, "monthly", anchor)
     plan, days = plan_buys(asset, fx, ref, buys, amount, rule, ma_days)
-    rows, end_state = hold(asset, fx, plan, end)
+    rows, end_state = hold(asset, fx, plan, end, include_fx)
     flows = [(d, -put) for d, put, _ in plan] + [(end, end_state["value"])]
     invested = amount * len(buys)
-    re_ = asof(fx, end) if fx else 1.0
+    re_ = end_state["fx"]  # 남은 현금도 평가금과 같은 환율로
     return {
         "value": round(end_state["value"], 0),
         "return_pct": round((end_state["value"] / invested - 1) * 100, 2),
@@ -243,14 +260,15 @@ def underwater(value, invested):
     return value < invested * (1 - 1e-12)
 
 
-def v2_metrics(asset, fx, start, end, anchor, amount, tax_fx=1.0):
+def v2_metrics(asset, fx, start, end, anchor, amount, tax_fx=1.0, include_fx=True):
     """9-1 ~ 9-5절. 기본 적립(소수점 매수, 수수료 0).
 
     tax_fx는 투자 통화 1단위의 원화 값 (원화 투자면 1, 달러 투자면 끝날짜의 원/달러 환율, 9-5절).
+    include_fx=False면 9-9절: 평균 매수 환율로 평가하고, 월별은 월말 종가만으로, 환율 효과는 0이다.
     """
     buys = buy_days(asset["dates"], start, end, "monthly", anchor)
     plan, _ = plan_buys(asset, fx, None, buys, amount, "none")
-    rows, end_state = hold(asset, fx, plan, end)
+    rows, end_state = hold(asset, fx, plan, end, include_fx)
     # 9-1 흔들림
     peak, mdd = 0.0, (0.0, None)
     for d, v, _ in rows:
@@ -279,7 +297,7 @@ def v2_metrics(asset, fx, start, end, anchor, amount, tax_fx=1.0):
     month_end = {}
     for d, c in zip(asset["dates"], asset["close"]):
         if d <= end:
-            month_end[(d.year, d.month)] = c * (asof(fx, d) if fx else 1.0)
+            month_end[(d.year, d.month)] = c * (asof(fx, d) if fx and include_fx else 1.0)
     first = (buys[0].year, buys[0].month)
     cut = min(end, asset["dates"][-1])
     ended = (cut.year, cut.month)  # cut이 말일이 아니면 그 달은 아직 안 끝났다
@@ -291,10 +309,13 @@ def v2_metrics(asset, fx, start, end, anchor, amount, tax_fx=1.0):
     best, worst = max(monthly, key=lambda m: m[1]), min(monthly, key=lambda m: m[1])
     # 9-4 수익 분해, 9-5 양도세
     invested = amount * len(buys)
-    re_ = asof(fx, end) if fx else 1.0
+    re_ = end_state["fx"]  # 평가 환율 (9-9절이면 평균 매수 환율)
     pe = asof(asset, end)
     cost, shares = end_state["cost"], end_state["shares"]
     profit = end_state["value"] - invested
+    # 9-4: 환율 변동을 빼면 손익이 모두 주가 효과다 (9-9절)
+    price_effect = (shares * pe - cost) * re_ if include_fx else profit
+    fx_effect = cost * re_ - invested if include_fx else 0.0
     # 9-5: 손익을 원화로 바꿔 계산하고 투자 통화로 되돌린다. 한국 종목은 0
     tax = max(0.0, profit * tax_fx - 2_500_000) * 0.22 / tax_fx if asset["currency"] != "KRW" else 0.0
     return {
@@ -312,8 +333,8 @@ def v2_metrics(asset, fx, start, end, anchor, amount, tax_fx=1.0):
             "worst": {"month": worst[0], "return_pct": round(worst[1] * 100, 2)},
         },
         "profit": round(profit, 0),
-        "price_effect": round((shares * pe - cost) * re_, 0),
-        "fx_effect": round(cost * re_ - invested, 0),
+        "price_effect": round(price_effect, 0),
+        "fx_effect": round(fx_effect, 0),
         "avg_buy_fx": round(invested / cost, 2),
         "tax": round(tax, 0),
         "profit_after_tax": round(profit - tax, 0),
@@ -341,21 +362,22 @@ def rule_bought(asset, fx, ref, start, end, anchor, amount, rule):
             **bought_below(asset, plan, asof(asset, end), avg)}
 
 
-def buy_rows(asset, fx, start, end, anchor, amount, picks):
+def buy_rows(asset, fx, start, end, anchor, amount, picks, include_fx=True):
     """9-1 매수 내역의 두 열: 기본 적립(수수료 0, 소수점 매수) picks번째 회차(0부터)의 날짜별 값.
 
     그날 수익률 = 그 매수일의 수익률 추이 값 (5절). 이 회차 지금 = 평가 가격 × 평가 환율 ÷ (매수 가격 × 매수 환율) − 1
-    (수수료 0이라 (1 − f)는 1). 결정 d59.
+    (수수료 0이라 (1 − f)는 1). 결정 d59. include_fx=False면 이 회차의 평가 환율은 그 회차의 매수 환율이다 (9-9절).
     """
     buys = buy_days(asset["dates"], start, end, "monthly", anchor)
     plan, _ = plan_buys(asset, fx, None, buys, amount, "none")
-    rows, _ = hold(asset, fx, plan, end)
+    rows, _ = hold(asset, fx, plan, end, include_fx)
     daily = {d: value / invested - 1 for d, value, invested in rows}
-    now = asof(asset, end) * (asof(fx, end) if fx else 1.0)
     out = {}
     for k in picks:
         d = buys[k]
-        paid = asof(asset, d) * (asof(fx, d) if fx else 1.0)
+        r = asof(fx, d) if fx else 1.0
+        now = asof(asset, end) * ((asof(fx, end) if fx else 1.0) if include_fx else r)
+        paid = asof(asset, d) * r
         out[d.isoformat()] = {"return_pct": round(daily[d] * 100, 2),
                               "lot_return_pct": round((now / paid - 1) * 100, 2)}
     return out
@@ -393,6 +415,31 @@ def v2_case(start, end):
         "buy_rows": buy_rows(qld, fx, start, end, 1, amount, (0, 13, 59)),
         "rule_bought": {rule: rule_bought(qld, fx, qqq, start, end, 1, amount, rule)
                         for rule in ("ma_dip", "ma_hot", "switch")},
+        # F-24 (9-9절): 같은 조건을 환율 변동을 빼고 계산한 값
+        "fx_off": fx_off(qld, qqq, fx, start, end, amount),
+    }
+
+
+def fx_off(qld, qqq, fx, start, end, amount):
+    """9-9절 환율 변동 제외: 9-8 조건(QLD, 매월 1일 200만원, 원화)을 평균 매수 환율로 평가한 값.
+
+    metrics·strategies·buy_rows·start_sweep은 9-8과 같은 키이고, integer는 같은 조건의 정수 주만 사례다
+    (남은 현금도 평균 매수 환율로 평가한다).
+    """
+    last = end.year * 12 + end.month - 1 - 6
+    starts = {}
+    for index in range(start.year * 12 + start.month - 1, last + 1):
+        first = dt.date(index // 12, index % 12 + 1, 1)
+        if first >= start:
+            starts[f"{first:%Y-%m}"] = simulate(qld, fx, first, end, "monthly", 1, amount,
+                                                include_fx=False)["return_pct"]
+    return {
+        "metrics": v2_metrics(qld, fx, start, end, 1, amount, include_fx=False),
+        "strategies": {rule: strategy(qld, fx, qqq, start, end, 1, amount, rule, include_fx=False)
+                       for rule in ("none", "ma_dip", "ma_hot", "switch", "lump_sum")},
+        "buy_rows": buy_rows(qld, fx, start, end, 1, amount, (0, 13, 59), include_fx=False),
+        "start_sweep": starts,
+        "integer": simulate(qld, fx, start, end, "monthly", 1, amount, fractional=False, include_fx=False),
     }
 
 

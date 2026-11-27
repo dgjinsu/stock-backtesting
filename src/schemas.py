@@ -31,6 +31,7 @@ FIELD_MESSAGES = {
     "tax": "양도세 어림 여부는 true 또는 false입니다",
     "rule": "매수 규칙은 none, ma_dip, ma_hot, switch 중 하나입니다",
     "include_daily": "날마다 평가금 포함 여부는 true 또는 false입니다",
+    "include_fx": "환율 변동 포함 여부는 true 또는 false입니다",
 }
 
 
@@ -63,6 +64,8 @@ class Conditions(BaseModel):
     currency: Literal["KRW", "USD"]
     fractional: bool = True
     fee_pct: float = 0.0  # %
+    # 환율 변동 포함 (F-24). false면 통화가 다른 종목을 평균 매수 환율로 평가한다 (계산 규칙 9-9, 결정 d74)
+    include_fx: bool = True
 
     @field_validator("amount")
     @classmethod
@@ -155,6 +158,7 @@ class SummaryOut(BaseModel):
     avg_cost_invest: float | None
     eval_date: date
     eval_price: float
+    # 평가에 쓴 환율. include_fx false면 평균 매수 환율이라 avg_buy_fx와 같다 (결정 d74)
     eval_fx: float
     value: float
     profit: float
@@ -171,7 +175,7 @@ class SummaryOut(BaseModel):
     longest_underwater: UnderwaterOut | None
     last_underwater: date | None
     price_effect: float
-    fx_effect: float  # 통화가 같으면 0
+    fx_effect: float  # 통화가 같거나 include_fx false면 0
     avg_buy_fx: float | None  # 통화가 같으면 null
     tax: float | None  # 요청의 tax가 꺼져 있으면 null. 한국 종목은 0
     profit_after_tax: float | None  # 요청의 tax가 꺼져 있으면 null
@@ -186,14 +190,16 @@ class AnalysisOut(BaseModel):
     """v2 분석 (계산 규칙 9-1·9-2·9-3). 매수 가격 목록은 같은 응답의 buys[].price다."""
 
     years: dict[str, YearOut]  # "YYYY" 오름차순
-    months: dict[str, float]  # "YYYY-MM" 오름차순 → 월 수익률(%)
+    # "YYYY-MM" 오름차순 → 월 수익률(%). include_fx false면 월말 종가만으로 잰 종목 통화 수익률 (결정 d73)
+    months: dict[str, float]
     buys_below_eval_price: int
     buys_below_avg_cost: int
 
 
 class BuyOut(BaseModel):
     """매수 1회. return_pct는 그날 수익률(그 매수일의 수익률 추이 값), lot_return_pct는 이 회차 지금(그날 산
-    몫만 끝날짜에 팔았을 때의 투자 통화 수익률)이고 qty가 0이면 null이다 (계산 규칙 9-1, 결정 d59). 둘 다 %."""
+    몫만 끝날짜에 팔았을 때의 투자 통화 수익률)이고 qty가 0이면 null이다 (계산 규칙 9-1, 결정 d59). 둘 다 %.
+    include_fx false면 lot_return_pct는 그 회차의 매수 환율로 평가한 종목 통화 수익률이다 (9-9, 결정 d72)."""
 
     date: date
     price: float

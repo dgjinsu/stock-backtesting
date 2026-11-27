@@ -151,6 +151,7 @@ def _to_params(request: Conditions, today: date) -> engine.Params:
         currency=request.currency,
         fractional=request.fractional,
         fee=request.fee_pct / 100,
+        include_fx=request.include_fx,
     )
 
 
