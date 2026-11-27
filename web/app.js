@@ -21,6 +21,7 @@ import {
   todayKst,
   validate as validateCond,
 } from "./conditions.js";
+import { analysisPanel } from "./analysis.js";
 import { restCount, sparkline } from "./chartdata.js";
 import { buysSection, chartSection, clearCharts, csvButton } from "./charts.js";
 import { h, icon, keepFocus, svgEl, swatch } from "./dom.js";
@@ -1104,7 +1105,7 @@ function renderResult(data) {
       compareTable(data),
       chartSection(data, slotOf),
     ),
-    tabPanel("analysis", comingSoon("analysis")),
+    tabPanel("analysis", ...analysisPanel(data, slotOf)),
     tabPanel("strategy", comingSoon("strategy")),
     tabPanel("buys", buysSection(data, slotOf)),
     notice(data),
@@ -1156,10 +1157,8 @@ function insightsSection(data) {
 
 const TAB_LABELS = { summary: "요약", analysis: "분석", strategy: "전략 비교", buys: "매수 내역" };
 
-/** 아직 만들지 않은 탭의 안내 (결정 d41). 분석은 F-14, 전략 비교는 F-15에서 채운다. */
+/** 아직 만들지 않은 탭의 안내 (결정 d41). 전략 비교는 F-15에서 채운다. */
 const COMING = {
-  analysis:
-    "분석 탭에는 얼마나 흔들렸나, 연도별 결과, 달마다 수익률, 수익의 출처, 매수 가격 분포가 들어갑니다.",
   strategy: "전략 비교 탭에서는 같은 돈을 넣되 사는 규칙만 다른 전략 5가지를 나란히 비교합니다.",
 };
 
