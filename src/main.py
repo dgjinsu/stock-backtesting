@@ -36,6 +36,7 @@ from src.schemas import (
     ChartOut,
     ChartSeriesOut,
     Conditions,
+    DailyOut,
     DrawdownOut,
     Extreme,
     FieldError,
@@ -292,6 +293,7 @@ def _result_out(
     switch_ref: SwitchRefOut | None,
     *,
     tax: bool,
+    include_daily: bool,
 ) -> ResultOut:
     invest, asset = params.currency, history.currency
     return ResultOut(
@@ -316,9 +318,22 @@ def _result_out(
                 avg_cost_asset=_maybe(b.avg_cost_asset, 4),
                 avg_cost_invest=_maybe_money(b.avg_cost_invest, invest),
                 invested=_money(b.invested, invest),
+                return_pct=round(b.return_pct, 2),
+                lot_return_pct=_maybe(b.lot_return_pct, 2),
             )
             for b in sim.buys
         ],
+        daily=_daily_out(sim.daily, invest) if include_daily else None,
+    )
+
+
+def _daily_out(rows: Sequence[engine.DailyRow], invest: str) -> DailyOut:
+    """줄이지 않은 날마다 평가를 그래프와 같은 자리수로 반올림한다 (결정 d60, 계산 규칙 5절 끝)."""
+    return DailyOut(
+        dates=[row.date for row in rows],
+        value=[_money(row.value, invest) for row in rows],
+        invested=[_money(row.invested, invest) for row in rows],
+        return_pct=[round(row.return_pct, 2) for row in rows],
     )
 
 
@@ -525,7 +540,16 @@ async def run_backtest(market: Market, request: BacktestRequest, today: date) ->
             else _switch_ref_out(request.switch_ref, asset, ref, ref_stale, end=params.end)
         )
         results.append(
-            _result_out(history, sim, analysis, params, stale_sources, switch_ref, tax=request.tax)
+            _result_out(
+                history,
+                sim,
+                analysis,
+                params,
+                stale_sources,
+                switch_ref,
+                tax=request.tax,
+                include_daily=request.include_daily,
+            )
         )
 
     return BacktestResponse(
