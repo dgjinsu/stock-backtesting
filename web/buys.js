@@ -168,11 +168,9 @@ function summaryList(result, params) {
         h("dt", { text: cell.label }),
         h(
           "dd",
-          { class: "mono" },
+          { class: "mono", title: cell.title },
           cell.text,
-          cell.sub === null
-            ? null
-            : [" ", h("span", { class: "bt-sub", title: cell.title, text: cell.sub })],
+          cell.sub === null ? null : [" ", h("span", { class: "bt-sub", text: cell.sub })],
           cell.title ? h("span", { class: "sr", text: ` (${cell.title})` }) : null,
         ),
       ),
@@ -197,6 +195,7 @@ export function buysSection(data, slotOf) {
   const seg = h("div", { class: "bt-seg" });
   const year = h("select", { id: "buys-year", class: "field" });
   const cheap = h("input", { type: "checkbox", id: "buys-cheap" });
+  const lockNote = h("span", { class: "hint", text: "(지금 평단가가 없어 고를 수 없습니다)" });
   const status = h("p", { id: "buys-status", class: "bt-status", "aria-live": "polite" });
   const top = h("div", { class: "bt-top" });
   const rests = h("p", { class: "hint bt-rest" });
@@ -223,6 +222,7 @@ export function buysSection(data, slotOf) {
 
   const renderSymbol = () => {
     const result = resultOf();
+    seg.hidden = data.results.length <= 1; // 종목이 하나면 빈 자리도 flex 틈을 만들어 숨긴다
     seg.replaceChildren(
       ...(data.results.length > 1
         ? [
@@ -247,7 +247,7 @@ export function buysSection(data, slotOf) {
     );
     const locked = cheapLocked(result);
     cheap.disabled = locked;
-    cheap.title = locked ? "지금 평단가가 없어 고를 수 없습니다" : "";
+    lockNote.hidden = !locked; // disabled 체크는 Tab이 가지 않아 잠근 이유를 글로 보인다
     top.replaceChildren(summaryList(result, data.params));
     const note = restNote(data.params, result.buys); // "쉼: … · 60회 중 15회" (#41)
     rests.textContent = note ?? "";
@@ -271,12 +271,7 @@ export function buysSection(data, slotOf) {
     h(
       "div",
       { class: "bt-head" },
-      h(
-        "div",
-        {},
-        h("h3", { id: "buys-h", text: "매수 내역" }),
-        h("p", { class: "bt-intro", text: BUYS_INTRO }),
-      ),
+      h("div", {}, h("h3", { text: "매수 내역" }), h("p", { class: "bt-intro", text: BUYS_INTRO })),
       csvButton(data, "CSV 내려받기"),
     ),
     h(
@@ -284,7 +279,7 @@ export function buysSection(data, slotOf) {
       { class: "bt-pick" },
       seg,
       h("label", { class: "bt-year", for: "buys-year" }, "연도", year),
-      h("label", { class: "bt-check", for: "buys-cheap" }, cheap, CHEAP_LABEL),
+      h("label", { class: "bt-check", for: "buys-cheap" }, cheap, CHEAP_LABEL, lockNote),
       status,
     ),
     top,

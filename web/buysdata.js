@@ -4,7 +4,7 @@
 
 import { boughtFractional, isRest, restCount, splitsOf } from "./chartdata.js";
 import { fx, investLabel, money, pct, price, qty } from "./format.js";
-import { avgInvestNote } from "./results.js";
+import { NO_WHOLE_SHARE_REASON, avgInvestNote } from "./results.js";
 
 /** 한 쪽에 보이는 회차 수 (F-16). */
 export const PAGE_ROWS = 15;
@@ -119,7 +119,8 @@ export function pageItems(page, pages) {
  * 위 요약 칸 (F-16). 종목 전체 기준이고 연도·체크 거르기를 따르지 않는다. params는 API 응답의 params.
  * 돌려주는 값: [{ key, label, text, sub, title }]. sub는 작은 글씨, title은 툴팁(없으면 null).
  * - 매수: 쉰 회차가 있으면 "매수일 60회 · 산 날 45회"
- * - 평단가: 종목 통화, 작은 글씨로 투자 통화 평단가. 매수 규칙이라 없으면 "—"와 이유 (결정 d39)
+ * - 평단가: 종목 통화, 작은 글씨로 투자 통화 평단가. 매수 규칙이라 없으면 "—"와 이유 (결정 d39),
+ *   기본 규칙 정수 주만에 한 주도 못 사 평단가가 없으면 카드 ⓘ와 같은 이유 (결정 d52 ⑥)
  * - 평균 매수 환율: 종목 통화가 투자 통화와 같으면 칸이 없다
  * - 가장 싸게 / 비싸게: 산 회차만 본다
  */
@@ -147,7 +148,11 @@ export function buysSummary(result, params) {
       label: "평단가",
       text: price(s.avg_cost_asset, cur),
       sub: cur === invest ? null : avgInvest,
-      title: cur === invest ? null : avgInvestNote(params, s.avg_cost_invest),
+      title: cheapLocked(result)
+        ? NO_WHOLE_SHARE_REASON
+        : cur === invest
+          ? null
+          : avgInvestNote(params, s.avg_cost_invest),
     },
   ];
   if (cur !== invest && s.avg_buy_fx !== null && s.avg_buy_fx !== undefined) {

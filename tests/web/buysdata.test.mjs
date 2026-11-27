@@ -23,7 +23,7 @@ import {
   pageItems,
   returnCell,
 } from "../../web/buysdata.js";
-import { avgInvestReason } from "../../web/results.js";
+import { NO_WHOLE_SHARE_REASON, avgInvestReason } from "../../web/results.js";
 
 const MINUS = "−"; // U+2212 (format.js MINUS)
 const DASH = "–"; // U+2013, "60회 중 1–15회 표시"의 사이 표시
@@ -582,6 +582,18 @@ test("buysSummary: 레버리지 전환은 '매수일 60회 · 산 날 45회', �
 
 test("buysSummary: 가장 싸게 / 비싸게는 산 줄만 본다 (14회 $17.28은 쉼이라 $20.53)", () => {
   assert.equal(itemOf(buysSummary(QLD_SWITCH, SWITCH_PARAMS), "range").text, "$20.53 / $99.63");
+});
+
+test("buysSummary: 기본 규칙 정수 주만에 한 주도 못 사 평단가가 없으면 '—'와 그 이유 (결정 d52 ⑥)", () => {
+  // 카드 ⓘ(avgInvestTip)와 같은 이유를 요약 평단가 칸에 단다 (PR #79 Actions 리뷰 참고 1)
+  const none = result({
+    summary: { ...QLD_SUMMARY, avg_cost_asset: null, avg_cost_invest: null, shares: 0 },
+    buys: NONE_ROWS.map((row) => ({ ...row, lot_return_pct: null })),
+  });
+  const avg = itemOf(buysSummary(none, { ...PARAMS, fractional: false }), "avg");
+  assert.equal(avg.text, "—");
+  assert.equal(avg.sub, "—");
+  assert.equal(avg.title, NO_WHOLE_SHARE_REASON);
 });
 
 test("buysSummary: 통화가 같으면 평균 매수 환율 칸이 없고 평단가 작은 글씨도 없다", () => {
