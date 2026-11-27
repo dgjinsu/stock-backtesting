@@ -22,7 +22,7 @@ import {
   sampledNote,
   splitMarks,
 } from "./chartdata.js";
-import { h, icon, keepFocus, swatch } from "./dom.js";
+import { h, icon, keepFocus, segButtons, swatch } from "./dom.js";
 import { fx, money, pct, price, qty } from "./format.js";
 import { avgInvestNote } from "./results.js";
 
@@ -549,28 +549,6 @@ function newChart(ChartJs, wrap, model) {
       },
     },
   });
-}
-
-function segButtons(items, isOn, onPick, label) {
-  const group = h("div", { class: "seg inline-seg", role: "group", "aria-label": label });
-  for (const item of items) {
-    const on = isOn(item);
-    group.append(
-      h(
-        "button",
-        {
-          type: "button",
-          class: on ? "on" : null,
-          "aria-pressed": String(on),
-          "data-focus": `${label}:${String(item.key)}`,
-          onclick: () => onPick(item),
-        },
-        item.slot === undefined ? null : swatch(item.slot, 16),
-        item.label,
-      ),
-    );
-  }
-  return group;
 }
 
 function chartTools(data, slotOf) {

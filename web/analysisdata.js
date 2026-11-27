@@ -1,8 +1,8 @@
 // 분석 탭(F-14)의 글, 표 줄, 그래프 좌표를 만드는 순수 함수. DOM 없음 (node --test로 시험한다).
-// 그리는 쪽은 analysis.js다. 묶음마다 아래에 구역을 더한다 (#61 연도별·월별, #64 수익 분해·매수 가격).
+// 그리는 쪽은 analysis.js다. 묶음마다 아래에 구역을 더한다 (#64 수익 분해·매수 가격).
 
 import { sparkline } from "./chartdata.js";
-import { MINUS, investLabel, pct, qty, rate, shortDate, shortMonth } from "./format.js";
+import { MINUS, investLabel, money, pct, qty, rate, shortDate, shortMonth } from "./format.js";
 
 const NONE = "없음";
 
@@ -183,4 +183,173 @@ export function drawdownAria(results) {
       : `${r.symbol} 낙폭 없음`;
   });
   return `평가금 최고점 대비 낙폭 그래프. ${parts.join(", ")}.`;
+}
+
+// ---------- 연도별 결과 (F-14, 계산 규칙 9-2) ----------
+
+/** 결과 종목 통화 이름: 하나면 원화·달러, 여럿이면 "종목 통화". */
+function assetLabel(results) {
+  const currencies = [...new Set(results.map((r) => r.currency))];
+  return currencies.length === 1 ? investLabel(currencies[0]) : "종목 통화";
+}
+
+/** 결과 한 줄의 analysis.years (v2 필드가 빠진 옛 응답이면 빈 것). */
+function yearsOfResult(result) {
+  return result.analysis?.years ?? {};
+}
+
+/** 모든 종목 연도를 합친 오름차순 목록. */
+function allYears(results) {
+  return [...new Set(results.flatMap((r) => Object.keys(yearsOfResult(r))))].sort();
+}
+
+/**
+ * 해마다 그해까지(연도 ≤ 그해) 마지막 매수 줄의 invested. 그해에 매수가 없으면 앞 해 값이고,
+ * 첫 매수 전 해는 null이다. buys는 날짜 오름차순이다 (상세 설계 4절).
+ */
+function investedByYear(buys, years) {
+  const byYear = new Map();
+  let next = 0;
+  let last = null;
+  for (const year of years) {
+    while (next < buys.length && buys[next].date.slice(0, 4) <= year) {
+      last = buys[next].invested;
+      next += 1;
+    }
+    byYear.set(year, last);
+  }
+  return byYear;
+}
+
+/** 표 위 글. 아래 작은 글씨(주가 등락)는 종목 통화다. */
+export function yearsIntro(results) {
+  return (
+    "그해 마지막 거래일 기준 누적 수익률. " +
+    `아래 작은 글씨는 그해 주가 등락(${assetLabel(results)})`
+  );
+}
+
+/** 연도별 표의 칸: 그해 누적 수익률, 주가 등락, (투자금이 종목마다 다를 때) 그해 투자금. */
+function yearCell(value, invested, currency) {
+  if (!present(value)) return { text: "—", sub: null, tone: "", invested: null };
+  const change = value.price_change_pct;
+  return {
+    text: pct(value.return_pct, 1),
+    sub: present(change) ? `주가 ${pct(change, 1)}` : "주가 —",
+    tone: toneOf(value.return_pct, 1),
+    invested: present(invested) ? `투자금 ${money(invested, currency)}` : null,
+  };
+}
+
+/**
+ * 연도별 결과 표 (F-14, 9-2). currency는 투자 통화(params.currency)다. 행은 모든 종목 연도를 합친
+ * 오름차순, cells는 results 순서다. 누적 투자금(결정 d66)은 모든 줄·모든 종목이 같으면 열 하나
+ * (sharedInvested, 줄의 invested)로, 하나라도 다르면 칸마다(칸의 invested) 쓴다. 표 모양이 줄마다
+ * 바뀌지 않게 표 전체로 정한다.
+ */
+export function yearsTable(results, currency) {
+  const years = allYears(results);
+  const invested = results.map((r) => investedByYear(r.buys ?? [], years));
+  const sharedInvested = years.every(
+    (year) => new Set(invested.map((byYear) => byYear.get(year))).size === 1,
+  );
+  const rows = years.map((year) => ({
+    year,
+    invested: sharedInvested ? money(invested[0].get(year), currency) : null,
+    cells: results.map((r, i) =>
+      yearCell(yearsOfResult(r)[year], sharedInvested ? null : invested[i].get(year), currency),
+    ),
+  }));
+  return { sharedInvested, rows };
+}
+
+/**
+ * 표 아래 한 줄: 마지막 연도가 어디까지인지 ("2026년은 11-23까지."). 마지막 연도에 끝나는
+ * data_through만 보고, 종목마다 다르면 "2026년은 QQQ 11-23, 005930.KS 11-24까지."다. 없으면 null.
+ */
+export function yearsFoot(results) {
+  const last = allYears(results).at(-1);
+  if (!last) return null;
+  const ends = results
+    .filter((r) => r.data_through?.slice(0, 4) === last)
+    .map((r) => ({ symbol: r.symbol, day: r.data_through.slice(5) }));
+  if (!ends.length) return null;
+  const days = new Set(ends.map((e) => e.day));
+  const until = days.size === 1 ? ends[0].day : ends.map((e) => `${e.symbol} ${e.day}`).join(", ");
+  return `${last}년은 ${until}까지.`;
+}
+
+// ---------- 달마다 얼마나 움직였나 (F-14, 계산 규칙 9-3) ----------
+
+/** 히트맵 바탕이 가장 진해지는 |월 수익률| (%). */
+const HEAT_CAP = 25;
+
+export const NO_MONTHS = "끝난 달이 없어 월별 수익률이 없습니다";
+
+/**
+ * 히트맵 위 글. 괄호는 투자 통화다. 고른 종목 통화가 투자 통화와 같으면 환율을 곱하지 않으므로
+ * "× 환율"을 뺀다 (공식은 9-3 그대로).
+ */
+export function monthsIntro(result, params) {
+  const fx = result.currency === params.currency ? "" : " × 환율";
+  return `월말 종가${fx} 기준 월 수익률 (${investLabel(params.currency)})`;
+}
+
+/** 히트맵 칸: 글(1자리, 기호), 손익 색, 진하기(0~1, 25%에서 1). 화면에 0.0%면 색과 진하기가 없다. */
+function heatCell(value) {
+  const tone = toneOf(value, 1);
+  const level = tone ? Number((Math.min(Math.abs(value), HEAT_CAP) / HEAT_CAP).toFixed(3)) : 0;
+  return { text: pct(value, 1), tone, level };
+}
+
+/** months("YYYY-MM" → %)의 값이 있는 달을 달 순서로. */
+function monthEntries(months) {
+  return Object.entries(months ?? {})
+    .filter(([, value]) => present(value))
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+/**
+ * 히트맵 행: months에 나오는 연도(오름차순)마다 1~12월 칸 열두 개. 데이터가 없는 달은 null.
+ * months가 비면 빈 목록.
+ */
+export function monthsGrid(months) {
+  const byMonth = new Map(monthEntries(months));
+  const years = [...new Set([...byMonth.keys()].map((key) => key.slice(0, 4)))];
+  return years.map((year) => ({
+    year,
+    cells: Array.from({ length: 12 }, (_, i) => {
+      const value = byMonth.get(`${year}-${String(i + 1).padStart(2, "0")}`);
+      return value === undefined ? null : heatCell(value);
+    }),
+  }));
+}
+
+/** "2026-04 +30.4%" 칸. 그런 달이 없으면 "없음". */
+function monthCell(title, entry) {
+  if (!entry) return { title, text: NONE, tone: "" };
+  const [month, value] = entry;
+  return { title, text: `${month} ${pct(value, 1)}`, tone: toneOf(value, 1) };
+}
+
+/**
+ * 히트맵 아래 세 칸: 오른 달 / 내린 달(응답 값이 0보다 큰 / 작은 달, expected months.up과 같은
+ * 기준), 가장 크게 오른 달, 가장 크게 내린 달. 같은 값이면 앞의 달이다. months가 비면 null.
+ */
+export function monthsStats(months) {
+  const entries = monthEntries(months);
+  if (!entries.length) return null;
+  const up = entries.filter(([, v]) => v > 0);
+  const down = entries.filter(([, v]) => v < 0);
+  const best = up.reduce((a, b) => (b[1] > a[1] ? b : a), up[0]);
+  const worst = down.reduce((a, b) => (b[1] < a[1] ? b : a), down[0]);
+  return [
+    {
+      title: "오른 달 / 내린 달",
+      text: `${qty(up.length, 0)}달 / ${qty(down.length, 0)}달`,
+      tone: "",
+    },
+    monthCell("가장 크게 오른 달", best),
+    monthCell("가장 크게 내린 달", worst),
+  ];
 }

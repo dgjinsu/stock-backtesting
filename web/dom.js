@@ -72,6 +72,33 @@ export function swatch(
   return svg;
 }
 
+/**
+ * 고르는 버튼 묶음 (.seg, aria-pressed). items는 {key, label, slot?}이고 slot이 있으면 견본을 앞에 붙인다.
+ * data-focus는 "label:key"라 keepFocus로 다시 그려도 누르던 버튼에 포커스가 남는다
+ * (그래프 도구, 매수 내역, 분석 탭 달마다).
+ */
+export function segButtons(items, isOn, onPick, label) {
+  const group = h("div", { class: "seg inline-seg", role: "group", "aria-label": label });
+  for (const item of items) {
+    const on = isOn(item);
+    group.append(
+      h(
+        "button",
+        {
+          type: "button",
+          class: on ? "on" : null,
+          "aria-pressed": String(on),
+          "data-focus": `${label}:${String(item.key)}`,
+          onclick: () => onPick(item),
+        },
+        item.slot === undefined ? null : swatch(item.slot, 16),
+        item.label,
+      ),
+    );
+  }
+  return group;
+}
+
 /** 선으로 그린 아이콘. paths는 24×24 기준 SVG path 목록. */
 export function icon(paths, size = 16) {
   const svg = document.createElementNS(SVG, "svg");
