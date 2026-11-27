@@ -163,9 +163,16 @@ V2_KEYS_BEFORE_D25_D29 = [
 ]
 
 
-def test_v2_keys_keep_existing_and_append_dollar_tax_and_switch_cross_exchange() -> None:
-    """기존 v2 키는 그대로 두고 새 묶음 두 개만 뒤에 더한다 (기존 값은 위 9-8 표 테스트가 지킨다)."""
-    assert list(EXPECTED["v2"]) == [*V2_KEYS_BEFORE_D25_D29, "dollar_tax", "switch_cross_exchange"]
+def test_v2_keys_keep_existing_and_append_check_cases_in_order() -> None:
+    """기존 v2 키는 그대로 두고 검증용 묶음만 뒤에 더한다 (기존 값은 위 9-8 표 테스트가 지킨다).
+    결정 d25·d29에서 dollar_tax·switch_cross_exchange, 결정 d58·d59(이슈 #62)에서 buy_rows·rule_bought."""
+    assert list(EXPECTED["v2"]) == [
+        *V2_KEYS_BEFORE_D25_D29,
+        "dollar_tax",
+        "switch_cross_exchange",
+        "buy_rows",
+        "rule_bought",
+    ]
 
 
 # 9-8 달러 양도세 줄: tax_fx(원), 손익·양도세·세후 손익($, 정수)
@@ -202,6 +209,62 @@ def test_v2_switch_cross_exchange_matches_rules_table() -> None:
     assert s["worst_return_pct"] == pytest.approx(worst, abs=0.01)
     assert s["leftover_cash_invest"] == pytest.approx(cash, abs=1)
     assert s["rule_days"] == days
+
+
+# ---------- 결정 d58·d59 (2026-11-27, 이슈 #62) ----------
+
+# 9-8 매수 내역의 두 열 표: 회차 날짜 → (그날 수익률 %, 이 회차 지금 %). 1회·14회·60회 순서
+BUY_ROWS_TABLE = {
+    "2021-12-01": (0.00, 93.09),
+    "2023-01-03": (-33.54, 340.54),
+    "2026-11-02": (107.23, -9.19),
+}
+# 9-8 "싸게 산 횟수를 산 매수만으로 세면" 문단: 규칙 → (산 횟수, 지금 가격보다 싸게, 평단가보다 싸게)
+RULE_BOUGHT_TABLE = {
+    "ma_dip": (60, 51, 22),  # 이평선 아래 2배·위 절반: 쉰 날이 없다
+    "ma_hot": (60, 51, 23),  # 과열 때 절반: 배수가 0.5 또는 1이라 쉰 날이 없다
+    "switch": (45, 36, 12),  # 레버리지 전환: 쉰 15번을 뺀다
+}
+
+
+def test_v2_buy_rows_match_rules_table() -> None:
+    """9-8 매수 내역 두 열 표 (결정 d59): 기본 적립 1·14·60회의 그날 수익률·이 회차 지금 (±0.01%p).
+    1회 2021-12-01은 첫 매수라 그날 수익률이 0이다. 날짜는 7절 매월 1일 매수일(첫날 2021-12-01)이다."""
+    got = EXPECTED["v2"]["buy_rows"]
+    assert list(got) == list(BUY_ROWS_TABLE)
+    first_buy = EXPECTED_CASES["월1일_200만원_5년"]["results"]["QLD"]["first_buy"]
+    assert next(iter(got)) == first_buy
+    for day, (ret, lot) in BUY_ROWS_TABLE.items():
+        assert set(got[day]) == {"return_pct", "lot_return_pct"}, day
+        assert got[day]["return_pct"] == pytest.approx(ret, abs=0.01), day
+        assert got[day]["lot_return_pct"] == pytest.approx(lot, abs=0.01), day
+
+
+@pytest.mark.parametrize("rule", list(RULE_BOUGHT_TABLE), ids=list(RULE_BOUGHT_TABLE))
+def test_v2_rule_bought_matches_rules_table(rule: str) -> None:
+    """9-8 (결정 d58): 산 수량이 0인 매수일을 빼고 센 싸게 산 횟수. 레버리지 전환의 산 횟수는 매수 60번에서
+    쉰 날(전략 표 rule_days 15)을 뺀 45번이다."""
+    bought, below_eval, below_avg = RULE_BOUGHT_TABLE[rule]
+    got = EXPECTED["v2"]["rule_bought"][rule]
+    assert list(got) == ["bought", "buys_below_eval_price", "buys_below_avg_cost"]
+    assert (got["bought"], got["buys_below_eval_price"], got["buys_below_avg_cost"]) == (
+        bought,
+        below_eval,
+        below_avg,
+    )
+    rest_days = STRATEGY_TABLE[rule][-1] if rule == "switch" else 0
+    assert got["bought"] == EXPECTED["v2"]["metrics"]["buys"] - rest_days
+
+
+def test_v2_rule_bought_keys_follow_rules_and_match_metrics_without_rest_days() -> None:
+    """쉰 날이 없는 규칙은 매수일·가격·평가 가격이 기본 적립과 같아 지금 가격보다 싸게 산 횟수도 v2.metrics와
+    같은 51번이다. 평단가 기준 횟수는 규칙마다 평단가가 달라 다르다."""
+    v2 = EXPECTED["v2"]
+    got = v2["rule_bought"]
+    assert list(got) == ["ma_dip", "ma_hot", "switch"]
+    for rule in ("ma_dip", "ma_hot"):
+        assert got[rule]["bought"] == v2["metrics"]["buys"], rule
+        assert got[rule]["buys_below_eval_price"] == v2["metrics"]["buys_below_eval_price"], rule
 
 
 @pytest.fixture(scope="module")
