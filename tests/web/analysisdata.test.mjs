@@ -2238,3 +2238,12 @@ test("buyPriceText: 색칠한 막대가 하나도 없으면(지금 가격이 모
       "가장 싸게 산 날은 2025-01-02 $10.00, 가장 비싸게 산 날은 2025-03-02 $15.00입니다.",
   );
 });
+
+test("buyPriceText: 비어 있는 칸은 위 끝이 지금 가격 이하여도 색칠한 막대로 세지 않는다", () => {
+  // PR #77 Actions 리뷰 권장 1: 지금 $5.95면 lo 5, 칸 너비 11/12라 매수가 없는 첫 칸([5, 5.92))이
+  // filled지만 막대가 보이지 않는다
+  const result = priced([10, 12, 15], { evalPrice: 5.95, avgCost: 12.1, below: [0, 1] });
+  assert.equal(buyPriceDist(result).bins[0].filled, true);
+  assert.equal(buyPriceDist(result).bins[0].count, 0);
+  assert.ok(!buyPriceText(result).includes("색칠한 막대"), buyPriceText(result));
+});
