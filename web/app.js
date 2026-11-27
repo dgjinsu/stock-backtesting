@@ -311,7 +311,7 @@ function showNote(text) {
   $("sym-search").setAttribute("aria-expanded", "true");
   search.options = [];
   search.active = -1;
-  revealSearch(); // Tab·마우스로 들어와 쳐도 목록이 패널 바닥에서 잘리지 않게
+  revealListIfFocused();
 }
 
 function renderHits(query, hits) {
@@ -363,7 +363,16 @@ function renderHits(query, hits) {
   $("sym-live").textContent =
     `검색 결과 ${search.options.length}개. 위아래 화살표로 고르고 Enter로 넣습니다`;
   search.active = -1;
-  revealSearch();
+  revealListIfFocused();
+}
+
+/**
+ * 목록을 열 때 Tab·마우스로 들어와 쳐도 목록이 패널 바닥에서 잘리지 않게 패널을 스크롤한다.
+ * 검색칸에서 포커스가 나간 직후(목록을 닫기 전 150ms)에 응답이 오면 사용자가 누른 다른 칸이
+ * 움직이지 않게 스크롤하지 않는다.
+ */
+function revealListIfFocused() {
+  if (document.activeElement === $("sym-search")) revealSearch();
 }
 
 async function runSearch(query) {
