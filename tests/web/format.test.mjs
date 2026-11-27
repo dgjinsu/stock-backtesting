@@ -19,6 +19,8 @@ import {
   qty,
   rate,
   ruleTag,
+  shortDate,
+  shortMonth,
   shownMoney,
   signedMoney,
   times,
@@ -384,5 +386,26 @@ const PREVIEW_EMPTY = [
 for (const { id, cond } of PREVIEW_EMPTY) {
   test(`amountPreview: ${id} → 빈 글`, () => {
     assert.equal(amountPreview(cond), "");
+  });
+}
+
+// ---------- 짧은 날짜 (F-14 분석 탭 표, #60) ----------
+
+const SHORT_DATES = [
+  { id: "최저 수익률 날 (시안 QQQ)", iso: "2022-12-28", date: "22-12-28", month: "22-12" },
+  {
+    id: "가장 길게 원금 아래 칸의 달 (이슈 #60 예)",
+    iso: "2022-09-19",
+    date: "22-09-19",
+    month: "22-09",
+  },
+  { id: "최대 낙폭 날 (QLD)", iso: "2026-11-20", date: "26-11-20", month: "26-11" },
+  { id: "2000년대 첫해도 두 자리", iso: "2005-01-03", date: "05-01-03", month: "05-01" },
+];
+
+for (const { id, iso, date, month } of SHORT_DATES) {
+  test(`shortDate·shortMonth: ${id} ${iso} → ${date}, ${month}`, () => {
+    assert.equal(shortDate(iso), date);
+    assert.equal(shortMonth(iso), month);
   });
 }

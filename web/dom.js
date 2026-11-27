@@ -1,4 +1,4 @@
-// DOM을 만드는 작은 도우미. 화면 모듈(app.js, charts.js)이 같이 쓴다.
+// DOM을 만드는 작은 도우미. 화면 모듈(app.js, charts.js, analysis.js)이 같이 쓴다.
 
 import { DASHES } from "./chartdata.js";
 
