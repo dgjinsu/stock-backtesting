@@ -1,30 +1,21 @@
-// 결과 아래쪽: 그래프 4개(F-07, F-13)와 매수 내역·CSV(F-08). Chart.js 4는 index.html에서 불러온다.
+// 요약 탭 아래쪽 그래프 4개(F-07, F-13). Chart.js 4는 index.html에서 불러온다. 매수 내역·CSV는 buys.js.
 
 import {
-  BUY_COLUMNS,
   RANGES,
-  REST_LABEL,
-  boughtFractional,
-  buysCsv,
-  csvFileName,
   dashOf,
   dateTick,
   investedLines,
-  isRest,
   lastValue,
   logFirst,
   logFirstNote,
   logSafe,
-  previewRows,
   rangeFrom,
   rangeStart,
-  restNote,
   sampledNote,
   splitMarks,
 } from "./chartdata.js";
-import { h, icon, keepFocus, segButtons, swatch } from "./dom.js";
-import { fx, money, pct, price, qty } from "./format.js";
-import { avgInvestNote } from "./results.js";
+import { h, keepFocus, segButtons, swatch } from "./dom.js";
+import { money, pct, price } from "./format.js";
 
 const TABS = [
   { key: "value", label: "평가금·투자금" },
@@ -49,8 +40,6 @@ const view = {
   range: "all",
   hidden: new Set(),
   priceSymbol: null,
-  buySymbol: null,
-  expanded: false,
 };
 let current = null; // { data, slotOf, chart, wrap, legend, hints, logFirst }
 
@@ -665,183 +654,3 @@ document.fonts?.load(`11px "JetBrains Mono"`).then(
   () => draw(),
   () => {},
 );
-
-// ---------- 매수 내역과 CSV (F-08) ----------
-
-function downloadCsv(data) {
-  const text = buysCsv(data.results, data.params.currency);
-  const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
-  const link = h("a", {
-    href: url,
-    download: csvFileName({ ...data.params, symbols: data.results.map((r) => r.symbol) }),
-  });
-  document.body.append(link);
-  link.click();
-  link.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-const DOWNLOAD_ICON = ["M12 4v11", "M7 10l5 5 5-5", "M5 20h14"];
-
-/** 결과 머리의 [CSV] 버튼. 모든 종목의 매수 내역을 내려받는다. */
-export function csvButton(data, label = "CSV") {
-  return h(
-    "button",
-    {
-      type: "button",
-      class: "ghost",
-      title: "모든 종목의 매수 내역 (엑셀에서 열 수 있는 UTF-8 CSV)",
-      onclick: () => downloadCsv(data),
-    },
-    icon(DOWNLOAD_ICON),
-    label,
-  );
-}
-
-function cell(column, row, result, invest, fractional) {
-  const value = row[column.key];
-  switch (column.key) {
-    case "date":
-      return value;
-    case "price":
-    case "avg_cost_asset":
-      return price(value, result.currency);
-    case "fx":
-      return result.currency === invest ? "—" : fx(value);
-    case "qty":
-    case "cum_qty":
-      return qty(value, 4, { fixed: fractional });
-    case "avg_cost_invest":
-      return money(value, invest, { short: false });
-    default:
-      return money(value, invest);
-  }
-}
-
-/**
- * 매수 내역 한 줄. 사지 않은 회차(산 수량 0, 레버리지 전환에서 쉰 날 등)는 산 수량 칸에 "쉼"을 적어
- * 알아보게 한다 (#41). 투자 통화 평단가가 없으면(매수 규칙, 결정 d39) "—"에 이유를 툴팁으로 단다.
- */
-function buyRow(no, row, result, params) {
-  const fractional = boughtFractional(params); // 매수 규칙은 정수 주만을 골라도 소수점 (9-6)
-  const rest = isRest(row);
-  return h(
-    "tr",
-    {},
-    h("td", { class: "left muted", text: String(no) }),
-    ...BUY_COLUMNS.map((c) => {
-      if (c.key === "qty" && rest) {
-        return h("td", {}, h("span", { class: "rest-tag", text: REST_LABEL }));
-      }
-      const note = c.key === "avg_cost_invest" ? avgInvestNote(params, row.avg_cost_invest) : null;
-      return h("td", {
-        class: c.key === "date" ? "left" : null,
-        title: note,
-        text: cell(c, row, result, params.currency, fractional),
-      });
-    }),
-  );
-}
-
-function buysTable(data, result) {
-  const invest = data.params.currency;
-  // 매수 규칙(F-17) 결과라 투자 통화 평단가가 없는 행이 있으면 그 이유를 열 제목에 단다 (결정 d39)
-  const avgWhy =
-    result.buys.map((row) => avgInvestNote(data.params, row.avg_cost_invest)).find(Boolean) ??
-    null;
-  const view8 = previewRows(result.buys);
-  const all = view.expanded || view8.hidden === 0;
-  const rows = all
-    ? result.buys.map((row, i) => buyRow(i + 1, row, result, data.params))
-    : [
-        ...view8.head.map((r) => buyRow(r.no, r.row, result, data.params)),
-        h(
-          "tr",
-          { class: "gap" },
-          h("td", {
-            colspan: String(BUY_COLUMNS.length + 1),
-            text: `⋯ ${view8.hidden.toLocaleString("ko-KR")}회 더 있음`,
-          }),
-        ),
-        ...view8.tail.map((r) => buyRow(r.no, r.row, result, data.params)),
-      ];
-  return h(
-    "table",
-    { class: "tbl", "aria-label": `${result.symbol} 매수 내역` },
-    h(
-      "thead",
-      {},
-      h(
-        "tr",
-        {},
-        h("th", { scope: "col", class: "left", text: "회차" }),
-        ...BUY_COLUMNS.map((c) => {
-          const why = c.key === "avg_cost_invest" ? avgWhy : null;
-          return h(
-            "th",
-            { scope: "col", class: c.key === "date" ? "left" : null, title: why },
-            c.title(invest),
-            why ? h("span", { class: "sr", text: ` (${why})` }) : null,
-          );
-        }),
-      ),
-    ),
-    h("tbody", {}, ...rows),
-  );
-}
-
-/** 매수 내역 상자. 종목 고르기, 앞 6회 + 끝 2회, 전체 보기, CSV 내려받기. */
-export function buysSection(data, slotOf) {
-  view.expanded = false;
-  const section = h("section", { class: "box", "aria-labelledby": "buys-h" });
-  const toggle = (result) =>
-    h("button", {
-      type: "button",
-      class: "link-btn",
-      "aria-expanded": String(view.expanded),
-      "data-focus": "buys-toggle",
-      text: view.expanded ? "접기" : `전체 보기 (${result.buys.length.toLocaleString("ko-KR")}회)`,
-      onclick: () => {
-        view.expanded = !view.expanded;
-        keepFocus(section, render);
-      },
-    });
-  const render = () => {
-    const symbols = data.results.map((r) => r.symbol);
-    if (!symbols.includes(view.buySymbol)) view.buySymbol = symbols[0];
-    const result = data.results.find((r) => r.symbol === view.buySymbol);
-    const more = previewRows(result.buys).hidden > 0;
-    const rests = restNote(data.params, result.buys); // "쉼: … · 60회 중 15회" (#41)
-    const picker =
-      data.results.length > 1
-        ? segButtons(
-            symbols.map((s) => ({ key: s, label: s, slot: slotOf(s) })),
-            (o) => o.key === view.buySymbol,
-            (o) => {
-              view.buySymbol = o.key;
-              view.expanded = false;
-              keepFocus(section, render);
-            },
-            "매수 내역 종목",
-          )
-        : null;
-    // 펼치기·접기는 머리에 둬서 2,500줄을 펼쳐도 버튼과 포커스가 제자리에 있다.
-    // replaceChildren은 null을 "null" 글자로 넣으므로 빈 자리는 거른다
-    const parts = [
-      h(
-        "div",
-        { class: "box-head" },
-        h("h3", { id: "buys-h", text: "매수 내역" }),
-        picker,
-        more ? toggle(result) : null,
-        csvButton(data, "CSV 내려받기"),
-      ),
-      rests ? h("p", { class: "hint box-note", text: rests }) : null,
-      h("div", { class: "scroll" }, buysTable(data, result)),
-      more && !view.expanded ? h("div", { class: "box-foot" }, toggle(result)) : null,
-    ];
-    section.replaceChildren(...parts.filter(Boolean));
-  };
-  render();
-  return section;
-}
