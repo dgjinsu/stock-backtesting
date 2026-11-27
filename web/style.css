@@ -1735,7 +1735,8 @@ select.field,
   font-size: 14px;
   font-weight: 700;
 }
-/* 수익은 어디서 왔나 (9-4): 줄마다 코드 | 막대와 두 효과 | 손익 (시안 64px | 1fr | 120px).
+/* 수익은 어디서 왔나 (9-4): 줄마다 코드 | 막대와 두 효과 | 손익 (시안은 64px | 1fr | 120px).
+   코드 칸은 "005930.KS"(견본 포함 약 100px)가 들어가게 104px이고, 더 긴 코드는 말줄임한다.
    막대는 종목 색, 길이는 |손익| 비례 */
 .pf-list {
   margin: 0;
@@ -1747,16 +1748,23 @@ select.field,
 }
 .pf-row {
   display: grid;
-  grid-template-columns: 76px minmax(0, 1fr) 120px;
+  grid-template-columns: 104px minmax(0, 1fr) 120px;
   gap: 12px;
   align-items: center;
   font-size: 14px;
 }
 .pf-sym {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 6px;
+  min-width: 0;
   font-weight: 800;
+}
+.pf-code {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .pf-mid {
   display: flex;

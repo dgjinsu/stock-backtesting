@@ -15,6 +15,7 @@ import {
   drawdownAria,
   drawdownChart,
   drawdownLegend,
+  fxIncluded,
   monthsGrid,
   monthsIntro,
   monthsStats,
@@ -354,7 +355,7 @@ function profitBox(data, slotOf) {
   const { results, params } = data;
   const rows = profitRows(results, params.currency);
   if (!rows.length) return null;
-  const options = { includeFx: params.include_fx !== false };
+  const options = { includeFx: fxIncluded(params) };
   const notes = profitNotes(results, params.currency, options);
   return analysisBox(
     {
@@ -373,7 +374,12 @@ function profitBox(data, slotOf) {
         return h(
           "li",
           { class: "pf-row" },
-          h("span", { class: "pf-sym" }, swatch(slot, 18), row.symbol),
+          h(
+            "span",
+            { class: "pf-sym" },
+            swatch(slot, 18),
+            h("span", { class: "pf-code", text: row.symbol }),
+          ),
           h(
             "div",
             { class: "pf-mid" },

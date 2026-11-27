@@ -424,12 +424,18 @@ export function profitRows(results, currency) {
   });
 }
 
+/** 응답이 환율 변동을 넣어 계산했는지 (F-24). include_fx가 false일 때만 끔이고, 없으면(#74 전) 켬이다. */
+export function fxIncluded(params) {
+  return params?.include_fx !== false;
+}
+
 /**
  * 평균 매수 환율 문장. 횟수는 매수일 수(summary.buys, 쉰 날도 그날 환전한다, 9-4)이고 가장 쌀 때·비쌀
  * 때는 buys[].fx에서 고른다 (같으면 앞 날짜). 환율 단위는 투자 통화가 원화일 때만 "원"이다.
+ * compare가 false면(환율 변동 제외: 평가 환율이 곧 평균 매수 환율) 평가 환율 비교 없이 끝낸다.
  * 평균 매수 환율이 없거나 매수가 없으면 null.
  */
-function avgFxSentence(result, currency) {
+function avgFxSentence(result, currency, { compare = true } = {}) {
   const s = result.summary;
   const rows = (result.buys ?? []).filter((b) => present(b.fx));
   if (!present(s.avg_buy_fx) || !rows.length) return null;
@@ -437,14 +443,25 @@ function avgFxSentence(result, currency) {
   const text = (value) => `${fx(value)}${unit}`;
   const low = rows.reduce((a, b) => (b.fx < a.fx ? b : a));
   const high = rows.reduce((a, b) => (b.fx > a.fx ? b : a));
-  let compare = "그보다 높습니다";
-  if (fx(s.eval_fx) === fx(s.avg_buy_fx)) compare = "그와 같습니다";
-  else if (s.eval_fx < s.avg_buy_fx) compare = "그보다 낮습니다";
-  return (
+  const lead =
     `${qty(s.buys, 0)}번 평균 매수 환율은 ${text(s.avg_buy_fx)}` +
-    `(가장 쌀 때 ${text(low.fx)} ${low.date}, 가장 비쌀 때 ${text(high.fx)} ${high.date})이고, ` +
-    `평가 환율 ${text(s.eval_fx)}이 ${compare}.`
-  );
+    `(가장 쌀 때 ${text(low.fx)} ${low.date}, 가장 비쌀 때 ${text(high.fx)} ${high.date})`;
+  if (!compare) return `${lead}입니다.`;
+  let versus = "그보다 높습니다";
+  if (fx(s.eval_fx) === fx(s.avg_buy_fx)) versus = "그와 같습니다";
+  else if (s.eval_fx < s.avg_buy_fx) versus = "그보다 낮습니다";
+  return `${lead}이고, 평가 환율 ${text(s.eval_fx)}이 ${versus}.`;
+}
+
+/** 평균 매수 환율 문장들: 모든 줄에서 같으면 하나, 다르면 줄마다 종목 코드를 앞에 붙인다. */
+function avgFxNotes(rows, currency, options) {
+  const sentences = rows
+    .map((r) => ({ symbol: r.symbol, text: avgFxSentence(r, currency, options) }))
+    .filter((e) => e.text !== null);
+  if (new Set(sentences.map((e) => e.text)).size === 1) {
+    return [{ text: sentences[0].text, strong: false }];
+  }
+  return sentences.map((e) => ({ text: `${e.symbol} ${e.text}`, strong: false }));
 }
 
 /**
@@ -452,7 +469,8 @@ function avgFxSentence(result, currency) {
  * 1) 수익 줄이 둘 이상이고 환율 효과 글·종목 통화·매수일(횟수·첫날·끝날)이 모두 같으면 굵은
  *    "환율 효과는 4개 종목 모두 −75만원으로 같습니다."와 그 이유 (같은 날 같은 돈을 바꿨을 때만 맞다).
  * 2) 평균 매수 환율 문장. 종목마다 다르면 줄마다 종목 코드를 앞에 붙인다.
- * 환율 변동 제외(includeFx false, 결정 d75)면 1)의 이유와 2)의 비교가 틀린 말이라 그 대신 안내 두 조각.
+ * 환율 변동 제외(includeFx false, 결정 d75)면 1)의 이유와 2)의 평가 환율 비교가 틀린 말이라, 안내 두
+ * 조각 뒤에 비교 없는 평균 매수 환율 문장만 둔다 (평균 매수 환율은 끔에서도 그대로이고 평가에 쓴 값).
  * 수익 줄이 없으면 [].
  */
 export function profitNotes(results, currency, { includeFx = true } = {}) {
@@ -467,6 +485,7 @@ export function profitNotes(results, currency, { includeFx = true } = {}) {
           "환율 효과가 0입니다.",
         strong: false,
       },
+      ...avgFxNotes(rows, currency, { compare: false }),
     ];
   }
   const notes = [];
@@ -483,15 +502,7 @@ export function profitNotes(results, currency, { includeFx = true } = {}) {
       strong: false,
     });
   }
-  const sentences = rows
-    .map((r) => ({ symbol: r.symbol, text: avgFxSentence(r, currency) }))
-    .filter((e) => e.text !== null);
-  if (new Set(sentences.map((e) => e.text)).size === 1) {
-    notes.push({ text: sentences[0].text, strong: false });
-  } else {
-    for (const e of sentences) notes.push({ text: `${e.symbol} ${e.text}`, strong: false });
-  }
-  return notes;
+  return [...notes, ...avgFxNotes(rows, currency)];
 }
 
 // ---------- 얼마에 샀나 (F-14, 계산 규칙 9-1) ----------
@@ -526,7 +537,9 @@ function edgeLabel(value, currency, step) {
 
 /**
  * 매수 가격 분포 (F-14 얼마에 샀나). 산 회차의 buys[].price(종목 통화, 분할 반영)를 bins칸 막대로 센다.
- * - 칸 경계는 시안: lo = 가장 낮은 가격 내림, hi = max(가장 높은 가격, 평가 가격) × 1.02 올림.
+ * - 칸 경계: lo = min(가장 낮은 가격, 평가 가격, 평단가) 내림, hi = max(가장 높은 가격, 평가 가격,
+ *   평단가) × 1.02 올림. 시안 식(lo는 매수 가격만, hi는 평가 가격까지)에 지금 가격이 가장 낮은 매수
+ *   가격보다 낮을 때와 평단가가 가장 높은 가격보다 높을 때(큰 수수료)를 더해 세로선이 늘 판 안에 있다.
  *   칸은 [from, to)라 경계에 걸린 가격은 위 칸이다. filled는 칸 위 끝이 평가 가격 이하인 칸(색칠).
  * - height는 가장 많은 칸 기준(소수 3자리), 세로선 left는 lo~hi 비율(소수 4자리). 선이 오른쪽 끝
  *   (0.8 넘음)에 가까우면 flip(글을 선 왼쪽에)이다. 평단가가 없으면 avg는 null.
@@ -538,8 +551,9 @@ export function buyPriceDist(result, { bins = 12 } = {}) {
   const s = result.summary;
   const currency = result.currency;
   const prices = rows.map((b) => b.price);
-  const lo = Math.floor(Math.min(...prices));
-  const hi = Math.ceil(Math.max(...prices, s.eval_price) * 1.02);
+  const lines = present(s.avg_cost_asset) ? [s.eval_price, s.avg_cost_asset] : [s.eval_price];
+  const lo = Math.floor(Math.min(...prices, ...lines));
+  const hi = Math.ceil(Math.max(...prices, ...lines) * 1.02);
   const span = hi - lo;
   const step = span / bins;
   const edge = (k) => lo + (span * k) / bins;
