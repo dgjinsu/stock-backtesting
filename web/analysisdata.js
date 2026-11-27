@@ -597,7 +597,8 @@ export function buyPriceDist(result, { bins = 12 } = {}) {
 
 /**
  * 분포 아래 글: 싸게 산 횟수(analysis.buys_below_*, 산 회차만 센다, 결정 d58)와 가장 싸게·비싸게 산
- * 날(산 회차에서, 같은 가격이면 앞 날짜). 평단가가 없으면 "평단가보다" 부분을 뺀다. 산 회차가 없으면 null.
+ * 날(산 회차에서, 같은 가격이면 앞 날짜). 평단가가 없으면 "평단가보다" 부분을 뺀다. 끝의 색칠 안내는
+ * 색칠한 막대가 있을 때만 붙인다 (하락장만 적립하면 없다). 산 회차가 없으면 null.
  */
 export function buyPriceText(result) {
   const rows = boughtRows(result);
@@ -610,11 +611,12 @@ export function buyPriceText(result) {
   const belowAvg = present(s.avg_cost_asset)
     ? `, ${qty(a.buys_below_avg_cost, 0)}번은 평단가보다 싸게`
     : "";
+  const filled = buyPriceDist(result).bins.some((b) => b.filled);
   return (
     `${qty(rows.length, 0)}번 중 ${qty(a.buys_below_eval_price, 0)}번은 ` +
     `지금 가격보다 싸게${belowAvg} 샀습니다. ` +
     `가장 싸게 산 날은 ${low.date} ${price(low.price, currency)}, ` +
-    `가장 비싸게 산 날은 ${high.date} ${price(high.price, currency)}입니다. ` +
-    "색칠한 막대는 지금 가격보다 싸게 산 구간입니다."
+    `가장 비싸게 산 날은 ${high.date} ${price(high.price, currency)}입니다.` +
+    (filled ? " 색칠한 막대는 지금 가격보다 싸게 산 구간입니다." : "")
   );
 }
