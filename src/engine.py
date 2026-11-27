@@ -963,16 +963,15 @@ def anchor_sweep(asset: Series, fx: Series | None, p: Params) -> dict[int, float
     주기와 상관없이 매월로 계산한다. 그 기준일로 계산할 수 없으면 그 기준일만 None이다 (결정 d56):
     기간 안에 매수일이 없을 때, 그 기준일로 사는 날 당일이나 그 이전 환율이 없을 때(환율 데이터가 더 늦게
     시작). 정수 주만 살 때 한 주도 사지 못하면 보유 수량이 0이라 평단가가 없어 None이다 (결정 d35).
-    시작일이 끝날짜보다 앞서지 않는 것처럼 기준일과 상관없는 오류는 그대로 올린다.
+    시작일이 끝날짜보다 앞서지 않으면 기준일과 상관없는 오류라 그대로 올린다.
     """
     _check_params(p)  # 기준일과 상관없는 오류를 None 29개로 숨기지 않는다
     out: dict[int, float | None] = {}
     for anchor in [*range(1, 29), 31]:
+        # 그 기준일로는 매수일이 없거나 그날 환율이 없으면 None. ValueError(계약 위반)는 올린다
         try:
             sim = simulate(asset, fx, replace(p, freq="monthly", anchor=anchor))
-        except (
-            EngineError
-        ):  # 그 기준일로는 매수일이 없거나 그날 환율이 없다. ValueError(계약 위반)는 올린다
+        except EngineError:
             out[anchor] = None
             continue
         out[anchor] = sim.summary.avg_cost_asset

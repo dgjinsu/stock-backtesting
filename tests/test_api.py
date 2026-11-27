@@ -534,7 +534,8 @@ def _called(yahoo: FakeYahoo) -> Counter[str]:
 def v2_strategy_raw(tmp_path_factory: pytest.TempPathFactory) -> bytes:
     """9-8 요청(STRATEGY_EXAMPLE)의 /api/strategy 응답 본문. 모듈에서 서버 하나로 한 번만 받는다 (이슈 #63).
 
-    고칠 수 없는 bytes로 들고 있다. 서버 상태(Yahoo 호출 수, 캐시, 시계)를 보는 테스트는 api를 쓴다."""
+    고칠 수 없는 bytes로 들고 있다. 서버 상태(Yahoo 호출 수, 캐시, 시계)를 보는 테스트는 api를 쓴다.
+    9-8 응답만 읽는 새 테스트는 이 fixture(테스트마다 새 dict는 v2_strategy, /api/backtest는 v2_backtest)를 쓴다."""
     with _serve(tmp_path_factory.mktemp("v2-strategy")) as server:
         response = server.client.post("/api/strategy", json=STRATEGY_EXAMPLE)
     assert response.status_code == 200, response.text

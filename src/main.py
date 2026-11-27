@@ -624,7 +624,8 @@ async def run_strategy(market: Market, request: StrategyRequest, today: date) ->
     except engine.EngineError as error:  # 기간 안 매수일 없음 등
         errors.append(SymbolError(symbol=request.symbol, message=str(error)))
         return StrategyResponse(params=request, result=None, errors=errors + ref_errors)
-    # 그 기준일로 계산할 수 없으면(그날 환율 없음 등) 그 기준일만 None이다 (결정 d56)
+    # 그 기준일로 계산할 수 없으면(그날 환율 없음 등) 그 기준일만 None이다 (결정 d56). try 밖이라
+    # EngineError를 내면 500이지만, 기준일과 상관없는 오류는 위 전략 계산이 먼저 내서 여기까지 오지 않는다
     anchors = engine.anchor_sweep(asset, fx, params)
     chart = engine.build_strategy_chart(list(sims.values()))
 
