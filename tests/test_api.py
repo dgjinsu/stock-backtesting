@@ -2239,25 +2239,64 @@ def test_non_boolean_include_fx_returns_422_with_korean_message_without_yahoo(
     assert api.yahoo.calls == []
 
 
-# 9-8 조건 include_fx false: 요청마다 한 번씩만 보낸다
+# 9-8 조건 include_fx false: 요청마다 모듈에서 한 번씩만 보내고(#63의 _serve) 테스트가 나눠 본다
 
 
-def test_backtest_fx_off_reference_case_matches_v2_fx_off(api: Api) -> None:
-    """9-9, 이슈 #74 완료 기준: 9-8 조건 + 양도세 + include_daily, include_fx false.
+@pytest.fixture(scope="module")
+def fx_off_backtest_raw(tmp_path_factory: pytest.TempPathFactory) -> tuple[bytes, Counter[str]]:
+    """9-8 조건 + 양도세 + include_daily, include_fx false의 /api/backtest 응답 본문과 Yahoo 호출 수.
 
-    평가금 227,237,947원, +89.36%, XIRR 26.01%, eval_fx = avg_buy_fx = 1,352.57원, 최저 −42.48%. 최대 낙폭
-    −39.73% (2025-04-08), 원금 아래 344일 / 1,250, 가장 길게 338일, 마지막 2023-05-12. 2022년 −35.23%, 월 최고
-    2026-04 +32.87%, 최저 2022-04 −26.03% (59달 중 34달). 주가 효과 = 손익, 환율 효과 0, 양도세 23,042,348원.
-    buys 1·14·60회 0.00/+69.92, −33.56/+316.27, +111.46/−10.45. 평단가·수량·싸게 산 횟수는 켬과 같다.
-    끄더라도 USDKRW=X는 매수에 쓰니 한 번 받는다. 마지막 daily.value는 평가금과 ±1원, 낙폭 그래프의 가장 낮은 점은
-    max_drawdown이다."""
-    body = _backtest(api.client, include_fx=False, include_daily=True)
-    assert body["errors"] == []
-    assert body["params"]["include_fx"] is False
-    assert _called(api.yahoo) == Counter({"QLD": 1, "USDKRW=X": 1})
-    qld = _result(body, "QLD")
-    summary, analysis, m = qld["summary"], qld["analysis"], FX_OFF_METRICS
-    none = FX_OFF["strategies"]["none"]
+    모듈에서 서버 하나로 한 번만 받는다. 고칠 수 없는 bytes로 들고 있다."""
+    with _serve(tmp_path_factory.mktemp("fx-off-backtest")) as server:
+        request = {**V2_BACKTEST, "include_fx": False, "include_daily": True}
+        response = server.client.post("/api/backtest", json=request)
+        calls = _called(server.yahoo)
+    assert response.status_code == 200, response.text
+    content: bytes = response.content
+    return content, calls
+
+
+@pytest.fixture
+def fx_off_backtest(fx_off_backtest_raw: tuple[bytes, Counter[str]]) -> dict[str, Any]:
+    """9-8 끔 /api/backtest 응답을 테스트마다 새 dict로 준다."""
+    body: dict[str, Any] = json.loads(fx_off_backtest_raw[0])
+    return body
+
+
+@pytest.fixture(scope="module")
+def fx_off_strategy_raw(tmp_path_factory: pytest.TempPathFactory) -> tuple[bytes, Counter[str]]:
+    """같은 조건 include_fx false의 /api/strategy 응답 본문과 Yahoo 호출 수. 모듈에서 한 번만 받는다."""
+    with _serve(tmp_path_factory.mktemp("fx-off-strategy")) as server:
+        request = {**STRATEGY_EXAMPLE, "include_fx": False}
+        response = server.client.post("/api/strategy", json=request)
+        calls = _called(server.yahoo)
+    assert response.status_code == 200, response.text
+    content: bytes = response.content
+    return content, calls
+
+
+@pytest.fixture
+def fx_off_strategy(fx_off_strategy_raw: tuple[bytes, Counter[str]]) -> dict[str, Any]:
+    """9-8 끔 /api/strategy 응답을 테스트마다 새 dict로 준다."""
+    body: dict[str, Any] = json.loads(fx_off_strategy_raw[0])
+    return body
+
+
+def test_backtest_fx_off_echoes_params_and_still_fetches_usdkrw_once(
+    fx_off_backtest: dict[str, Any], fx_off_backtest_raw: tuple[bytes, Counter[str]]
+) -> None:
+    """끄더라도 USDKRW=X는 매수에 쓰니 한 번 받는다. params.include_fx는 보낸 false 그대로다."""
+    assert fx_off_backtest["errors"] == []
+    assert fx_off_backtest["params"]["include_fx"] is False
+    assert fx_off_backtest_raw[1] == Counter({"QLD": 1, "USDKRW=X": 1})
+
+
+def test_backtest_fx_off_summary_matches_v2_fx_off(fx_off_backtest: dict[str, Any]) -> None:
+    """9-9, 이슈 #74 완료 기준: 평가금 227,237,947원, +89.36%, XIRR 26.01%, eval_fx = avg_buy_fx = 1,352.57원,
+    최저 −42.48%. 최대 낙폭 −39.73% (2025-04-08), 원금 아래 344일 / 1,250, 가장 길게 338일, 마지막 2023-05-12.
+    주가 효과 = 손익, 환율 효과 0 (−0 아님), 양도세 23,042,348원."""
+    summary = _result(fx_off_backtest, "QLD")["summary"]
+    m, none = FX_OFF_METRICS, FX_OFF["strategies"]["none"]
     # 5절 지표
     assert summary["value"] == pytest.approx(none["value"], abs=1)
     assert summary["profit"] == pytest.approx(m["profit"], abs=1)
@@ -2282,7 +2321,12 @@ def test_backtest_fx_off_reference_case_matches_v2_fx_off(api: Api) -> None:
     assert math.copysign(1.0, summary["fx_effect"]) == 1.0
     for field in ("price_effect", "tax", "profit_after_tax"):
         assert summary[field] == pytest.approx(m[field], abs=1), field
-    # 9-2·9-3
+
+
+def test_backtest_fx_off_years_and_months_match_v2_fx_off(fx_off_backtest: dict[str, Any]) -> None:
+    """9-2는 끔의 수익률 추이를 따르고(2022년 −35.23%), 주가 등락은 그대로다. 9-3 월별은 월말 종가만으로 잰다
+    (결정 d73): 최고 2026-04 +32.87%, 최저 2022-04 −26.03%, 59달 중 34달 오름."""
+    analysis, m = _result(fx_off_backtest, "QLD")["analysis"], FX_OFF_METRICS
     years = analysis["years"]
     assert list(years) == list(m["years"])
     for year, want in m["years"].items():
@@ -2300,14 +2344,21 @@ def test_backtest_fx_off_reference_case_matches_v2_fx_off(api: Api) -> None:
     assert (best, worst) == (want_months["best"]["month"], want_months["worst"]["month"])
     assert months[best] == pytest.approx(want_months["best"]["return_pct"], abs=0.01)
     assert months[worst] == pytest.approx(want_months["worst"]["return_pct"], abs=0.01)
-    # 켬과 같은 값: 매수 때 정해진다
+
+
+def test_backtest_fx_off_keeps_buy_time_values_and_matches_buy_rows(
+    fx_off_backtest: dict[str, Any],
+) -> None:
+    """평단가(종목·원화)·수량·싸게 산 횟수는 매수 때 정해져 켬과 같다. 매수 내역 1·14·60회는 0.00/+69.92,
+    −33.56/+316.27, +111.46/−10.45 (이 회차 지금은 그 회차 매수 환율로 평가한 종목 통화 수익률, 결정 d72)."""
+    qld = _result(fx_off_backtest, "QLD")
+    summary, analysis = qld["summary"], qld["analysis"]
     assert summary["buys"] == METRICS["buys"]
     assert summary["shares"] == pytest.approx(V2_QLD["shares"], abs=1e-4)
     assert summary["avg_cost_asset"] == pytest.approx(V2_QLD["avg_cost_asset"], abs=0.01)
     assert summary["avg_cost_invest"] == pytest.approx(V2_QLD["avg_cost_invest"], abs=1)
     assert analysis["buys_below_eval_price"] == METRICS["buys_below_eval_price"]
     assert analysis["buys_below_avg_cost"] == METRICS["buys_below_avg_cost"]
-    # 매수 내역 두 열 (이 회차 지금은 종목 통화 수익률, 결정 d72)
     buys, want_rows = qld["buys"], FX_OFF["buy_rows"]
     assert len(buys) == METRICS["buys"]
     assert [buys[k]["date"] for k in BUY_ROW_INDEXES] == list(want_rows)
@@ -2315,41 +2366,57 @@ def test_backtest_fx_off_reference_case_matches_v2_fx_off(api: Api) -> None:
         row, want = buys[k], want_rows[buys[k]["date"]]
         assert row["return_pct"] == pytest.approx(want["return_pct"], abs=0.01), row["date"]
         assert row["lot_return_pct"] == pytest.approx(want["lot_return_pct"], abs=0.01), row["date"]
-    # 날마다 평가금과 낙폭 그래프도 끔의 평가를 따른다
+
+
+def test_backtest_fx_off_daily_and_drawdown_chart_follow_fx_off(
+    fx_off_backtest: dict[str, Any],
+) -> None:
+    """날마다 평가금과 낙폭 그래프도 끔의 평가를 따른다: 마지막 daily.value는 평가금과 ±1원, 낙폭 그래프의 가장
+    낮은 점은 max_drawdown이다."""
+    qld = _result(fx_off_backtest, "QLD")
+    summary = qld["summary"]
     assert qld["daily"]["value"][-1] == pytest.approx(summary["value"], abs=1)
-    chart = body["chart"]
+    chart = fx_off_backtest["chart"]
     drawdown = chart["series"]["QLD"]["drawdown"]
     lowest = min(drawdown)
     assert lowest == summary["max_drawdown"]["pct"]
     assert chart["dates"][drawdown.index(lowest)] == summary["max_drawdown"]["date"]
 
 
-def test_strategy_fx_off_reference_case_matches_v2_fx_off(api: Api) -> None:
-    """9-9, 이슈 #74 완료 기준: 같은 조건 /api/strategy include_fx false.
+def test_strategy_fx_off_echoes_params_and_fetches_each_code_once(
+    fx_off_strategy: dict[str, Any], fx_off_strategy_raw: tuple[bytes, Counter[str]]
+) -> None:
+    """같은 조건 /api/strategy include_fx false. 종목·환율·기준 종목은 한 번씩 받는다."""
+    assert fx_off_strategy["errors"] == []
+    assert fx_off_strategy["params"]["include_fx"] is False
+    assert fx_off_strategy_raw[1] == Counter({"QLD": 1, "USDKRW=X": 1, "QQQ": 1})
 
-    전략 5개가 v2.fx_off.strategies와 같다 (기본 적립 227,237,947원, 이평선 아래 2배·위 절반 210,501,927원,
-    과열 때 절반 218,554,778원, 레버리지 전환 232,842,307원, 일시금 203,903,604원). 평단가와 rule_days는 켬과 같고,
-    일시금 수익률은 1회차 이 회차 지금(+69.92%)과 같다. anchor_sweep 29개는 v2.anchor_sweep 그대로, start_sweep은
-    v2.fx_off.start_sweep (2025-04 +5.30, 켬은 −0.71). 종목·환율·기준 종목은 한 번씩 받는다."""
-    body = _strategy(api.client, include_fx=False)
-    assert body["errors"] == []
-    assert body["params"]["include_fx"] is False
-    assert _called(api.yahoo) == Counter({"QLD": 1, "USDKRW=X": 1, "QQQ": 1})
-    result = body["result"]
-    strategies = result["strategies"]
-    assert list(strategies) == list(FX_OFF["strategies"])
-    for rule, want in FX_OFF["strategies"].items():
-        got = strategies[rule]
-        _assert_strategy(got, want)
-        assert got["invested"] == pytest.approx(V2_INVESTED, abs=1), rule
-        on = V2["strategies"][rule]
-        assert got["avg_cost_asset"] == pytest.approx(on["avg_cost_asset"], abs=0.01), rule
-        assert got["rule_days"] == on["rule_days"], rule
-        # 그래프 끝값도 끔의 평가금이다
-        end_value = result["chart"]["series"][rule]["value"][-1]
-        assert end_value == pytest.approx(got["value"], abs=1), rule
+
+@pytest.mark.parametrize("rule", list(FX_OFF["strategies"]), ids=list(FX_OFF["strategies"]))
+def test_strategy_fx_off_reference_case_matches_v2_fx_off(
+    fx_off_strategy: dict[str, Any], rule: str
+) -> None:
+    """9-9, 이슈 #74 완료 기준: 전략 5개가 v2.fx_off.strategies와 같다 (기본 적립 227,237,947원, 이평선 아래
+    2배·위 절반 210,501,927원, 과열 때 절반 218,554,778원, 레버리지 전환 232,842,307원, 일시금 203,903,604원).
+    평단가와 rule_days는 켬과 같고, 그래프 끝값도 끔의 평가금이다."""
+    result = fx_off_strategy["result"]
+    assert list(result["strategies"]) == list(FX_OFF["strategies"])
+    got, on = result["strategies"][rule], V2["strategies"][rule]
+    _assert_strategy(got, FX_OFF["strategies"][rule])
+    assert got["invested"] == pytest.approx(V2_INVESTED, abs=1)
+    assert got["avg_cost_asset"] == pytest.approx(on["avg_cost_asset"], abs=0.01)
+    assert got["rule_days"] == on["rule_days"]
+    assert result["chart"]["series"][rule]["value"][-1] == pytest.approx(got["value"], abs=1)
+
+
+def test_strategy_fx_off_sweeps_and_lump_sum_match_v2_fx_off(
+    fx_off_strategy: dict[str, Any],
+) -> None:
+    """일시금 수익률은 1회차 이 회차 지금(+69.92%)과 같다. anchor_sweep 29개는 평단가라 v2.anchor_sweep 그대로,
+    start_sweep은 v2.fx_off.start_sweep (2025-04 +5.30, 켬은 −0.71)."""
+    result = fx_off_strategy["result"]
     first_lot = FX_OFF["buy_rows"][V2_FIRST_BUY]["lot_return_pct"]
-    assert strategies["lump_sum"]["return_pct"] == pytest.approx(first_lot, abs=0.01)
+    assert result["strategies"]["lump_sum"]["return_pct"] == pytest.approx(first_lot, abs=0.01)
     _assert_anchor_sweep_matches_v2(result["anchor_sweep"])
     starts = result["start_sweep"]
     assert list(starts) == list(FX_OFF["start_sweep"])

@@ -399,9 +399,8 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
         return_pct = (value / invested - 1) * 100
         avg_cost_asset = cost_asset / shares if shares > 0 else None
         if bought is not None:
-            lot_fx = (
-                fx_rate if fx_excluded else end_fx
-            )  # 환율 변동을 빼면 그 회차의 매수 환율 (d72)
+            # 환율 변동을 빼면 그 회차의 매수 환율로 평가한다 (결정 d72)
+            lot_fx = fx_rate if fx_excluded else end_fx
             buys.append(
                 BuyRow(
                     date=day,
@@ -885,9 +884,8 @@ def _run_rule(
         return_pct = (value / invested - 1) * 100
         avg_cost_asset = cost / shares if shares > 0 else None
         if bought is not None:
-            lot_fx = (
-                fx_rate if fx_excluded else end_fx
-            )  # 환율 변동을 빼면 그 회차의 매수 환율 (d72)
+            # 환율 변동을 빼면 그 회차의 매수 환율로 평가한다 (결정 d72)
+            lot_fx = fx_rate if fx_excluded else end_fx
             buys.append(
                 BuyRow(
                     date=day,

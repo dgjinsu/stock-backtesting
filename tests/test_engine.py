@@ -1,5 +1,6 @@
 """계산 엔진(src/engine.py)을 기준값과 계산 규칙으로 확인한다. 네트워크 없이 fixture만 쓴다."""
 
+import math
 from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import replace
@@ -1955,8 +1956,6 @@ def test_analyze_fx_off_profit_is_all_price_effect_with_positive_zero_fx_effect(
 ) -> None:
     """9-9 → 9-4: 끔이면 (주가 효과, 환율 효과) = (손익, 0.0)이다. 환율 효과는 −0.0이 아니라 0.0이다
     (응답에 −0으로 나가지 않게)."""
-    import math  # 맨 위 import 블록은 이슈 #63과 겹쳐 고치지 않는다
-
     asset, fx = load_series("QLD"), load_series("USDKRW=X")
     sim = BUY_METHODS[method](include_fx=False)
     a = analyze(sim, asset, fx, _v2_params().end, tax_fx=1.0)
