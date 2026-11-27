@@ -66,6 +66,8 @@ class BuyRow:
     """매수 1회. 평단가는 이번 매수까지의 값이고, 아직 산 수량이 없으면 None.
 
     매수 규칙(simulate_with_rule)이면 쉰 날은 qty 0이고 avg_cost_invest는 None이다 (결정 d39).
+    return_pct는 그날 수익률(그 매수일의 DailyRow.return_pct, 마지막 거래일이면 평가 환율로 다시 평가한 값),
+    lot_return_pct는 이 회차 지금(%, 9-1)이고 qty가 0이면 None이다 (결정 d59).
     """
 
     date: date
@@ -77,6 +79,8 @@ class BuyRow:
     avg_cost_invest: float | None
     invested: float
     cash: float
+    return_pct: float
+    lot_return_pct: float | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,6 +303,26 @@ def _check_params(p: Params) -> None:
         raise ValueError("수수료율은 0 이상 1 미만이어야 합니다")
 
 
+def _lot_return_pct(
+    qty: float, price: float, fx_rate: float, now: float, fee: float
+) -> float | None:
+    """이 회차 지금 (9-1, 결정 d59): (1 − f) × 평가 가격 × 평가 환율 ÷ (매수 가격 × 매수 환율) − 1 (%).
+
+    now는 평가 가격 × 평가 환율이다. 그날 산 몫의 원가가 매수 가격 × 매수 환율 ÷ (1 − f)라서 소수점·정수 주·
+    매수 규칙 모두 같은 식이다. 산 수량이 0이면 None.
+    """
+    return ((1 - fee) * now / (price * fx_rate) - 1) * 100 if qty > 0 else None
+
+
+def _revalue_last_day(
+    buys: list[BuyRow], daily: list[DailyRow], fx_rate: float, value: float, invested: float
+) -> None:
+    """마지막 거래일을 평가 환율로 다시 평가한다 (5절 끝). 그날 산 줄의 그날 수익률도 같이 바꾼다 (9-1)."""
+    daily[-1] = replace(daily[-1], fx=fx_rate, value=value, return_pct=(value / invested - 1) * 100)
+    if buys and buys[-1].date == daily[-1].date:
+        buys[-1] = replace(buys[-1], return_pct=daily[-1].return_pct)
+
+
 def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
     """종목 하나에 매번 p.amount씩 산 결과. fx는 종목 통화 → 투자 통화 환율 (같으면 None)."""
     _check_params(p)
@@ -316,40 +340,49 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
     daily: list[DailyRow] = []
     flows: list[tuple[date, float]] = []
 
-    first_index = _asof_index(asset.dates, picked[0])
-    last_index = _asof_index(asset.dates, p.end)
-    for i in range(first_index, last_index + 1):
+    eval_index = _asof_index(asset.dates, p.end)
+    eval_price = asset.close[eval_index]
+    eval_fx = rate_on(fx, p.end)
+    for i in range(_asof_index(asset.dates, picked[0]), eval_index + 1):
         day, price = asset.dates[i], asset.close[i]
         fx_rate = rate_on(fx, day)
+        bought: float | None = None  # 매수일이면 산 수량
         if day in buy_set:
             invested += p.amount
             flows.append((day, -p.amount))
             net = p.amount * (1 - p.fee) / fx_rate  # 수수료를 뺀 종목 통화 금액
             if p.fractional:
-                qty = net / price
+                bought = net / price
                 cost_asset += p.amount / fx_rate
                 cost_invest += p.amount
             else:
                 cash += net
-                qty = float(math.floor(cash / price + 1e-9))
-                cash -= qty * price
-                cost_asset += qty * price / (1 - p.fee)
-                cost_invest += qty * price / (1 - p.fee) * fx_rate
-            shares += qty
+                bought = float(math.floor(cash / price + 1e-9))
+                cash -= bought * price
+                cost_asset += bought * price / (1 - p.fee)
+                cost_invest += bought * price / (1 - p.fee) * fx_rate
+            shares += bought
+        value = (shares * price + cash) * fx_rate
+        return_pct = (value / invested - 1) * 100
+        avg_cost_asset = cost_asset / shares if shares > 0 else None
+        if bought is not None:
             buys.append(
                 BuyRow(
                     date=day,
                     price=price,
                     fx=fx_rate,
-                    qty=qty,
+                    qty=bought,
                     cum_qty=shares,
-                    avg_cost_asset=cost_asset / shares if shares > 0 else None,
+                    avg_cost_asset=avg_cost_asset,
                     avg_cost_invest=cost_invest / shares if shares > 0 else None,
                     invested=invested,
                     cash=cash,
+                    return_pct=return_pct,
+                    lot_return_pct=_lot_return_pct(
+                        bought, price, fx_rate, eval_price * eval_fx, p.fee
+                    ),
                 )
             )
-        value = (shares * price + cash) * fx_rate
         daily.append(
             DailyRow(
                 date=day,
@@ -357,19 +390,16 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
                 fx=fx_rate,
                 value=value,
                 invested=invested,
-                return_pct=(value / invested - 1) * 100,
-                avg_cost_asset=cost_asset / shares if shares > 0 else None,
+                return_pct=return_pct,
+                avg_cost_asset=avg_cost_asset,
             )
         )
 
-    eval_index = _asof_index(asset.dates, p.end)
-    eval_price = asset.close[eval_index]
-    eval_fx = rate_on(fx, p.end)
     value = (shares * eval_price + cash) * eval_fx
     flows.append((p.end, value))
     annual_rate = xirr(flows)
     # 마지막 거래일은 요약과 같은 평가 환율(끝날 기준)로 다시 평가해 그래프 끝과 요약을 맞춘다
-    daily[-1] = replace(daily[-1], fx=eval_fx, value=value, return_pct=(value / invested - 1) * 100)
+    _revalue_last_day(buys, daily, eval_fx, value, invested)
 
     best = max(daily, key=lambda r: r.return_pct)
     worst = min(daily, key=lambda r: r.return_pct)
@@ -644,9 +674,12 @@ def analyze(
         underwater_pct=len(under) / len(rows) * 100,
         longest_underwater=_longest_run(rows, flags),
         last_underwater=under[-1] if under else None,
-        buys_below_eval_price=sum(1 for b in result.buys if b.price < s.eval_price),
+        # 9-1 싸게 산 횟수: 산 수량이 0인 매수일(쉰 날, 정수 주로 못 산 날)은 세지 않는다 (결정 d58)
+        buys_below_eval_price=sum(1 for b in result.buys if b.qty > 0 and b.price < s.eval_price),
         buys_below_avg_cost=sum(
-            1 for b in result.buys if s.avg_cost_asset is not None and b.price < s.avg_cost_asset
+            1
+            for b in result.buys
+            if b.qty > 0 and s.avg_cost_asset is not None and b.price < s.avg_cost_asset
         ),
         years=_years(result, asset, end),
         months=_months(asset, fx, s.first_buy, end),
@@ -762,9 +795,13 @@ def _run_rule(
     flows: list[tuple[date, float]] = []
     buys: list[BuyRow] = []
     daily: list[DailyRow] = []
-    for i in range(_asof_index(asset.dates, picked[0]), _asof_index(asset.dates, p.end) + 1):
+    eval_index = _asof_index(asset.dates, p.end)
+    eval_price = asset.close[eval_index]
+    eval_fx = rate_on(fx, p.end)
+    for i in range(_asof_index(asset.dates, picked[0]), eval_index + 1):
         day, price = asset.dates[i], asset.close[i]
         fx_rate = rate_on(fx, day)
+        bought: float | None = None  # 매수일이면 산 수량
         if day in buy_set:
             if rule == "lump_sum":
                 put = p.amount * len(picked) if day == picked[0] else 0.0
@@ -792,23 +829,30 @@ def _run_rule(
             if put:
                 invested += put
                 flows.append((day, -put))
-            qty = spend / price
-            shares += qty
+            bought = spend / price
+            shares += bought
             cost += spend / keep
+        value = (shares * price + cash) * fx_rate
+        return_pct = (value / invested - 1) * 100
+        avg_cost_asset = cost / shares if shares > 0 else None
+        if bought is not None:
             buys.append(
                 BuyRow(
                     date=day,
                     price=price,
                     fx=fx_rate,
-                    qty=qty,
+                    qty=bought,
                     cum_qty=shares,
-                    avg_cost_asset=cost / shares if shares > 0 else None,
+                    avg_cost_asset=avg_cost_asset,
                     avg_cost_invest=None,  # 같은 예산 규칙은 넣은 돈과 쓴 돈이 달라 정하지 않는다 (결정 d39)
                     invested=invested,
                     cash=cash,
+                    return_pct=return_pct,
+                    lot_return_pct=_lot_return_pct(
+                        bought, price, fx_rate, eval_price * eval_fx, p.fee
+                    ),
                 )
             )
-        value = (shares * price + cash) * fx_rate
         daily.append(
             DailyRow(
                 date=day,
@@ -816,19 +860,16 @@ def _run_rule(
                 fx=fx_rate,
                 value=value,
                 invested=invested,
-                return_pct=(value / invested - 1) * 100,
-                avg_cost_asset=cost / shares if shares > 0 else None,
+                return_pct=return_pct,
+                avg_cost_asset=avg_cost_asset,
             )
         )
-    eval_index = _asof_index(asset.dates, p.end)
-    eval_price = asset.close[eval_index]
-    eval_fx = rate_on(fx, p.end)
     value = (shares * eval_price + cash) * eval_fx
     total = p.amount * len(picked)
     flows.append((p.end, value))
     annual_rate = xirr(flows)
     # 마지막 거래일은 평가 환율로 다시 평가한다 (5절 끝, simulate와 같다)
-    daily[-1] = replace(daily[-1], fx=eval_fx, value=value, return_pct=(value / total - 1) * 100)
+    _revalue_last_day(buys, daily, eval_fx, value, total)
     best = max(daily, key=lambda r: r.return_pct)
     worst = min(daily, key=lambda r: r.return_pct)
     peak = max(daily, key=lambda r: r.value)
