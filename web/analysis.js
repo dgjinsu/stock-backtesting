@@ -8,12 +8,12 @@ import {
   analysisNotes,
   drawdownAria,
   drawdownChart,
+  drawdownLegend,
   riskIntro,
   riskRow,
 } from "./analysisdata.js";
 import { DASHES } from "./chartdata.js";
 import { h, svgEl, swatch } from "./dom.js";
-import { pct } from "./format.js";
 
 // 낙폭 그래프 SVG 좌표 상자. 화면에서는 preserveAspectRatio="none"으로 판 크기에 맞춰 늘린다
 const DD_W = 1000;
@@ -107,9 +107,7 @@ function drawdownFigure(data, slotOf) {
         {},
         swatch(slotOf(r.symbol), 22),
         h("span", { class: "lg-label", text: r.symbol }),
-        h("strong", {
-          text: r.summary.max_drawdown ? pct(r.summary.max_drawdown.pct, 1) : "낙폭 없음",
-        }),
+        h("strong", { text: drawdownLegend(r) }),
       ),
     ),
   );

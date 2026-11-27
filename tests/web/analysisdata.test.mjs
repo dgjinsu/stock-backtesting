@@ -10,6 +10,7 @@ import {
   analysisNotes,
   drawdownAria,
   drawdownChart,
+  drawdownLegend,
   riskIntro,
   riskRow,
 } from "../../web/analysisdata.js";
@@ -530,4 +531,18 @@ test("drawdownAria: 낙폭이 없는 종목(max_drawdown null)은 낙폭 없음"
   const text = drawdownAria([flat, QLD]);
   assert.ok(text.includes(`QQQ 낙폭 없음, QLD 최대 ${MINUS}42.2% (2026-11-20)`), text);
   assert.ok(!text.includes("QQQ 최대"), text);
+});
+
+// ---------- 낙폭 그래프 범례 (#71 리뷰 권장 2) ----------
+
+test("drawdownLegend: 범례 값은 최대 낙폭 1자리, 표의 낙폭 칸 글과 같다", () => {
+  assert.equal(drawdownLegend(QLD), `${MINUS}42.2%`);
+  assert.equal(drawdownLegend(QLD), cellOf(riskRow(QLD), "drawdown").text);
+});
+
+test("drawdownLegend: 낙폭이 없으면(null, 옛 응답의 undefined) 낙폭 없음 (결정 d25)", () => {
+  assert.equal(drawdownLegend(qldWith({ max_drawdown: null })), "낙폭 없음");
+  const summary = { ...QLD_SUMMARY };
+  delete summary.max_drawdown;
+  assert.equal(drawdownLegend(result("QLD", summary)), "낙폭 없음");
 });

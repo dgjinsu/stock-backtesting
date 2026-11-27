@@ -168,6 +168,12 @@ export function drawdownChart(chart, symbols, { width = 1000, height = 300 } = {
   return { floor, yTicks, xTicks: xTicksOf(dates), lines };
 }
 
+/** 낙폭 그래프 범례의 값: 최대 낙폭(1자리), 낙폭이 없으면 "낙폭 없음" (결정 d25, 표·aria-label과 같다). */
+export function drawdownLegend(result) {
+  const dd = result.summary.max_drawdown;
+  return present(dd) ? pct(dd.pct, 1) : "낙폭 없음";
+}
+
 /** 낙폭 그래프의 aria-label. 표의 짧은 날짜와 달리 낭독용이라 날짜를 다 쓴다. */
 export function drawdownAria(results) {
   const parts = results.map((r) => {

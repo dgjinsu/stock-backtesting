@@ -19,6 +19,8 @@ import {
   qty,
   rate,
   ruleTag,
+  shortDate,
+  shortMonth,
   shownMoney,
   signedMoney,
   times,
@@ -388,13 +390,6 @@ for (const { id, cond } of PREVIEW_EMPTY) {
 }
 
 // ---------- 짧은 날짜 (F-14 분석 탭 표, #60) ----------
-
-// shortDate·shortMonth는 #60에서 format.js 끝에 더한다. 위 import 목록에 이름으로 넣으면 함수가
-// 생기기 전에는 모듈을 잇지 못해 이 파일의 시험이 모두 멈추므로, 모듈 전체를 받아 꺼낸다.
-// 바뀌는 자리를 파일 끝에 모아 #59와 겹치지 않게 한다 (설계 메모).
-import * as formatModule from "../../web/format.js";
-
-const { shortDate, shortMonth } = formatModule;
 
 const SHORT_DATES = [
   { id: "최저 수익률 날 (시안 QQQ)", iso: "2022-12-28", date: "22-12-28", month: "22-12" },
