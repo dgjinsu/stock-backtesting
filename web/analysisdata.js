@@ -611,7 +611,8 @@ export function buyPriceText(result) {
   const belowAvg = present(s.avg_cost_asset)
     ? `, ${qty(a.buys_below_avg_cost, 0)}번은 평단가보다 싸게`
     : "";
-  const filled = buyPriceDist(result).bins.some((b) => b.filled);
+  // 매수가 없는 칸은 위 끝이 지금 가격 이하여도 막대가 보이지 않아 세지 않는다
+  const filled = buyPriceDist(result).bins.some((b) => b.filled && b.count > 0);
   return (
     `${qty(rows.length, 0)}번 중 ${qty(a.buys_below_eval_price, 0)}번은 ` +
     `지금 가격보다 싸게${belowAvg} 샀습니다. ` +
