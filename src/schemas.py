@@ -30,6 +30,7 @@ FIELD_MESSAGES = {
     "switch_ref": "기준 종목 코드는 문자열로 넣어 주세요",
     "tax": "양도세 어림 여부는 true 또는 false입니다",
     "rule": "매수 규칙은 none, ma_dip, ma_hot, switch 중 하나입니다",
+    "include_daily": "날마다 평가금 포함 여부는 true 또는 false입니다",
 }
 
 
@@ -86,6 +87,7 @@ class BacktestRequest(Conditions):
     rule: BacktestRule = "none"  # 매수 규칙 (F-17). none이 아니면 9-6 소수점 매수로 계산
     ma_days: MaDays = 200  # ma_dip·ma_hot은 종목의, switch는 기준 종목의 이평선
     switch_ref: SymbolCode = "QQQ"  # rule이 switch일 때만 받는다. 형식은 늘 본다
+    include_daily: bool = False  # 켜면 results[].daily에 줄이지 않은 날마다 값 (결정 d60)
 
     @field_validator("symbols")
     @classmethod
@@ -190,6 +192,9 @@ class AnalysisOut(BaseModel):
 
 
 class BuyOut(BaseModel):
+    """매수 1회. return_pct는 그날 수익률(그 매수일의 수익률 추이 값), lot_return_pct는 이 회차 지금(그날 산
+    몫만 끝날짜에 팔았을 때의 투자 통화 수익률)이고 qty가 0이면 null이다 (계산 규칙 9-1, 결정 d59). 둘 다 %."""
+
     date: date
     price: float
     fx: float
@@ -198,6 +203,20 @@ class BuyOut(BaseModel):
     avg_cost_asset: float | None
     avg_cost_invest: float | None
     invested: float
+    return_pct: float
+    lot_return_pct: float | None
+
+
+class DailyOut(BaseModel):
+    """날마다 평가 (결정 d60). 그 종목 첫 매수일 ~ data_through 거래일마다 한 값이고 줄이지 않는다.
+
+    value·invested는 투자 통화, return_pct는 %. 자리수는 ChartOut과 같다.
+    """
+
+    dates: list[date]
+    value: list[float]
+    invested: list[float]
+    return_pct: list[float]
 
 
 class SwitchRefOut(BaseModel):
@@ -249,6 +268,7 @@ class ResultOut(BaseModel):
     summary: SummaryOut
     analysis: AnalysisOut
     buys: list[BuyOut]
+    daily: DailyOut | None  # 요청의 include_daily가 꺼져 있으면 null
 
 
 class ChartSeriesOut(BaseModel):

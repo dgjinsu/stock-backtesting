@@ -318,9 +318,47 @@ def v2_metrics(asset, fx, start, end, anchor, amount, tax_fx=1.0):
         "tax": round(tax, 0),
         "profit_after_tax": round(profit - tax, 0),
         "buys": len(buys),
-        "buys_below_eval_price": sum(1 for d in buys if asof(asset, d) < pe),
-        "buys_below_avg_cost": sum(1 for d in buys if asof(asset, d) < cost / shares),
+        **bought_below(asset, plan, pe, cost / shares),
     }
+
+
+def bought_below(asset, plan, eval_price, avg_cost):
+    """9-1 싸게 산 횟수: 산 수량이 0인 매수일(산 돈 0)은 세지 않는다 (결정 d58)."""
+    bought = [d for d, _, spend in plan if spend > 0]
+    return {
+        "buys_below_eval_price": sum(1 for d in bought if asof(asset, d) < eval_price),
+        "buys_below_avg_cost": sum(1 for d in bought if asof(asset, d) < avg_cost),
+    }
+
+
+def rule_bought(asset, fx, ref, start, end, anchor, amount, rule):
+    """9-1 싸게 산 횟수를 9-6 매수 규칙으로 산 결과에서 센다. bought는 산 수량이 0보다 큰 매수일 수."""
+    buys = buy_days(asset["dates"], start, end, "monthly", anchor)
+    plan, _ = plan_buys(asset, fx, ref, buys, amount, rule)
+    _, end_state = hold(asset, fx, plan, end)
+    avg = end_state["cost"] / end_state["shares"]
+    return {"bought": sum(1 for _, _, spend in plan if spend > 0),
+            **bought_below(asset, plan, asof(asset, end), avg)}
+
+
+def buy_rows(asset, fx, start, end, anchor, amount, picks):
+    """9-1 매수 내역의 두 열: 기본 적립(수수료 0, 소수점 매수) picks번째 회차(0부터)의 날짜별 값.
+
+    그날 수익률 = 그 매수일의 수익률 추이 값 (5절). 이 회차 지금 = 평가 가격 × 평가 환율 ÷ (매수 가격 × 매수 환율) − 1
+    (수수료 0이라 (1 − f)는 1). 결정 d59.
+    """
+    buys = buy_days(asset["dates"], start, end, "monthly", anchor)
+    plan, _ = plan_buys(asset, fx, None, buys, amount, "none")
+    rows, _ = hold(asset, fx, plan, end)
+    daily = {d: value / invested - 1 for d, value, invested in rows}
+    now = asof(asset, end) * (asof(fx, end) if fx else 1.0)
+    out = {}
+    for k in picks:
+        d = buys[k]
+        paid = asof(asset, d) * (asof(fx, d) if fx else 1.0)
+        out[d.isoformat()] = {"return_pct": round(daily[d] * 100, 2),
+                              "lot_return_pct": round((now / paid - 1) * 100, 2)}
+    return out
 
 
 def v2_case(start, end):
@@ -328,6 +366,8 @@ def v2_case(start, end):
 
     같은 기간·기준일로 검증용 사례 둘을 더한다. dollar_tax는 QQQ 매월 1일 $1,500 달러 투자의 양도세(9-5,
     결정 d25), switch_cross_exchange는 005930.KS 매월 1일 200만원을 QQQ 기준으로 레버리지 전환(9-6, 결정 d29).
+    13단계(결정 d58·d59)의 검증용 사례 둘: buy_rows는 매수 내역 1·14·60회의 그날 수익률·이 회차 지금(9-1),
+    rule_bought는 매수 규칙(9-6)으로 산 결과의 산 횟수와 싸게 산 횟수(9-1, 산 수량 0인 매수일은 빼고 센다).
     """
     qld, qqq, fx = load("QLD"), load("QQQ"), load("USDKRW=X")
     samsung = load("005930.KS")
@@ -349,6 +389,10 @@ def v2_case(start, end):
         "start_sweep": starts,
         "dollar_tax": dollar_tax(qqq, fx, start, end),
         "switch_cross_exchange": strategy(samsung, None, qqq, start, end, 1, amount, "switch"),
+        # 13단계 (결정 d58·d59): 매수 내역 1·14·60회와, 매수 규칙으로 산 결과의 싸게 산 횟수
+        "buy_rows": buy_rows(qld, fx, start, end, 1, amount, (0, 13, 59)),
+        "rule_bought": {rule: rule_bought(qld, fx, qqq, start, end, 1, amount, rule)
+                        for rule in ("ma_dip", "ma_hot", "switch")},
     }
 
 
