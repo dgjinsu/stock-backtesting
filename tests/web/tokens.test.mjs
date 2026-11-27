@@ -24,8 +24,24 @@ function tokens(selector) {
   return found;
 }
 
+/**
+ * tokens()와 같은 블록의 `--이름: N%;` 퍼센트 토큰 (숫자로, 히트맵 진하기 #61). 블록이 없으면 null.
+ */
+function percentTokens(selector) {
+  const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const rule = CSS.match(new RegExp(`(?:^|[;}])\\s*${escaped}\\s*\\{([^{}]*)\\}`));
+  if (!rule) return null;
+  const found = {};
+  for (const [, name, value] of rule[1].matchAll(/(--[\w-]+)\s*:\s*(\d+(?:\.\d+)?)%\s*(?:;|$)/g)) {
+    found[name] = Number(value);
+  }
+  return found;
+}
+
 const LIGHT = tokens(":root") ?? {};
 const DARK = tokens(":root.dark") ?? {};
+const LIGHT_PCT = percentTokens(":root") ?? {};
+const DARK_PCT = percentTokens(":root.dark") ?? {};
 
 /** 이름들의 값만 뽑는다 (없는 이름은 undefined로 남겨 견줄 때 드러나게). */
 function pick(theme, names) {
@@ -52,6 +68,16 @@ function luminance(hex) {
 function contrast(a, b) {
   const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
   return (hi + 0.05) / (lo + 0.05);
+}
+
+/**
+ * fg를 bg 위에 p(0~1)만큼 섞은 색: 채널마다 fg × p + bg × (1 − p)를 0~255로 반올림 (srgb 선형 보간).
+ * color-mix(in srgb, fg p, transparent)를 bg 위에 겹친 색과 같다.
+ */
+function mix(fg, bg, p) {
+  const channel = (hex, i) => Number.parseInt(hex.slice(i, i + 2), 16);
+  const mixed = [1, 3, 5].map((i) => Math.round(channel(fg, i) * p + channel(bg, i) * (1 - p)));
+  return `#${mixed.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
 }
 
 /** fg가 bg 대비 min:1 이상인지. 값이 없으면 그것부터 알린다. */
@@ -248,4 +274,54 @@ test("툴팁 강조색: --tipacc는 두 테마 모두 라임 #C5F04A이고 툴�
   // 다크 --tip은 rgba(10, 12, 11, 0.92)라 바탕 #121614 위에 겹친 색(#0B0D0C)으로 잰다
   assertContrast(DARK["--tipacc"], "#0b0d0c", 4.5, "다크 툴팁 날짜");
   assert.ok(contrast(LIGHT["--acc"], LIGHT["--tip"]) < 4.5, "라이트 --acc를 쓰지 않는 이유");
+});
+
+// ---------- 히트맵 칸 진하기 (분석 탭 달마다 얼마나 움직였나, 이슈 #61) ----------
+// 칸 바탕은 color-mix(in srgb, var(--pos|--neg) calc(var(--hm-lo) + var(--hm) * var(--hm-span)),
+// transparent)이고 상자(--surface) 위에 놓인다. --hm은 0~1 (|월 수익률| 25%에서 1)이라
+// 가장 진한 칸은 --hm-lo + --hm-span만큼 섞인다. 글자는 --text다 (설계 메모).
+
+test("mix: 알려진 값 (검정·흰색 절반은 #808080, 0이면 바탕, 1이면 글자 색)", () => {
+  assert.equal(mix("#000000", "#ffffff", 0.5), "#808080");
+  assert.equal(mix("#0b7a47", "#ffffff", 0), "#ffffff");
+  assert.equal(mix("#0b7a47", "#ffffff", 1), "#0b7a47");
+});
+
+const HM_THEMES = [
+  { label: "라이트", theme: LIGHT, pct: LIGHT_PCT },
+  { label: "다크", theme: DARK, pct: DARK_PCT },
+];
+
+for (const { label, pct } of HM_THEMES) {
+  test(`${label} 히트맵 토큰: --hm-lo·--hm-span 퍼센트가 있고 합이 100% 이하`, () => {
+    for (const name of ["--hm-lo", "--hm-span"]) {
+      assert.ok(Number.isFinite(pct[name]), `${label}에 ${name}: N%; 토큰이 없다`);
+    }
+    assert.ok(pct["--hm-lo"] + pct["--hm-span"] <= 100, `${label} 합이 100%를 넘는다`);
+  });
+}
+
+test("라이트 히트맵 토큰: 시안과 같은 --hm-lo 8%, --hm-span 55% (가장 진한 칸 63%)", () => {
+  assert.deepEqual({ lo: LIGHT_PCT["--hm-lo"], span: LIGHT_PCT["--hm-span"] }, { lo: 8, span: 55 });
+});
+
+for (const { label, theme, pct } of HM_THEMES) {
+  for (const [tone, name] of [
+    ["--pos", "이익"],
+    ["--neg", "손실"],
+  ]) {
+    test(`${label} 히트맵 가장 진한 ${name} 칸: --text 대비 4.5:1 이상`, () => {
+      const p = (pct["--hm-lo"] + pct["--hm-span"]) / 100;
+      assert.ok(Number.isFinite(p), `${label}에 --hm-lo·--hm-span 토큰이 없다`);
+      assert.ok(theme[tone] && theme["--surface"], `${label}에 ${tone}·--surface가 있어야 한다`);
+      const cell = mix(theme[tone], theme["--surface"], p);
+      assertContrast(theme["--text"], cell, 4.5, `${label} --text on ${name} 칸 ${cell}`);
+    });
+  }
+}
+
+test("다크 히트맵: 시안 공식(최대 63%)을 그대로 쓰면 이익 칸 --text 대비가 4.5:1에 못 미친다", () => {
+  // 다크 진하기를 시안과 다르게 두는 이유 (설계 메모 4: 이익 칸 2.81:1)
+  const cell = mix(DARK["--pos"], DARK["--surface"], 0.63);
+  assert.ok(contrast(DARK["--text"], cell) < 4.5, `${cell} 대비 ${contrast(DARK["--text"], cell)}`);
 });
