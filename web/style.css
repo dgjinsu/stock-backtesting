@@ -1735,3 +1735,141 @@ select.field,
   font-size: 14px;
   font-weight: 700;
 }
+/* 수익은 어디서 왔나 (9-4): 줄마다 코드 | 막대와 두 효과 | 손익 (시안 64px | 1fr | 120px).
+   막대는 종목 색, 길이는 |손익| 비례 */
+.pf-list {
+  margin: 0;
+  padding: 4px 20px 6px;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.pf-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) 120px;
+  gap: 12px;
+  align-items: center;
+  font-size: 14px;
+}
+.pf-sym {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 800;
+}
+.pf-mid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.pf-track {
+  height: 14px;
+  border-radius: 4px;
+  background: var(--sunken);
+  overflow: hidden;
+}
+.pf-bar {
+  height: 100%;
+  border-radius: 4px;
+}
+.pf-sub {
+  margin: 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.pf-sub > span {
+  font-family: var(--font-mono);
+}
+.pf-total {
+  text-align: right;
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+.an-callout {
+  margin: 10px 20px 18px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--sunken);
+  font-size: 13px;
+  line-height: 1.7;
+}
+/* 얼마에 샀나 (9-1): 막대 12칸(위 끝이 지금 가격 이하면 종목 색, 아니면 회색), 칸 위 개수,
+   평단가 실선과 지금 가격 점선(글 높이를 엇갈려 겹치지 않게). 높이는 --h(0~1) × 88% (시안) */
+.bp-body {
+  padding-top: 8px;
+}
+.bp-chart {
+  position: relative;
+  height: 200px;
+  margin-top: 22px;
+}
+.bp-bars {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  border-bottom: 1px solid var(--line2);
+}
+.bp-bar {
+  position: relative;
+  flex: 1;
+  height: calc(var(--h, 0) * 88%);
+  border-radius: 4px 4px 0 0;
+  background: var(--line2);
+}
+.bp-n {
+  position: absolute;
+  top: -18px;
+  left: 0;
+  right: 0;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--muted);
+}
+.bp-line {
+  position: absolute;
+  bottom: 0;
+}
+.bp-line.avg {
+  top: -14px;
+  border-left: 2px solid var(--text);
+}
+.bp-line.now {
+  top: 20px;
+  border-left: 2px dashed var(--pos);
+}
+.bp-tag {
+  position: absolute;
+  top: -6px;
+  left: 4px;
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--surface);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.bp-tag.flip {
+  left: auto;
+  right: 4px;
+}
+.bp-line.now .bp-tag {
+  color: var(--pos);
+}
+.bp-ends {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--axis);
+}
+.bp-text {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.7;
+}

@@ -1,8 +1,21 @@
 // 분석 탭(F-14)의 글, 표 줄, 그래프 좌표를 만드는 순수 함수. DOM 없음 (node --test로 시험한다).
-// 그리는 쪽은 analysis.js다. 묶음마다 아래에 구역을 더한다 (#64 수익 분해·매수 가격).
+// 그리는 쪽은 analysis.js다. 묶음마다 아래에 구역이 하나씩 있다.
 
 import { sparkline } from "./chartdata.js";
-import { MINUS, investLabel, money, pct, qty, rate, shortDate, shortMonth } from "./format.js";
+import {
+  MINUS,
+  fx,
+  investLabel,
+  money,
+  pct,
+  price,
+  qty,
+  rate,
+  shortDate,
+  shortMonth,
+  shownMoney,
+  signedMoney,
+} from "./format.js";
 
 const NONE = "없음";
 
@@ -352,4 +365,242 @@ export function monthsStats(months) {
     monthCell("가장 크게 오른 달", best),
     monthCell("가장 크게 내린 달", worst),
   ];
+}
+
+// ---------- 수익은 어디서 왔나 (F-14, 계산 규칙 9-4) ----------
+
+/** 수익 줄이 되는 결과: 종목 통화가 투자 통화와 다르고 주가 효과가 있는 결과 (results 순서, 9-4). */
+function profitResults(results, currency) {
+  return results.filter((r) => r.currency !== currency && present(r.summary?.price_effect));
+}
+
+/** 화면에 보이는 금액(shownMoney)의 손익 색. */
+function moneyTone(value, currency) {
+  const shown = shownMoney(value, currency);
+  if (shown > 0) return "pos";
+  if (shown < 0) return "neg";
+  return "";
+}
+
+/**
+ * 상자 위 글. 투자 통화 손익을 두 효과로 나누는 식이다. 달러 자리는 수익 줄의 종목 통화(여럿이면
+ * "종목 통화")다. 환율 변동 제외(includeFx false, F-24 결정 d74)면 평가 환율이 평균 매수 환율이고
+ * 환율 효과가 0이라 그렇게 쓴다.
+ */
+export function profitIntro(results, currency, { includeFx = true } = {}) {
+  const invest = investLabel(currency);
+  const asset = assetLabel(profitResults(results, currency));
+  if (!includeFx) {
+    return (
+      `${invest} 손익 = 주가 효과(${asset}로 번 돈 × 평균 매수 환율) + ` +
+      "환율 효과(환율 변동 제외라 0)"
+    );
+  }
+  return (
+    `${invest} 손익 = 주가 효과(${asset}로 번 돈 × 지금 환율) + ` +
+    `환율 효과(산 ${asset}를 지금 환율로 바꾼 값 ${MINUS} 넣은 ${invest})`
+  );
+}
+
+/**
+ * 수익 줄: 주가 효과·환율 효과·손익 글과 손익 색, 막대 폭(|손익| ÷ 가장 큰 |손익|, 소수 4자리).
+ * 손익은 summary.profit이라 두 효과의 합과 1원 다를 수 있다 (상세 설계 4절). 빈 목록이면 상자가 없다.
+ */
+export function profitRows(results, currency) {
+  const rows = profitResults(results, currency);
+  const most = Math.max(0, ...rows.map((r) => Math.abs(r.summary.profit)));
+  return rows.map((r) => {
+    const s = r.summary;
+    return {
+      symbol: r.symbol,
+      price: signedMoney(s.price_effect, currency),
+      priceTone: moneyTone(s.price_effect, currency),
+      fx: signedMoney(s.fx_effect, currency),
+      fxTone: moneyTone(s.fx_effect, currency),
+      total: signedMoney(s.profit, currency),
+      tone: moneyTone(s.profit, currency),
+      width: most === 0 ? 0 : Number((Math.abs(s.profit) / most).toFixed(4)),
+    };
+  });
+}
+
+/**
+ * 평균 매수 환율 문장. 횟수는 매수일 수(summary.buys, 쉰 날도 그날 환전한다, 9-4)이고 가장 쌀 때·비쌀
+ * 때는 buys[].fx에서 고른다 (같으면 앞 날짜). 환율 단위는 투자 통화가 원화일 때만 "원"이다.
+ * 평균 매수 환율이 없거나 매수가 없으면 null.
+ */
+function avgFxSentence(result, currency) {
+  const s = result.summary;
+  const rows = (result.buys ?? []).filter((b) => present(b.fx));
+  if (!present(s.avg_buy_fx) || !rows.length) return null;
+  const unit = currency === "KRW" ? "원" : "";
+  const text = (value) => `${fx(value)}${unit}`;
+  const low = rows.reduce((a, b) => (b.fx < a.fx ? b : a));
+  const high = rows.reduce((a, b) => (b.fx > a.fx ? b : a));
+  let compare = "그보다 높습니다";
+  if (fx(s.eval_fx) === fx(s.avg_buy_fx)) compare = "그와 같습니다";
+  else if (s.eval_fx < s.avg_buy_fx) compare = "그보다 낮습니다";
+  return (
+    `${qty(s.buys, 0)}번 평균 매수 환율은 ${text(s.avg_buy_fx)}` +
+    `(가장 쌀 때 ${text(low.fx)} ${low.date}, 가장 비쌀 때 ${text(high.fx)} ${high.date})이고, ` +
+    `평가 환율 ${text(s.eval_fx)}이 ${compare}.`
+  );
+}
+
+/**
+ * 상자 아래 글 조각 [{text, strong}] (틀에 숫자를 넣은 사실 문장, 결정 d62). 한 문단에 띄어 잇는다.
+ * 1) 수익 줄이 둘 이상이고 환율 효과 글·종목 통화·매수일(횟수·첫날·끝날)이 모두 같으면 굵은
+ *    "환율 효과는 4개 종목 모두 −75만원으로 같습니다."와 그 이유 (같은 날 같은 돈을 바꿨을 때만 맞다).
+ * 2) 평균 매수 환율 문장. 종목마다 다르면 줄마다 종목 코드를 앞에 붙인다.
+ * 환율 변동 제외(includeFx false, 결정 d75)면 1)의 이유와 2)의 비교가 틀린 말이라 그 대신 안내 두 조각.
+ * 수익 줄이 없으면 [].
+ */
+export function profitNotes(results, currency, { includeFx = true } = {}) {
+  const rows = profitResults(results, currency);
+  if (!rows.length) return [];
+  if (!includeFx) {
+    return [
+      { text: "환율 변동 제외로 계산했습니다.", strong: true },
+      {
+        text:
+          "통화가 다른 종목은 지금 환율 대신 그날까지의 평균 매수 환율로 평가해 " +
+          "환율 효과가 0입니다.",
+        strong: false,
+      },
+    ];
+  }
+  const notes = [];
+  const same = (key) => new Set(rows.map(key)).size === 1;
+  const fxEffect = (r) => signedMoney(r.summary.fx_effect, currency);
+  const buyDays = (r) => `${r.summary.buys}|${r.summary.first_buy}|${r.summary.last_buy}`;
+  if (rows.length > 1 && same(fxEffect) && same((r) => r.currency) && same(buyDays)) {
+    notes.push({
+      text: `환율 효과는 ${qty(rows.length, 0)}개 종목 모두 ${fxEffect(rows[0])}으로 같습니다.`,
+      strong: true,
+    });
+    notes.push({
+      text: `같은 날 같은 ${investLabel(currency)}를 ${assetLabel(rows)}로 바꿨기 때문입니다.`,
+      strong: false,
+    });
+  }
+  const sentences = rows
+    .map((r) => ({ symbol: r.symbol, text: avgFxSentence(r, currency) }))
+    .filter((e) => e.text !== null);
+  if (new Set(sentences.map((e) => e.text)).size === 1) {
+    notes.push({ text: sentences[0].text, strong: false });
+  } else {
+    for (const e of sentences) notes.push({ text: `${e.symbol} ${e.text}`, strong: false });
+  }
+  return notes;
+}
+
+// ---------- 얼마에 샀나 (F-14, 계산 규칙 9-1) ----------
+
+export const NO_BUYS = "산 날이 없어 매수 가격 분포가 없습니다";
+
+/**
+ * 산 회차: buys 가운데 lot_return_pct가 null이 아닌 줄 (상세 설계 4절, 결정 d58). 레버리지 전환에서
+ * 쉰 날은 빠진다. qty는 4자리로 반올림해 아주 적게 산 회차가 0으로 보일 수 있어 qty로 가리지 않는다.
+ */
+function boughtRows(result) {
+  return (result.buys ?? []).filter((b) => present(b.lot_return_pct));
+}
+
+/** 상자 위 글: "60번 매수 가격의 분포 (달러, 분할 반영)". 산 회차가 없으면 횟수 없이. */
+export function buyPriceIntro(result) {
+  const count = boughtRows(result).length;
+  const lead = count ? `${qty(count, 0)}번 ` : "";
+  return `${lead}매수 가격의 분포 (${investLabel(result.currency)}, 분할 반영)`;
+}
+
+/** 막대 경계 글. 원화는 원 단위 정수, 그 밖은 칸 너비가 1 이상이면 정수, 아니면 소수 2자리. */
+function edgeLabel(value, currency, step) {
+  if (currency === "KRW") return money(value, "KRW", { short: false });
+  const digits = step >= 1 ? 0 : 2;
+  const text = value.toLocaleString("ko-KR", {
+    minimumFractionDigits: digits,
+    maximumFractionDigits: digits,
+  });
+  return currency === "USD" ? `$${text}` : `${text} ${currency}`;
+}
+
+/**
+ * 매수 가격 분포 (F-14 얼마에 샀나). 산 회차의 buys[].price(종목 통화, 분할 반영)를 bins칸 막대로 센다.
+ * - 칸 경계는 시안: lo = 가장 낮은 가격 내림, hi = max(가장 높은 가격, 평가 가격) × 1.02 올림.
+ *   칸은 [from, to)라 경계에 걸린 가격은 위 칸이다. filled는 칸 위 끝이 평가 가격 이하인 칸(색칠).
+ * - height는 가장 많은 칸 기준(소수 3자리), 세로선 left는 lo~hi 비율(소수 4자리). 선이 오른쪽 끝
+ *   (0.8 넘음)에 가까우면 flip(글을 선 왼쪽에)이다. 평단가가 없으면 avg는 null.
+ * 산 회차가 없으면 null.
+ */
+export function buyPriceDist(result, { bins = 12 } = {}) {
+  const rows = boughtRows(result);
+  if (!rows.length) return null;
+  const s = result.summary;
+  const currency = result.currency;
+  const prices = rows.map((b) => b.price);
+  const lo = Math.floor(Math.min(...prices));
+  const hi = Math.ceil(Math.max(...prices, s.eval_price) * 1.02);
+  const span = hi - lo;
+  const step = span / bins;
+  const edge = (k) => lo + (span * k) / bins;
+  const counts = Array(bins).fill(0);
+  for (const p of prices) counts[Math.min(bins - 1, Math.floor(((p - lo) * bins) / span))] += 1;
+  const most = Math.max(...counts);
+  const label = (value) => edgeLabel(value, currency, step);
+  const list = counts.map((count, k) => {
+    const from = edge(k);
+    const to = edge(k + 1);
+    return {
+      count,
+      from,
+      to,
+      filled: to <= s.eval_price,
+      height: Number((count / most).toFixed(3)),
+      title: `${label(from)} ~ ${label(to)}: ${qty(count, 0)}번`,
+    };
+  });
+  const line = (value, name) => {
+    const left = Number(((value - lo) / span).toFixed(4));
+    return { left, label: `${name} ${price(value, currency)}`, flip: left > 0.8 };
+  };
+  const avg = present(s.avg_cost_asset) ? line(s.avg_cost_asset, "평단가") : null;
+  const now = line(s.eval_price, "지금");
+  const marks = [avg?.label, now.label].filter(Boolean).join(", ");
+  return {
+    count: rows.length,
+    lo,
+    hi,
+    loLabel: label(lo),
+    hiLabel: label(hi),
+    bins: list,
+    avg,
+    now,
+    aria:
+      `${result.symbol} 매수 가격 분포 그래프. ${label(lo)} ~ ${label(hi)}를 ${bins}칸으로 나눈 ` +
+      `칸별 횟수 ${counts.join(", ")}. ${marks}.`,
+  };
+}
+
+/**
+ * 분포 아래 글: 싸게 산 횟수(analysis.buys_below_*, 산 회차만 센다, 결정 d58)와 가장 싸게·비싸게 산
+ * 날(산 회차에서, 같은 가격이면 앞 날짜). 평단가가 없으면 "평단가보다" 부분을 뺀다. 산 회차가 없으면 null.
+ */
+export function buyPriceText(result) {
+  const rows = boughtRows(result);
+  if (!rows.length) return null;
+  const s = result.summary;
+  const a = result.analysis ?? {};
+  const currency = result.currency;
+  const low = rows.reduce((x, b) => (b.price < x.price ? b : x));
+  const high = rows.reduce((x, b) => (b.price > x.price ? b : x));
+  const belowAvg = present(s.avg_cost_asset)
+    ? `, ${qty(a.buys_below_avg_cost, 0)}번은 평단가보다 싸게`
+    : "";
+  return (
+    `${qty(rows.length, 0)}번 중 ${qty(a.buys_below_eval_price, 0)}번은 ` +
+    `지금 가격보다 싸게${belowAvg} 샀습니다. ` +
+    `가장 싸게 산 날은 ${low.date} ${price(low.price, currency)}, ` +
+    `가장 비싸게 산 날은 ${high.date} ${price(high.price, currency)}입니다. ` +
+    "색칠한 막대는 지금 가격보다 싸게 산 구간입니다."
+  );
 }

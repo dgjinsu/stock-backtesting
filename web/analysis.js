@@ -1,19 +1,26 @@
 // 분석 탭(F-14)을 그린다: 탭 맨 위 한 줄 → 묶음 상자들 → 탭 끝 안내.
 // 글과 좌표는 analysisdata.js(DOM 없음)가 만들고, 여기서는 요소만 만든다. app.js와 charts.js는
 // import하지 않는다 (색 자리는 slotOf로 받는다). 모듈 상태가 없어 다시 계산하면 통째로 새로 그린다
-// (달마다 상자의 고른 종목은 그 상자 안에만 있다).
+// (달마다·얼마에 샀나 상자의 고른 종목은 그 상자 안에만 있다).
 
 import {
+  NO_BUYS,
   NO_MONTHS,
   RISK_COLUMNS,
   analysisIntro,
   analysisNotes,
+  buyPriceDist,
+  buyPriceIntro,
+  buyPriceText,
   drawdownAria,
   drawdownChart,
   drawdownLegend,
   monthsGrid,
   monthsIntro,
   monthsStats,
+  profitIntro,
+  profitNotes,
+  profitRows,
   riskIntro,
   riskRow,
   yearsFoot,
@@ -32,8 +39,15 @@ export function analysisPanel(data, slotOf) {
   return [
     h("p", { class: "an-intro", text: analysisIntro(data.params) }),
     riskBox(data, slotOf),
-    // 두 줄 격자: 연도별 → (#64 수익 분해) → 달마다 → (#64 얼마에 샀나) 순서 (시안)
-    h("div", { class: "an-grid" }, yearsBox(data, slotOf), monthsBox(data, slotOf)),
+    // 두 줄 격자: 연도별 → 수익 분해 → 달마다 → 얼마에 샀나 순서 (시안). 수익 상자가 없으면 당긴다
+    h(
+      "div",
+      { class: "an-grid" },
+      yearsBox(data, slotOf),
+      profitBox(data, slotOf),
+      monthsBox(data, slotOf),
+      buyPriceBox(data, slotOf),
+    ),
     h("ul", { class: "an-notes" }, ...analysisNotes(data).map((text) => h("li", { text }))),
   ];
 }
@@ -319,6 +333,151 @@ function monthsBox(data, slotOf) {
       ...(stats
         ? [heatTable(result, months), statsList(stats)]
         : [h("p", { class: "an-empty", text: NO_MONTHS })]),
+    );
+  };
+  render();
+  return section;
+}
+
+// ---------- 수익은 어디서 왔나 (F-14, 계산 규칙 9-4) ----------
+
+/** 금액 글. 손익 색은 보이는 값의 부호다. */
+function toned(text, tone) {
+  return h("span", { class: tone || null, text });
+}
+
+/**
+ * 수익 상자. 종목 통화가 투자 통화와 다른 종목이 없으면 null (상자 없음, 9-4).
+ * 응답 params.include_fx가 false면 환율 변동 제외 글로 쓴다 (F-24, 결정 d75). 없으면 켬이다.
+ */
+function profitBox(data, slotOf) {
+  const { results, params } = data;
+  const rows = profitRows(results, params.currency);
+  if (!rows.length) return null;
+  const options = { includeFx: params.include_fx !== false };
+  const notes = profitNotes(results, params.currency, options);
+  return analysisBox(
+    {
+      id: "an-profit-h",
+      title: "수익은 어디서 왔나",
+      intro: profitIntro(results, params.currency, options),
+    },
+    h(
+      "ul",
+      { class: "pf-list" },
+      ...rows.map((row) => {
+        const slot = slotOf(row.symbol);
+        const bar = h("div", { class: "pf-bar" });
+        bar.style.width = `${(row.width * 100).toFixed(2)}%`;
+        bar.style.background = `var(--c${slot + 1})`;
+        return h(
+          "li",
+          { class: "pf-row" },
+          h("span", { class: "pf-sym" }, swatch(slot, 18), row.symbol),
+          h(
+            "div",
+            { class: "pf-mid" },
+            h("div", { class: "pf-track", "aria-hidden": "true" }, bar),
+            h(
+              "p",
+              { class: "pf-sub" },
+              "주가 효과 ",
+              toned(row.price, row.priceTone),
+              " · 환율 효과 ",
+              toned(row.fx, row.fxTone),
+            ),
+          ),
+          h(
+            "strong",
+            { class: row.tone ? `pf-total ${row.tone}` : "pf-total" },
+            h("span", { class: "sr", text: "손익 " }),
+            row.total,
+          ),
+        );
+      }),
+    ),
+    notes.length
+      ? h(
+          "p",
+          { class: "an-callout" },
+          ...notes.flatMap((note, i) => [
+            i ? " " : null,
+            note.strong ? h("strong", { text: note.text }) : note.text,
+          ]),
+        )
+      : null,
+  );
+}
+
+// ---------- 얼마에 샀나 (F-14, 계산 규칙 9-1) ----------
+
+/** 평단가·지금 가격 세로선. 글이 오른쪽 끝에 가까우면(flip) 선 왼쪽에 둔다. */
+function priceLine(line, kind) {
+  const el = h(
+    "div",
+    { class: `bp-line ${kind}`, "aria-hidden": "true" },
+    h("span", { class: line.flip ? "bp-tag flip" : "bp-tag", text: line.label }),
+  );
+  el.style.left = `${(line.left * 100).toFixed(2)}%`;
+  return el;
+}
+
+function buyPriceChart(result, dist, slot) {
+  const bars = dist.bins.map((bin) => {
+    const bar = h(
+      "div",
+      { class: "bp-bar", title: bin.title },
+      h("span", { class: "bp-n", text: bin.count ? bin.count.toLocaleString("ko-KR") : "" }),
+    );
+    bar.style.setProperty("--h", String(bin.height));
+    if (bin.filled) bar.style.background = `var(--c${slot + 1})`;
+    return bar;
+  });
+  return [
+    h(
+      "div",
+      { class: "bp-chart", role: "img", "aria-label": dist.aria },
+      h("div", { class: "bp-bars" }, ...bars),
+      dist.avg ? priceLine(dist.avg, "avg") : null,
+      priceLine(dist.now, "now"),
+    ),
+    h(
+      "div",
+      { class: "bp-ends", "aria-hidden": "true" },
+      h("span", { text: dist.loLabel }),
+      h("span", { text: dist.hiLabel }),
+    ),
+    h("p", { class: "bp-text", text: buyPriceText(result) }),
+  ];
+}
+
+/** 얼마에 샀나 상자: 고른 종목 하나의 매수 가격 분포. 고르기는 달마다 상자와 따로다. */
+function buyPriceBox(data, slotOf) {
+  const { results } = data;
+  const section = h("section", { class: "box", "aria-labelledby": "an-buys-h" });
+  let symbol = results[0]?.symbol;
+  const render = () => {
+    const result = results.find((r) => r.symbol === symbol);
+    if (!result) return;
+    const dist = buyPriceDist(result);
+    const picker =
+      results.length > 1
+        ? segButtons(
+            results.map((r) => ({ key: r.symbol, label: r.symbol, slot: slotOf(r.symbol) })),
+            (item) => item.key === symbol,
+            (item) => {
+              symbol = item.key;
+              keepFocus(section, render);
+            },
+            "매수 가격 종목",
+          )
+        : null;
+    section.replaceChildren(
+      h("div", { class: "box-head" }, h("h3", { id: "an-buys-h", text: "얼마에 샀나" }), picker),
+      h("p", { class: "hint box-note", text: buyPriceIntro(result) }),
+      dist
+        ? h("div", { class: "box-body bp-body" }, ...buyPriceChart(result, dist, slotOf(symbol)))
+        : h("p", { class: "an-empty", text: NO_BUYS }),
     );
   };
   render();
