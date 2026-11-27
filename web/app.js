@@ -23,8 +23,10 @@ import {
   validate as validateCond,
 } from "./conditions.js";
 import { analysisPanel } from "./analysis.js";
-import { restCount, sparkline } from "./chartdata.js";
-import { buysSection, chartSection, clearCharts, csvButton } from "./charts.js";
+import { buysSection, csvButton } from "./buys.js";
+import { cardBuysText, headerBuysText } from "./buysdata.js";
+import { sparkline } from "./chartdata.js";
+import { chartSection, clearCharts } from "./charts.js";
 import { h, icon, keepFocus, svgEl, swatch } from "./dom.js";
 import {
   advancedText,
@@ -627,15 +629,7 @@ function renderFailure(message, retry = true) {
 function header(data) {
   const results = data.results;
   const params = data.params;
-  const buys = new Set(
-    results.map((r) => `${r.summary.buys}|${r.summary.first_buy}|${r.summary.last_buy}`),
-  );
-  const first = results[0].summary;
-  const counts = results.map((r) => r.summary.buys);
-  const buyText =
-    buys.size === 1
-      ? `종목마다 ${first.buys.toLocaleString("ko-KR")}회 매수 (${first.first_buy} ~ ${first.last_buy})`
-      : `매수 ${Math.min(...counts)}~${Math.max(...counts)}회 (종목마다 다름)`;
+  const buyText = headerBuysText(results); // 쉰 매수일이 있으면 "종목마다 매수일 60회 (…)" (#68)
   const latest = results
     .map((r) => r.data_through)
     .sort()
@@ -837,7 +831,6 @@ function card(result, params, chart) {
       )
     : kvCell(`${investLabel(invest)} 평단가`, "종목 통화 그대로", { light: true });
   const leftover = s.leftover_cash > 0 ? ` · 남은 현금 ${price(s.leftover_cash, cur)}` : "";
-  const rests = restCount(result.buys); // 사지 않은 회차: 레버리지 전환에서 쉰 날 등 (#41)
   return h(
     "article",
     { class: "card" },
@@ -901,8 +894,7 @@ function card(result, params, chart) {
       h(
         "dd",
         {},
-        `${s.buys.toLocaleString("ko-KR")}회 `,
-        rests ? `(${rests.toLocaleString("ko-KR")}회 쉼) ` : null,
+        `${cardBuysText(result)} `, // "60회", 쉰 매수일이 있으면 "매수일 60회 (15회 쉼)" (#41, #68)
         h("span", { class: "muted", text: `${s.first_buy} ~ ${s.last_buy}` }),
       ),
       h("dt", { text: "최고 · 최저 수익률" }),

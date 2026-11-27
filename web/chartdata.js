@@ -1,12 +1,10 @@
-// 그래프 데이터, 매수 내역 미리보기, CSV를 만드는 순수 함수 (F-07, F-08, F-12, F-13). DOM 없음.
+// 그래프 데이터, 매수 내역 열과 쉰 회차 판정, CSV를 만드는 순수 함수 (F-07, F-08, F-12, F-13). DOM 없음.
 
 import { money } from "./format.js";
 
 /** 종목 선 모양. 색(--c1~--c8)과 함께 종목에 붙는다 (상세 설계 5절). */
 export const DASHES = ["", "7 4", "2 3", "10 3 2 3", "12 4", "4 4", "1 4", "8 3 1 3"];
 
-const HEAD_ROWS = 6;
-const TAIL_ROWS = 2;
 const DAY_MS = 86_400_000;
 const BOM = "\uFEFF"; // 엑셀이 UTF-8로 읽게 하는 표시
 
@@ -48,17 +46,6 @@ export function investedLines(chart, symbols) {
   return same && lines.length ? [{ symbol: null, values: lines[0].values }] : lines;
 }
 
-/** 매수 내역 처음 화면: 앞 6회와 마지막 2회. no는 1부터 센 회차. */
-export function previewRows(rows) {
-  const numbered = rows.map((row, i) => ({ no: i + 1, row }));
-  if (rows.length <= HEAD_ROWS + TAIL_ROWS) return { head: numbered, tail: [], hidden: 0 };
-  return {
-    head: numbered.slice(0, HEAD_ROWS),
-    tail: numbered.slice(-TAIL_ROWS),
-    hidden: rows.length - HEAD_ROWS - TAIL_ROWS,
-  };
-}
-
 function investName(currency) {
   return currency === "KRW" ? "원화" : currency === "USD" ? "달러" : currency;
 }
@@ -82,9 +69,13 @@ export const BUY_COLUMNS = [
 /** 산 수량이 0인 회차(쉰 매수일)의 표시. 매수 내역 표의 산 수량 칸에 쓴다 (#41). */
 export const REST_LABEL = "쉼";
 
-/** 사지 않은 회차인지: 레버리지 전환에서 쉰 날(F-17), 정수 주만에서 한 주 값이 모자란 날. */
+/**
+ * 사지 않은 회차인지: 레버리지 전환에서 쉰 날(F-17), 정수 주만에서 한 주 값이 모자란 날.
+ * lot_return_pct가 null이면 쉼이다 (상세 설계 4절, 결정 d76). qty는 4자리로 반올림해 아주 적게 산 회차가
+ * 0으로 보일 수 있어 보지 않는다. 그 필드가 없는 응답이면 qty 0으로 본다.
+ */
 export function isRest(row) {
-  return row.qty === 0;
+  return row.lot_return_pct === undefined ? row.qty === 0 : row.lot_return_pct === null;
 }
 
 /** 쉰 회차 수. */
@@ -94,16 +85,18 @@ export function restCount(buys) {
 
 /**
  * 매수 내역 표 위 "쉼" 설명과 회차 수. 쉰 회차가 없으면 null. params는 API 응답의 params다.
- * 매수 규칙에서 쉬는 것은 레버리지 전환뿐이고(9-6: 다른 규칙은 늘 조금이라도 산다), 기본 규칙에서는
- * 정수 주만 살 때 모은 돈이 한 주 값보다 적은 날이다 (4절: 남는 돈은 다음 매수에 보탠다).
+ * 레버리지 전환은 기준 종목 문구, 기본 규칙에 정수 주만이면 한 주 값이 모자란 날 문구(4절: 남는 돈은 다음
+ * 매수에 보탠다)이고, 그 밖의 규칙에서 쉰 줄이 생기면 일반 문구다 (9-6: 다른 규칙은 늘 조금이라도 산다).
  */
 export function restNote(params, buys) {
   const rests = restCount(buys);
   if (!rests) return null;
-  const why =
-    params.rule === "switch"
-      ? `기준 종목 ${params.switch_ref}가 ${params.ma_days}일선 아래라 사지 않고 현금으로 모은 매수일`
-      : "모은 돈이 한 주 값보다 적어 사지 않고 다음 매수에 보탠 매수일";
+  let why = "사지 않은 매수일";
+  if (params.rule === "switch") {
+    why = `기준 종목 ${params.switch_ref}가 ${params.ma_days}일선 아래라 사지 않고 현금으로 모은 매수일`;
+  } else if ((params.rule ?? "none") === "none" && params.fractional === false) {
+    why = "모은 돈이 한 주 값보다 적어 사지 않고 다음 매수에 보탠 매수일";
+  }
   const n = (v) => v.toLocaleString("ko-KR");
   return `${REST_LABEL}: ${why} · ${n(buys.length)}회 중 ${n(rests)}회`;
 }
