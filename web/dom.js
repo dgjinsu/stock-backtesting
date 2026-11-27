@@ -1,4 +1,4 @@
-// DOM을 만드는 작은 도우미. 화면 모듈(app.js, charts.js, analysis.js)이 같이 쓴다.
+// DOM을 만드는 작은 도우미. 화면 모듈(app.js, charts.js, analysis.js, strategy.js)이 같이 쓴다.
 
 import { DASHES } from "./chartdata.js";
 
@@ -121,4 +121,26 @@ export function icon(paths, size = 16) {
     svg.append(path);
   }
   return svg;
+}
+
+const ALERT_ICONS = {
+  bad: [
+    "M12 8v5",
+    "M12 16.5v.5",
+    "M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z",
+  ],
+  info: ["M12 11v6", "M12 7.5v.5", "M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18z"],
+};
+
+/**
+ * F-10 알림 상자 (app.js alerts와 같은 마크업). kind는 bad(빨강)·warn(노랑)·info(파랑), title은 굵게,
+ * detail은 그 뒤 글, extra는 상자 안 끝에 더할 요소(다시 시도 버튼 등)다. 빨강은 role="alert".
+ */
+export function alertBox(kind, { title, detail }, ...extra) {
+  return h(
+    "div",
+    { class: `alert ${kind}`, role: kind === "bad" ? "alert" : null },
+    icon(ALERT_ICONS[kind] ?? ALERT_ICONS.bad, 18),
+    h("div", {}, h("strong", { text: title }), detail ? ` ${detail}` : null, ...extra),
+  );
 }

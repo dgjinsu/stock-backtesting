@@ -43,11 +43,13 @@ import {
 } from "./format.js";
 import { highlights, summaryParts } from "./insights.js";
 import { isSearchShortcut, searchScrollDelta, shortcutAria, shortcutLabel } from "./keys.js";
+import { clearStrategy, showStrategy, strategyPanel } from "./strategy.js";
 import {
   SORT_HINT,
   afterTax,
   avgInvestNote,
   avgInvestTip,
+  basisNote,
   bestIndexes,
   compareColumns,
   costNotice,
@@ -606,6 +608,7 @@ function signClass(value) {
 
 function renderFailure(message, retry = true) {
   clearCharts();
+  clearStrategy();
   resultView.shown = null; // 탭이 없으니 조건 패널을 편다 (보던 탭은 다음 결과에 쓴다)
   layoutPanel();
   $("empty").hidden = true;
@@ -1031,6 +1034,7 @@ function notice(data) {
     .at(-1);
   // 종목 통화가 다른 쌍과, 양도세를 켠 달러 투자면 양도세용 USDKRW=X (#39)
   const fxText = fxNote(data.results, data.params);
+  const basis = basisNote(data.results, data.params); // 레버리지 전환을 전날 종가로 판단한 종목 (결정 d29)
   const splits = data.results.flatMap((r) =>
     r.notes.length
       ? [`${r.symbol} ${r.notes.map((n) => n.replace(" 분할 반영", "")).join("·")}`]
@@ -1046,6 +1050,7 @@ function notice(data) {
       h("li", {
         text: `데이터: Yahoo Finance 일별 종가(비공식), ${latest} 종가 기준.${fxText ? ` ${fxText}` : ""}`,
       }),
+      basis ? h("li", { text: basis }) : null,
       h("li", {
         text: `${splits.length ? `주식 분할은 반영했습니다 (${splits.join(", ")}). ` : ""}배당은 반영하지 않았습니다.`,
       }),
@@ -1091,7 +1096,7 @@ function renderResult(data) {
       chartSection(data, slotOf),
     ),
     tabPanel("analysis", ...analysisPanel(data, slotOf)),
-    tabPanel("strategy", comingSoon("strategy")),
+    tabPanel("strategy", ...strategyPanel(data, slotOf, resultView.shown)),
     tabPanel("buys", buysSection(data, slotOf)),
     notice(data),
   );
@@ -1141,20 +1146,6 @@ function insightsSection(data) {
 // ---------- 결과 탭과 조건 패널 접기 (F-11) ----------
 
 const TAB_LABELS = { summary: "요약", analysis: "분석", strategy: "전략 비교", buys: "매수 내역" };
-
-/** 아직 만들지 않은 탭의 안내 (결정 d41). 전략 비교는 F-15에서 채운다. */
-const COMING = {
-  strategy: "전략 비교 탭에서는 같은 돈을 넣되 사는 규칙만 다른 전략 5가지를 나란히 비교합니다.",
-};
-
-function comingSoon(key) {
-  return h(
-    "div",
-    { class: "empty" },
-    h("p", { class: "empty-title", text: "다음 단계에서 채웁니다" }),
-    h("p", { class: "muted", text: COMING[key] }),
-  );
-}
 
 /** WAI-ARIA 탭 목록. 고른 탭만 Tab 키로 가고, ←/→(Home/End)로 옮기면 바로 그 탭을 연다. */
 function tabList() {
@@ -1219,6 +1210,8 @@ function showTab() {
     $(`tabpanel-${key}`).hidden = !on;
   }
   layoutPanel();
+  // 전략 비교는 탭을 열 때 /api/strategy를 부른다 (결정 보드 d63). 저장했으면 다시 부르지 않는다
+  if (resultView.tab === "strategy") showStrategy();
 }
 
 /**

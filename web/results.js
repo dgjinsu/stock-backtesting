@@ -1,7 +1,7 @@
 // 결과 카드·비교 표·결과 아래 안내의 DOM 없는 부분 (F-12, F-20, F-10). node --test로 시험한다.
 // 비교 표 열, 정렬, 열마다 가장 좋은 값, 원금 아래·세후 손익 글자, 환율·비용 안내.
 
-import { RULE_MA_DAYS } from "./conditions.js";
+import { RULE_MA_DAYS, RULE_SWITCH_REF } from "./conditions.js";
 import {
   fx,
   investLabel,
@@ -13,6 +13,7 @@ import {
   shownMoney,
   signedMoney,
 } from "./format.js";
+import { josa } from "./insights.js";
 
 /** 비교 표 위 안내 (시안 v2). */
 export const SORT_HINT = "열 제목을 누르면 정렬 · 굵은 값은 그 열에서 가장 좋은 값";
@@ -346,4 +347,37 @@ export function costNotice(tax) {
   return tax
     ? `양도세는 끝날짜에 한 번에 판다고 보고 어림한 값입니다. 환전 비용은 반영하지 않았습니다. ${fee}`
     : `세금과 환전 비용은 반영하지 않았습니다. ${fee}`;
+}
+
+/**
+ * 레버리지 전환이 기준 종목의 어느 날 종가·이평선을 봤는지 (계산 규칙 9-6, 결정 d29). basis는 API의
+ * switch_ref.basis, symbols는 그 basis인 종목들, ref는 기준 종목, maDays는 이평선 기간이다.
+ * same_day는 "같은 날 종가로 판단", previous_day는 거래소가 달라 앞선 거래일을 봤다는 문장이다.
+ * 모르는 basis면 null.
+ */
+export function basisText(basis, symbols, ref, maDays) {
+  if (basis === "same_day") return "같은 날 종가로 판단";
+  if (basis !== "previous_day") return null;
+  const names = symbols.join("·");
+  return (
+    `${names}${josa(symbols.at(-1) ?? "", "은/는")} ${ref}${josa(ref, "과/와")} 거래소가 달라 ` +
+    `매수일보다 앞선 마지막 거래일의 ${ref} 종가·${maDays}일선으로 판단했습니다.`
+  );
+}
+
+/**
+ * 요약 탭 고정 안내(F-10)에 더할 기준 종목 basis 한 줄. 레버리지 전환(rule switch) 결과에 previous_day인
+ * 종목이 있을 때만 그 종목들의 basisText, 아니면 null. params는 API 응답의 params다.
+ */
+export function basisNote(results, params) {
+  if (params.rule !== "switch") return null;
+  const previous = results.filter((r) => r.switch_ref?.basis === "previous_day");
+  if (!previous.length) return null;
+  const ref = previous[0].switch_ref.symbol ?? params.switch_ref ?? RULE_SWITCH_REF;
+  return basisText(
+    "previous_day",
+    previous.map((r) => r.symbol),
+    ref,
+    params.ma_days ?? RULE_MA_DAYS,
+  );
 }

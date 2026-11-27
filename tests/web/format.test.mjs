@@ -22,6 +22,7 @@ import {
   shortDate,
   shortMonth,
   shownMoney,
+  shownPrice,
   signedMoney,
   times,
 } from "../../web/format.js";
@@ -292,6 +293,62 @@ test("price: 달러는 1보다 작으면 4자리, 원은 정수", () => {
   assert.equal(price(0.5, "USD"), "$0.5000");
   assert.equal(price(76_325, "KRW"), "76,325원");
   assert.equal(price(null, "USD"), "—");
+});
+
+// ---------- 화면에 보이는 가격 (#65): 전략 카드 평단가의 가장 좋은 값을 견주는 자리 ----------
+
+/** price가 보여 주는 자리. 원은 정수, 그 밖은 소수 2자리(1보다 작으면 4자리). */
+const SHOWN_PRICES = [
+  { id: "달러 $37.9743 → $37.97 (9-8 기본 적립 평단가)", value: 37.9743, cur: "USD", want: 37.97 },
+  { id: "달러 1보다 작으면 소수 4자리 ($0.12345)", value: 0.12345, cur: "USD", want: 0.1235 },
+  { id: "원화는 원 단위 (76,241.62원)", value: 76_241.62, cur: "KRW", want: 76_242 },
+  {
+    id: "원화 76,241.1205원 (v2.switch_cross_exchange)",
+    value: 76_241.1205,
+    cur: "KRW",
+    want: 76_241,
+  },
+  {
+    id: "그 밖의 통화는 달러와 같은 자리 (1,234.567 JPY)",
+    value: 1_234.567,
+    cur: "JPY",
+    want: 1_234.57,
+  },
+];
+
+for (const { id, value, cur, want } of SHOWN_PRICES) {
+  test(`shownPrice: ${id}`, () => {
+    assert.equal(shownPrice(value, cur), want);
+  });
+}
+
+test("shownPrice: 값이 없으면 null", () => {
+  assert.equal(shownPrice(null, "USD"), null);
+  assert.equal(shownPrice(undefined, "KRW"), null);
+});
+
+test("shownPrice: 그 값을 price로 쓰면 원래 값의 price 글과 같다", () => {
+  for (const { value, cur } of SHOWN_PRICES) {
+    assert.equal(price(shownPrice(value, cur), cur), price(value, cur), `${value} ${cur}`);
+  }
+});
+
+test("shownPrice: price 글이 같은 두 값만 같은 값이다", () => {
+  const pairs = [
+    [36.0893, 36.0912, "USD"], // 둘 다 $36.09 (전략 카드 같은 값 굵게)
+    [36.0893, 36.9473, "USD"], // $36.09, $36.95
+    [0.12345, 0.12349, "USD"], // 둘 다 $0.1235
+    [76_241.1205, 76_241.4, "KRW"], // 둘 다 76,241원
+    [76_241.1205, 76_241.62, "KRW"], // 76,241원, 76,242원
+  ];
+  for (const [a, b, cur] of pairs) {
+    const sameText = price(a, cur) === price(b, cur);
+    assert.equal(
+      shownPrice(a, cur) === shownPrice(b, cur),
+      sameText,
+      `${price(a, cur)} / ${price(b, cur)}`,
+    );
+  }
 });
 
 test("qty: 소수 2자리까지, 정수는 정수로", () => {
