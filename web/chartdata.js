@@ -255,14 +255,16 @@ function coord(value) {
  * - y는 값이 클수록 위이고, 범위에 0을 넣어 0% 선(zeroY)이 늘 상자 안에 있다. 위아래 pad만큼 띄운다.
  * - null은 건너뛰고, 빈 자리 뒤 첫 점에서 선을 새로 시작한다 (첫 매수 전 날짜는 null이다).
  * - area는 선 아래를 바닥(height)까지 채우는 면이다. 빈 자리로 나뉜 조각마다 따로 닫는다 (B 카드).
+ * - domain([min, max])을 주면 값에서 범위를 잡지 않고 그 범위로 y를 정한다. 여러 선이 같은 세로축을
+ *   쓸 때다 (분석 탭 낙폭 그래프, F-14). 주지 않으면(null) 위처럼 값과 0으로 잡는다.
  * 돌려주는 값: { path, area, zeroY, last(마지막 null 아닌 값), min, max }. 그릴 값이 없으면 null.
  */
-export function sparkline(values, { width = 300, height = 48, pad = 2 } = {}) {
+export function sparkline(values, { width = 300, height = 48, pad = 2, domain = null } = {}) {
   const points = (values ?? []).flatMap((v, i) => (v === null || v === undefined ? [] : [i]));
   if (!points.length) return null;
   const present = points.map((i) => values[i]);
-  const min = Math.min(0, ...present);
-  const max = Math.max(0, ...present);
+  const min = domain ? domain[0] : Math.min(0, ...present);
+  const max = domain ? domain[1] : Math.max(0, ...present);
   const n = values.length;
   const xOf = (i) => (n === 1 ? width / 2 : (i / (n - 1)) * width);
   const yOf = (v) =>

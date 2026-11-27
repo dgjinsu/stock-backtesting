@@ -218,3 +218,13 @@ export function amountPreview(cond) {
   const total = n > 1 ? ` · ${n}종목 합계 ${money(count * cond.amount * n, cond.currency)}` : "";
   return `약 ${count.toLocaleString("ko-KR")}회 · 종목당 ${each}${total}`;
 }
+
+/** 짧은 날짜 (분석 탭 표, F-14): "2022-12-28" → "22-12-28". */
+export function shortDate(iso) {
+  return iso.slice(2, 10);
+}
+
+/** 짧은 연-월 (분석 탭 표, F-14): "2022-09-19" → "22-09". */
+export function shortMonth(iso) {
+  return iso.slice(2, 7);
+}
