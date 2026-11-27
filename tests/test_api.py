@@ -1832,3 +1832,249 @@ def test_switch_ref_data_through_is_last_trading_day_on_or_before_end(
     (2026-11-23)을 그대로 적지 않는다. 같은 모델(SwitchRefOut)이라 두 API 모두에 붙는다 (이슈 #59 (라))."""
     ref = _switch_ref_of(api, endpoint, end=end)
     assert ref == {"symbol": "QQQ", "basis": "same_day", "stale": False, "data_through": want}
+
+
+# ---------- 매수 내역 두 열, 산 매수만 세는 싸게 산 횟수, 날마다 평가금 (F-14·F-16, 이슈 #62) ----------
+
+# 9-8 매수 내역 1·14·60회(buys[0]·[13]·[59])의 그날 수익률·이 회차 지금 (결정 d59). 날짜 키 순서가 회차 순서다
+BUY_ROWS: dict[str, dict[str, float]] = V2["buy_rows"]
+BUY_ROW_INDEXES = (0, 13, 59)
+# 9-8 매수 규칙 결과의 산 횟수(qty > 0인 줄 수)와 싸게 산 횟수 (결정 d58)
+RULE_BOUGHT: dict[str, dict[str, int]] = V2["rule_bought"]
+# 상세 설계 4절 buys 예의 키
+BUY_KEYS = {
+    "date",
+    "price",
+    "fx",
+    "qty",
+    "cum_qty",
+    "avg_cost_asset",
+    "avg_cost_invest",
+    "invested",
+    "return_pct",
+    "lot_return_pct",
+}
+# 상세 설계 4절 daily 모양 (결정 d60)
+DAILY_KEYS = {"dates", "value", "invested", "return_pct"}
+V2_DATA_THROUGH = "2026-11-23"  # 7절: 9-8 끝날짜 2026-11-24의 평가 가격은 2026-11-23 종가
+# 7절 매일 10만원 사례의 주기·금액. 9-8 기간에 넣으면 마지막 거래일 2026-11-23이 매수일이다
+DAILY_REQUEST: dict[str, Any] = {
+    "freq": DAILY_CASE["freq"],
+    "anchor": DAILY_CASE["anchor"],
+    "amount": DAILY_CASE["amount"],
+}
+
+
+def _without_daily(body: dict[str, Any]) -> dict[str, Any]:
+    """응답에서 params와 results[].daily를 뺀 나머지. include_daily가 다른 두 응답을 비교할 때 쓴다."""
+    rest = {key: value for key, value in body.items() if key != "params"}
+    rest["results"] = [
+        {key: value for key, value in result.items() if key != "daily"}
+        for result in body["results"]
+    ]
+    return rest
+
+
+# 매수 내역 두 열 (9-1, 결정 d59)
+
+
+def test_backtest_v2_reference_case_buys_return_and_lot_return_match_v2_buy_rows(api: Api) -> None:
+    """9-8: buys[0] 2021-12-01 0.00 / 93.09, buys[13] 2023-01-03 −33.54 / 340.54, buys[59] 2026-11-02
+    107.23 / −9.19 (±0.01%p). 줄 키는 상세 설계 4절 buys 예와 같고, 두 열은 소수 2자리 %다 (5절 끝)."""
+    buys = _result(_backtest(api.client), "QLD")["buys"]
+    assert len(buys) == METRICS["buys"]
+    assert set(buys[0]) == BUY_KEYS
+    assert [buys[k]["date"] for k in BUY_ROW_INDEXES] == list(BUY_ROWS)
+    for k in BUY_ROW_INDEXES:
+        row, want = buys[k], BUY_ROWS[buys[k]["date"]]
+        assert row["return_pct"] == pytest.approx(want["return_pct"], abs=0.01), row["date"]
+        assert row["lot_return_pct"] == pytest.approx(want["lot_return_pct"], abs=0.01), row["date"]
+    for row in buys:
+        assert row["return_pct"] == round(row["return_pct"], 2), row["date"]
+        assert row["lot_return_pct"] == round(row["lot_return_pct"], 2), row["date"]
+
+
+@pytest.mark.parametrize(
+    ("changes", "last_day_buy"),
+    [({}, False), ({"rule": "switch"}, False), (DAILY_REQUEST, True)],
+    ids=["monthly", "monthly-switch", "daily-last-day-buy"],
+)
+def test_backtest_buys_return_pct_equals_chart_return_pct_on_buy_days(
+    api: Api, changes: dict[str, Any], last_day_buy: bool
+) -> None:
+    """그날 수익률은 그 매수일의 수익률 추이 값이라 chart.dates에 있는 매수일은 chart.series.QLD.return_pct와
+    같다 (상세 설계 4절). 레버리지 전환은 남은 현금이 들고, 매일 매수는 마지막 거래일이 매수일이라 평가 환율로
+    다시 평가한 값(그래프 끝)과 같다."""
+    body = _backtest(api.client, **changes)
+    chart = body["chart"]
+    on_chart = dict(zip(chart["dates"], chart["series"]["QLD"]["return_pct"], strict=True))
+    buys = _result(body, "QLD")["buys"]
+    shown = [row for row in buys if row["date"] in on_chart]
+    assert shown
+    for row in shown:
+        assert row["return_pct"] == on_chart[row["date"]], row["date"]
+    if last_day_buy:
+        assert buys[-1]["date"] == chart["dates"][-1] == V2_DATA_THROUGH
+        assert buys[-1]["return_pct"] == _result(body, "QLD")["summary"]["return_pct"]
+
+
+def test_backtest_switch_rest_rows_have_null_lot_return_and_numeric_return_pct(api: Api) -> None:
+    """레버리지 전환에서 산 수량 0인 15줄은 lot_return_pct가 null이고 return_pct(그날 수익률)는 숫자다.
+    산 45줄은 lot_return_pct가 있다 (결정 d59, v2.rule_bought.switch)."""
+    buys = _result(_backtest(api.client, rule="switch"), "QLD")["buys"]
+    rests = [row for row in buys if row["qty"] == 0]
+    assert len(rests) == V2["strategies"]["switch"]["rule_days"]
+    for row in rests:
+        assert row["lot_return_pct"] is None, row["date"]
+        assert isinstance(row["return_pct"], float), row["date"]
+    bought = [row for row in buys if row["qty"] > 0]
+    assert len(bought) == RULE_BOUGHT["switch"]["bought"]
+    assert all(row["lot_return_pct"] is not None for row in bought)
+
+
+# 싸게 산 횟수 (9-1, 결정 d58)
+
+
+@pytest.mark.parametrize("rule", list(RULE_BOUGHT), ids=list(RULE_BOUGHT))
+def test_backtest_rule_buy_counts_skip_zero_qty_days_match_v2_rule_bought(
+    api: Api, rule: str
+) -> None:
+    """9-8: 레버리지 전환은 쉰 15번을 빼고 산 45번 중 36번·12번, 이평선 아래 2배·위 절반은 쉰 날이 없어
+    60번 중 51번·22번 그대로다 (과열 때 절반 51번·23번). 산 횟수는 qty가 0보다 큰 buys 줄 수다."""
+    qld = _result(_backtest(api.client, rule=rule), "QLD")
+    want = RULE_BOUGHT[rule]
+    assert sum(1 for row in qld["buys"] if row["qty"] > 0) == want["bought"]
+    assert qld["analysis"]["buys_below_eval_price"] == want["buys_below_eval_price"]
+    assert qld["analysis"]["buys_below_avg_cost"] == want["buys_below_avg_cost"]
+
+
+# 날마다 평가금 include_daily (결정 d60)
+
+
+def test_backtest_request_without_include_daily_defaults_to_false() -> None:
+    """include_daily를 빼면 false다. 기존 요청이 그대로 돈다."""
+    request = schemas.BacktestRequest.model_validate(V2_BACKTEST)
+    assert request.include_daily is False
+
+
+@pytest.mark.parametrize("value", ["maybe", None], ids=["text", "null"])
+def test_backtest_non_boolean_include_daily_returns_422_without_yahoo(api: Api, value: Any) -> None:
+    """include_daily는 true 또는 false다. 아니면 422이고 항목은 include_daily, Yahoo는 부르지 않는다."""
+    response = _post(api.client, include_daily=value)
+    assert response.status_code == 422, response.text[:200]
+    details = response.json()["detail"]
+    assert any(d["field"] == "include_daily" for d in details), details
+    assert api.yahoo.calls == []
+
+
+def test_backtest_include_daily_true_returns_every_trading_day_from_first_buy_to_data_through(
+    api: Api,
+) -> None:
+    """9-8, include_daily true: QLD daily.dates는 1,250개로 summary.trading_days·chart.total_days와 같고,
+    첫날 2021-12-01(첫 매수일), 끝날 2026-11-23(data_through)이다. 마지막 value는 summary.value와 ±1원이다."""
+    body = _backtest(api.client, include_daily=True)
+    assert body["params"]["include_daily"] is True
+    qld = _result(body, "QLD")
+    daily, summary = qld["daily"], qld["summary"]
+    assert set(daily) == DAILY_KEYS
+    dates = daily["dates"]
+    assert len(dates) == METRICS["trading_days"] == summary["trading_days"]
+    assert len(dates) == body["chart"]["total_days"]
+    assert (dates[0], dates[-1]) == (V2_FIRST_BUY, V2_DATA_THROUGH)
+    assert dates[-1] == qld["data_through"]
+    assert dates == sorted(set(dates))
+    for column in ("value", "invested", "return_pct"):
+        assert len(daily[column]) == len(dates), column
+    assert daily["value"][-1] == pytest.approx(summary["value"], abs=1)
+    assert daily["invested"][-1] == pytest.approx(summary["invested"], abs=1)
+    assert daily["return_pct"][-1] == pytest.approx(summary["return_pct"], abs=0.01)
+
+
+@pytest.mark.parametrize("rule", ["none", "switch"], ids=["none", "switch"])
+def test_backtest_include_daily_matches_chart_and_buys_with_chart_digits(
+    api: Api, rule: str
+) -> None:
+    """daily는 줄이지 않은 날마다 값이다. 그래프에 남은 날은 chart.series.QLD와 같은 값이고, 매수일의
+    return_pct는 buys[].return_pct와 같다. 자리수는 chart와 같다: 원화 금액은 정수, return_pct는 소수 2자리."""
+    body = _backtest(api.client, include_daily=True, rule=rule)
+    qld, chart = _result(body, "QLD"), body["chart"]
+    daily, series = qld["daily"], chart["series"]["QLD"]
+    index = {day: i for i, day in enumerate(daily["dates"])}
+    assert set(chart["dates"]) <= set(index)
+    for column in CHART_COLUMNS:
+        assert [daily[column][index[day]] for day in chart["dates"]] == series[column], column
+    for row in qld["buys"]:
+        assert row["return_pct"] == daily["return_pct"][index[row["date"]]], row["date"]
+    assert all(v == round(v) for v in daily["value"] + daily["invested"])
+    assert all(v == round(v, 2) for v in daily["return_pct"])
+
+
+@pytest.mark.parametrize("case", ["missing", "false"], ids=["missing", "false"])
+def test_backtest_without_or_false_include_daily_has_null_daily_and_same_rest(
+    api: Api, case: str
+) -> None:
+    """include_daily를 빼거나 false면 results[].daily는 null이고, daily와 params를 뺀 나머지 응답은 true일 때와
+    같다. params에는 false를 채운다."""
+    request: dict[str, Any] = {"symbols": ["QQQ", "QLD"]}
+    on = _backtest(api.client, **request, include_daily=True)
+    off_changes: dict[str, Any] = {} if case == "missing" else {"include_daily": False}
+    off = _backtest(api.client, **request, **off_changes)
+    assert off["params"]["include_daily"] is False
+    assert on["params"] == {**off["params"], "include_daily": True}
+    for result in off["results"]:
+        assert result["daily"] is None, result["symbol"]
+    for result in on["results"]:
+        assert result["daily"] is not None, result["symbol"]
+    assert _without_daily(on) == _without_daily(off)
+
+
+def test_backtest_include_daily_late_symbol_starts_at_its_own_first_buy(api: Api) -> None:
+    """daily 범위는 그 종목의 첫 매수일부터 data_through까지다. QQQ 데이터가 2023-03부터면 QQQ daily는 그 첫
+    매수일부터라 함께 그린 그래프 날짜(chart.total_days)보다 짧고, QLD daily는 2021-12-01부터다. null은 없다."""
+    api.yahoo.extra["QQQ"] = payload_from("QQQ", LATE_FIRST_DAY)
+    body = _backtest(api.client, symbols=["QQQ", "QLD"], include_daily=True)
+    assert body["errors"] == []
+    for symbol in ("QQQ", "QLD"):
+        result = _result(body, symbol)
+        daily, summary = result["daily"], result["summary"]
+        assert daily["dates"][0] == summary["first_buy"], symbol
+        assert daily["dates"][-1] == result["data_through"], symbol
+        assert len(daily["dates"]) == summary["trading_days"], symbol
+        for column in ("value", "invested", "return_pct"):
+            assert None not in daily[column], (symbol, column)
+    qqq_daily = _result(body, "QQQ")["daily"]
+    assert qqq_daily["dates"][0] >= LATE_FIRST_DAY.isoformat()
+    assert len(qqq_daily["dates"]) < body["chart"]["total_days"]
+    assert _result(body, "QLD")["daily"]["dates"][0] == V2_FIRST_BUY
+
+
+def test_backtest_include_daily_unknown_symbol_fails_alone_and_others_keep_daily(api: Api) -> None:
+    """없는 종목은 errors에만 있고, 받은 종목은 daily를 그대로 받는다."""
+    body = _backtest(api.client, symbols=["QLD", "XXXX"], include_daily=True)
+    assert [r["symbol"] for r in body["results"]] == ["QLD"]
+    assert body["errors"] == [{"symbol": "XXXX", "message": "'XXXX' 종목을 찾을 수 없습니다."}]
+    assert len(_result(body, "QLD")["daily"]["dates"]) == METRICS["trading_days"]
+
+
+def test_backtest_include_daily_fx_failure_keeps_daily_of_symbol_without_fx(api: Api) -> None:
+    """USDKRW=X를 받지 못하면 달러 종목(QLD)은 환율 오류이고, 원화로 사는 한국 종목(005930.KS)은 환율이 필요
+    없어 daily까지 받는다. 기간은 9-8과 같아 첫 매수일은 2021-12-01이다."""
+    api.yahoo.missing.add("USDKRW=X")
+    body = _backtest(api.client, symbols=["QLD", "005930.KS"], include_daily=True)
+    assert body["errors"] == [{"symbol": "QLD", "message": FX_FAILED}]
+    samsung = _result(body, "005930.KS")
+    daily, summary = samsung["daily"], samsung["summary"]
+    assert daily["dates"][0] == summary["first_buy"]
+    assert len(daily["dates"]) == summary["trading_days"]
+    assert daily["value"][-1] == pytest.approx(summary["value"], abs=1)
+
+
+def test_backtest_include_daily_from_saved_data_equals_fresh_daily(api: Api) -> None:
+    """저장본만 있을 때(Yahoo 실패)도 daily를 싣고, 값은 새로 받았을 때와 같다. 결과는 stale이다."""
+    fresh = _result(_backtest(api.client, include_daily=True), "QLD")  # 저장본을 채운다
+    api.clock.now += 7 * 3600
+    api.yahoo.fail = True
+    saved = _result(_backtest(api.client, include_daily=True), "QLD")
+    assert saved["stale"] is True
+    assert saved["daily"] is not None
+    assert saved["daily"] == fresh["daily"]

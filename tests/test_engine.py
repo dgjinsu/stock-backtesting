@@ -1,6 +1,7 @@
 """계산 엔진(src/engine.py)을 기준값과 계산 규칙으로 확인한다. 네트워크 없이 fixture만 쓴다."""
 
 from bisect import bisect_right
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import date, timedelta
 from typing import Any
@@ -1227,3 +1228,209 @@ def test_simulate_with_rule_listed_after_start_is_flagged() -> None:
     got = _with_rule("ma_dip", start=date(2020, 1, 1))
     assert got.summary.listed_after_start is True
     assert got.summary.first_buy >= load_series("QLD").dates[0]
+
+
+# ---------- 이슈 #62: 매수 내역 두 열, 산 매수만 세는 싸게 산 횟수 (F-14·F-16, 9-1, 결정 d58·d59) ----------
+
+# 9-8 매수 내역 1·14·60회(buys[0]·[13]·[59])의 그날 수익률·이 회차 지금. 날짜 키 순서가 회차 순서다
+BUY_ROWS: dict[str, dict[str, float]] = V2["buy_rows"]
+BUY_ROW_INDEXES = (0, 13, 59)
+# 9-8 매수 규칙 결과의 산 횟수(qty > 0인 매수일 수)와 싸게 산 횟수
+RULE_BOUGHT: dict[str, dict[str, int]] = V2["rule_bought"]
+# 7절 "월15일 수수료 0.25%" 사례의 수수료 (비율 0.0025)
+FEE: float = next(c for c in EXPECTED["cases"] if CASE_IDS[c["name"]] == "monthly15-krw2m-fee0.25")[
+    "fee"
+]
+# 7절 매일 10만원 사례의 주기·금액. 9-8 기간에 넣으면 마지막 거래일 2026-11-23이 매수일이다
+DAILY_BUY: dict[str, Any] = {
+    "freq": DAILY_CASE["freq"],
+    "anchor": DAILY_CASE["anchor"],
+    "amount": float(DAILY_CASE["amount"]),
+}
+
+
+def _basic(**changes: Any) -> engine.SimResult:
+    """9-8 조건(QLD, 원화)을 기본 적립(simulate)으로. changes로 Params 항목을 바꾼다."""
+    result: engine.SimResult = _run("QLD", _v2_params(**changes))
+    return result
+
+
+# 9-8 조건을 매수 방식마다 계산한다. 이 회차 지금이 매수 방식과 상관없이 같은 식인지 볼 때 쓴다
+BUY_METHODS: dict[str, Callable[..., engine.SimResult]] = {
+    "fractional": _basic,
+    "whole-shares": lambda **changes: _basic(fractional=False, **changes),
+    "ma-dip": lambda **changes: _with_rule("ma_dip", **changes),
+    "ma-hot": lambda **changes: _with_rule("ma_hot", **changes),
+    "switch": lambda **changes: _with_rule("switch", **changes),
+}
+# 그날 수익률이 같은 날 daily 값인지 볼 결과. 남은 현금(정수 주·매수 규칙)과 쉰 날, 마지막 거래일 매수를 넣는다
+RETURN_PCT_CASES: dict[str, Callable[[], engine.SimResult]] = {
+    "monthly-fractional": _basic,
+    "monthly-fee0.25": lambda: _basic(fee=FEE),
+    "monthly-switch": lambda: _with_rule("switch"),
+    "daily-fractional": lambda: _basic(**DAILY_BUY),
+    "daily-whole-shares": lambda: _basic(fractional=False, **DAILY_BUY),
+    "daily-ma-dip": lambda: _with_rule("ma_dip", **DAILY_BUY),
+}
+LAST_DAY_BUY_CASES = [case for case in RETURN_PCT_CASES if case.startswith("daily-")]
+
+# 정수 주만 매월 1일 100원, 1~2월 150원·3~6월 400원 (손으로 셀 수 있는 사례). 1월 2일(현금 100원)과
+# 3~5월(150·250·350원)은 한 주 값이 모자라 사지 않는다. 2월 1일 150원·6월 3일 400원에 한 주씩 사서
+# 평단가 275원, 평가 가격 400원이다. 1월 2일은 둘보다 싸지만 사지 않은 날이다
+STEP_DAYS = _weekdays(date(2024, 1, 1), date(2024, 6, 28), frozenset({date(2024, 1, 1)}))
+STEP = Series("STEP", "KRW", STEP_DAYS, [150.0 if d.month <= 2 else 400.0 for d in STEP_DAYS])
+STEP_PARAMS = Params(
+    date(2024, 1, 1), date(2024, 6, 28), "monthly", 1, 100.0, "KRW", fractional=False
+)
+
+
+# 9-8 기준값
+
+
+@pytest.mark.parametrize(
+    "method", ["simulate", "with-rule-none"], ids=["simulate", "with-rule-none"]
+)
+def test_buy_rows_reference_case_return_and_lot_return_match_v2_buy_rows(method: str) -> None:
+    """9-8 매수 내역 두 열 (결정 d59): 1회 2021-12-01 0.00% / +93.09%, 14회 2023-01-03 −33.54% / +340.54%,
+    60회 2026-11-02 +107.23% / −9.19% (±0.01%p). 기본 적립은 simulate와 simulate_with_rule(none)이 같다."""
+    result = _basic() if method == "simulate" else _with_rule("none")
+    assert [result.buys[k].date.isoformat() for k in BUY_ROW_INDEXES] == list(BUY_ROWS)
+    for k in BUY_ROW_INDEXES:
+        row = result.buys[k]
+        want = BUY_ROWS[row.date.isoformat()]
+        assert row.return_pct == pytest.approx(want["return_pct"], abs=0.01), row.date
+        assert row.lot_return_pct == pytest.approx(want["lot_return_pct"], abs=0.01), row.date
+
+
+# 그날 수익률 (9-1, 5절)
+
+
+@pytest.mark.parametrize("case", list(RETURN_PCT_CASES), ids=list(RETURN_PCT_CASES))
+def test_buy_rows_return_pct_equals_daily_return_pct_on_buy_day(case: str) -> None:
+    """9-1 그날 수익률 = 그 매수일의 수익률 추이 값 (5절, 결정 d59). 새 공식이 아니라 같은 날 daily 값이라
+    정수 주·매수 규칙의 남은 현금도 들어가고, 쉰 날(qty 0)에도 값이 있다."""
+    result = RETURN_PCT_CASES[case]()
+    daily = {row.date: row.return_pct for row in result.daily}
+    for row in result.buys:
+        assert row.return_pct == pytest.approx(daily[row.date], abs=1e-6), row.date
+
+
+@pytest.mark.parametrize("case", LAST_DAY_BUY_CASES, ids=LAST_DAY_BUY_CASES)
+def test_buy_rows_last_trading_day_buy_return_pct_is_revalued_at_eval_fx(case: str) -> None:
+    """매일 매수면 마지막 거래일 2026-11-23이 매수일이다. 그날 수익률은 평가 환율(끝날짜 11-24 기준)로 다시
+    평가한 값이라 daily 마지막 값·summary.return_pct와 같다 (5절 끝). 그날 환율로 평가하면 약 0.02%p 다르다."""
+    result = RETURN_PCT_CASES[case]()
+    last = result.buys[-1]
+    assert last.date == result.daily[-1].date == result.summary.eval_date
+    # 이 테스트가 가려내는지: 마지막 매수일의 환율과 평가 환율이 다르다
+    assert engine.rate_on(load_series("USDKRW=X"), last.date) != result.summary.eval_fx
+    assert last.return_pct == pytest.approx(result.daily[-1].return_pct, abs=1e-6)
+    assert last.return_pct == pytest.approx(result.summary.return_pct, abs=1e-6)
+
+
+# 이 회차 지금 (9-1)
+
+
+@pytest.mark.parametrize("method", list(BUY_METHODS), ids=list(BUY_METHODS))
+def test_buy_rows_lot_return_with_fee_is_one_minus_fee_times_without_fee(method: str) -> None:
+    """9-1 이 회차 지금 (결정 d59): 그날 산 몫의 원가가 매수 가격 × 매수 환율 ÷ (1 − f)라서, 수수료 0.25%면
+    같은 회차의 (1 + 이 회차 지금)이 수수료 0일 때의 (1 − 0.0025)배다. 정수 주·매수 규칙도 같은 식이다.
+    두 결과에서 모두 산 회차만 비교한다."""
+    run = BUY_METHODS[method]
+    base, with_fee = run(), run(fee=FEE)
+    assert [row.date for row in base.buys] == [row.date for row in with_fee.buys]
+    pairs = [
+        (b, f) for b, f in zip(base.buys, with_fee.buys, strict=True) if b.qty > 0 and f.qty > 0
+    ]
+    assert pairs
+    for b, f in pairs:
+        assert b.lot_return_pct is not None, b.date
+        assert f.lot_return_pct is not None, b.date
+        want = (1 + b.lot_return_pct / 100) * (1 - FEE)
+        assert 1 + f.lot_return_pct / 100 == pytest.approx(want, abs=1e-4), b.date
+
+
+@pytest.mark.parametrize(
+    "method",
+    [m for m in BUY_METHODS if m != "fractional"],
+    ids=[m for m in BUY_METHODS if m != "fractional"],
+)
+def test_buy_rows_lot_return_on_bought_day_is_same_across_buy_methods(method: str) -> None:
+    """이 회차 지금은 그날 가격·환율, 평가 가격·환율, 수수료로만 정해진다 (9-1). 정수 주·매수 규칙에서 산
+    회차는 같은 날 기본 적립(소수점) 회차와 값이 같다. 앞서 모은 현금으로 산 몫도 그 매수일의 환율로 본다."""
+    basic = {row.date: row.lot_return_pct for row in _basic().buys}
+    bought = [row for row in BUY_METHODS[method]().buys if row.qty > 0]
+    assert bought
+    for row in bought:
+        assert row.lot_return_pct == pytest.approx(basic[row.date], abs=1e-6), row.date
+
+
+def test_buy_rows_switch_rest_days_have_no_lot_return() -> None:
+    """레버리지 전환에서 쉰 15줄(qty 0)은 이 회차 지금이 None이고 산 45줄은 값이 있다 (9-1, 결정 d59).
+    쉰 줄의 그날 수익률은 값이 있다 (위 daily 테스트의 monthly-switch)."""
+    buys = _with_rule("switch").buys
+    assert [row.lot_return_pct is None for row in buys] == [row.qty == 0 for row in buys]
+    assert sum(1 for row in buys if row.qty == 0) == V2["strategies"]["switch"]["rule_days"]
+    bought = sum(1 for row in buys if row.lot_return_pct is not None)
+    assert bought == RULE_BOUGHT["switch"]["bought"]
+
+
+def test_buy_rows_whole_shares_unaffordable_days_have_no_lot_return() -> None:
+    """정수 주만 매일 10만원이면 QLD 한 주 값이 모자라 사지 않은 날(qty 0)이 있다. 그날은 이 회차 지금이
+    None이고, 산 날은 값이 있다."""
+    buys = _basic(fractional=False, **DAILY_BUY).buys
+    assert any(row.qty == 0 for row in buys)  # 이 테스트가 가려내는지: 못 산 날이 있다
+    assert [row.lot_return_pct is None for row in buys] == [row.qty == 0 for row in buys]
+
+
+def test_buy_rows_whole_shares_step_prices_lot_return_only_on_bought_days() -> None:
+    """손으로 센 사례 (STEP): 못 산 1월·3~5월은 None, 2월 1일(150원에 사서 지금 400원)은 +166.67%, 6월 3일
+    (400원에 사서 지금 400원)은 0%다. 수수료 0이라 (1 − f)는 1이다."""
+    buys = simulate(STEP, None, STEP_PARAMS).buys
+    assert [row.qty for row in buys] == [0, 1, 0, 0, 0, 1]
+    assert [row.lot_return_pct for row in buys] == [
+        None,
+        pytest.approx(166.67, abs=0.01),
+        None,
+        None,
+        None,
+        pytest.approx(0.0, abs=0.01),
+    ]
+
+
+# 싸게 산 횟수 (9-1, 결정 d58)
+
+
+def test_analyze_whole_shares_zero_qty_days_are_not_counted_as_cheap_buys() -> None:
+    """9-1: 산 수량이 0인 매수일은 싸게 산 횟수에 세지 않는다. STEP의 1월 2일(150원)은 평가 가격 400원과
+    평단가 275원보다 싸지만 사지 않았으니 빠지고, 2월 1일 한 번만 센다 (산 2번 중 1번·1번)."""
+    result = simulate(STEP, None, STEP_PARAMS)
+    assert (result.summary.avg_cost_asset, result.summary.eval_price) == (275.0, 400.0)
+    a = analyze(result, STEP, None, STEP_PARAMS.end, tax_fx=1.0)
+    assert (a.buys_below_eval_price, a.buys_below_avg_cost) == (1, 1)
+
+
+@pytest.mark.parametrize("rule", list(RULE_BOUGHT), ids=list(RULE_BOUGHT))
+def test_analyze_rule_result_buy_counts_skip_zero_qty_days_match_v2_rule_bought(rule: str) -> None:
+    """9-8 (결정 d58): 이평선 아래 2배·위 절반은 60번 중 51번·22번, 과열 때 절반은 51번·23번, 레버리지 전환은
+    쉰 15번을 빼고 산 45번 중 36번·12번이다. 산 횟수는 qty가 0보다 큰 buys 줄 수다."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    sim = _with_rule(rule)
+    a = analyze(sim, asset, fx, _v2_params().end, tax_fx=1.0)
+    want = RULE_BOUGHT[rule]
+    assert sum(1 for row in sim.buys if row.qty > 0) == want["bought"]
+    assert (a.buys_below_eval_price, a.buys_below_avg_cost) == (
+        want["buys_below_eval_price"],
+        want["buys_below_avg_cost"],
+    )
+
+
+def test_analyze_rule_none_buy_counts_stay_v2_metrics() -> None:
+    """기본 적립은 쉰 날이 없어 simulate_with_rule(none)도 v2.metrics 그대로 60번 중 51번·24번이다."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    a = analyze(_with_rule("none"), asset, fx, _v2_params().end, tax_fx=1.0)
+    m = V2["metrics"]
+    assert (a.buys_below_eval_price, a.buys_below_avg_cost) == (
+        m["buys_below_eval_price"],
+        m["buys_below_avg_cost"],
+    )
