@@ -8,6 +8,8 @@ import {
   avgInvestNote,
   avgInvestReason,
   avgInvestTip,
+  basisNote,
+  basisText,
   bestIndexes,
   compareColumns,
   costNotice,
@@ -18,11 +20,6 @@ import {
   staleAlerts,
   underwaterText,
 } from "../../web/results.js";
-import * as resultsModule from "../../web/results.js";
-
-// #65에서 더하는 함수. 아직 없을 때 이 파일의 다른 테스트까지 막지 않게 모듈 이름공간에서 꺼낸다
-const { basisNote, basisText } = resultsModule;
-
 const MINUS = "−"; // U+2212
 
 /**

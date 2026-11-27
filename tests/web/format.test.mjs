@@ -22,14 +22,11 @@ import {
   shortDate,
   shortMonth,
   shownMoney,
+  shownPrice,
   signedMoney,
   times,
 } from "../../web/format.js";
-import * as formatModule from "../../web/format.js";
 import { ALL_START } from "../../web/conditions.js";
-
-// #65에서 더하는 함수. 아직 없을 때 이 파일의 다른 테스트까지 막지 않게 모듈 이름공간에서 꺼낸다
-const { shownPrice } = formatModule;
 
 // ---------- 주기·통화 글자와 접힌 조건 줄 (F-11) ----------
 

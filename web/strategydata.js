@@ -228,7 +228,9 @@ export function strategyStale(response) {
   const alerts = [];
   if (result.stale) {
     alerts.push({
-      title: `${result.symbol}는 ${result.data_through}까지 저장된 데이터로 계산했습니다.`,
+      title:
+        `${result.symbol}${josa(result.symbol, "은/는")} ` +
+        `${result.data_through}까지 저장된 데이터로 계산했습니다.`,
       detail: "Yahoo Finance에서 새로 받지 못했습니다.",
     });
   }
@@ -257,7 +259,10 @@ export function failureOf(reply, symbol) {
   if (reply.json.result) return null;
   const errors = reply.json.errors ?? [];
   const line = errors.find((e) => e.symbol === symbol) ?? errors[0];
-  return { title: `${symbol}는 계산하지 못했습니다.`, detail: line?.message ?? "" };
+  return {
+    title: `${symbol}${josa(symbol, "은/는")} 계산하지 못했습니다.`,
+    detail: line?.message ?? "",
+  };
 }
 
 /** 저장해 둘 응답: 200이고 결과가 있고 오류가 없을 때만 (실패와 기준 종목만 실패는 다시 부른다). */
@@ -269,7 +274,8 @@ export function canStore(reply) {
 
 /**
  * 요청 묶음 (결정 보드 d63). send(body)는 /api/strategy를 부르고 연결 실패면 null, 아니면
- * { status, json }을 준다. pick(key, body)는 { reply, latest }를 준다.
+ * { status, json }을 준다. pick(key, body)는 { reply, latest }를 준다. select(key)는 보내지 않고 고른 key만
+ * 알린다 (이미 그렸거나 저장한 key로 돌아갈 때. 그러면 가는 중인 앞 요청은 latest가 아니다).
  * - 저장한 key면 보내지 않는다. 가는 중인 같은 key면 그 요청을 같이 기다린다.
  * - 응답은 canStore일 때만 저장한다. 늦게 온 앞 요청도 저장한다 (다시 고르면 바로 그린다).
  * - latest는 응답이 왔을 때 그 key가 마지막으로 고른 key인지다. 그리는 쪽은 latest일 때만 그린다.
@@ -280,6 +286,9 @@ export function strategyRequests(send) {
   let lastKey = null;
   return {
     saved: (key) => saved.get(key),
+    select(key) {
+      lastKey = key;
+    },
     async pick(key, body) {
       lastKey = key;
       if (saved.has(key)) return { reply: saved.get(key), latest: lastKey === key };

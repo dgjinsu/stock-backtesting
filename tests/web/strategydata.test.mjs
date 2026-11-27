@@ -861,3 +861,31 @@ test("strategyRequests: 고른 적 없는 key는 saved가 비었다", () => {
   const { send } = fakeSend();
   assert.equal(strategyRequests(send).saved(K200) ?? null, null);
 });
+
+test("strategyRequests: 20이 가는 중에 이미 그린 200으로 돌아가면(select) 늦게 온 20은 latest가 아니다", async () => {
+  // strategy.js showStrategy가 부르는 순서 그대로: 그린 key·저장한 key로 돌아갈 때는 pick 없이 select만 한다
+  const { send, calls } = fakeSend();
+  const requests = strategyRequests(send);
+  const first = requests.pick(K200, BODY_200);
+  await flush();
+  calls[0].resolve(OK_200);
+  await first;
+
+  const pending = requests.pick(K20, BODY_20);
+  await flush();
+  requests.select(K200);
+  calls[1].resolve(OK_20);
+  const late = await pending;
+  assert.equal(late.latest, false);
+  assert.deepEqual(requests.saved(K20), OK_20); // 늦게 왔어도 저장한다
+  assert.equal(calls.length, 2);
+});
+
+test("strategyRequests: select는 보내지 않는다", async () => {
+  const { send, calls } = fakeSend();
+  const requests = strategyRequests(send);
+  requests.select(K200);
+  await flush();
+  assert.equal(calls.length, 0);
+  assert.equal(requests.saved(K200) ?? null, null);
+});

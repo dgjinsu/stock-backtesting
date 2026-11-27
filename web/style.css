@@ -2071,3 +2071,7 @@ select.field,
   font-size: 13px;
   color: var(--muted);
 }
+/* 다시 시도 뒤 포커스를 옮기는 본문 (tabindex -1). 마우스로 눌렀을 때는 테두리를 두지 않는다 */
+.st-body:focus:not(:focus-visible) {
+  outline: none;
+}

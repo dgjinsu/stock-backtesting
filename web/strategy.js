@@ -73,7 +73,7 @@ export function strategyPanel(data, slotOf, shown) {
     refLine: h("p", { class: "st-ref", text: REF_LINE }),
     refNote: h("p", { class: "hint st-ref-note", hidden: true }),
     status: h("p", { class: "st-status", role: "status" }),
-    body: h("div", { class: "st-body" }),
+    body: h("div", { class: "st-body", tabindex: "-1" }),
   };
   active = view;
   renderPicks(view);
@@ -101,9 +101,15 @@ export function showStrategy() {
   const view = active;
   if (!view || view.disposed || !picks.symbol || !view.shown) return;
   const key = strategyKey(picks.symbol, picks.maDays);
-  if (view.drawnKey === key) return;
+  // 이미 그렸거나 저장한 key로 돌아가도 고른 key를 알린다. 가는 중인 앞 요청이 늦게 와도 그리지 않는다
+  view.requests.select(key);
+  if (view.drawnKey === key) {
+    setBusy(view, false);
+    return;
+  }
   const saved = view.requests.saved(key);
   if (saved) {
+    setBusy(view, false);
     draw(view, saved);
     view.drawnKey = key;
     return;
@@ -180,6 +186,14 @@ function renderPicks(view) {
 
 /** 응답을 그린다. 실패면 빨강 상자와 다시 시도를 두고 false. */
 function draw(view, reply, symbol = picks.symbol) {
+  // 다시 시도를 키보드로 눌렀으면 버튼이 사라져도 포커스가 body로 빠지지 않게 새 본문으로 옮긴다
+  const hadFocus = view.body.contains(document.activeElement);
+  const ok = drawBody(view, reply, symbol);
+  if (hadFocus) (view.body.querySelector(".st-retry") ?? view.body).focus();
+  return ok;
+}
+
+function drawBody(view, reply, symbol) {
   const failure = failureOf(reply, symbol);
   if (failure) {
     view.refLine.textContent = REF_LINE;
