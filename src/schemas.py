@@ -350,7 +350,8 @@ class StrategyResultOut(BaseModel):
     switch_ref: SwitchRefOut | None  # 기준 종목을 못 받으면 null
     strategies: StrategiesOut
     chart: StrategyChartOut
-    # "1"~"28", "31" → 평단가(종목 통화). 매수일이 없거나 정수 주로 한 주도 사지 못했으면 null
+    # "1"~"28", "31" → 평단가(종목 통화). 그 기준일로 매수일이 없거나, 정수 주로 한 주도 사지 못했거나,
+    # 그 기준일로 사는 날 환율이 없으면 null (결정 d56)
     anchor_sweep: dict[str, float | None]
     # "YYYY-MM" 오름차순 → 수익률(%)
     start_sweep: dict[str, float]
