@@ -1,21 +1,29 @@
 // web/analysisdata.js 분석 탭의 DOM 없는 부분 (F-14 얼마나 흔들렸나 #60, 연도별 결과·달마다
-// 얼마나 움직였나 #61). node --test로 돈다.
-// 함수 이름·반환 모양·규칙은 이슈 #60·#61의 설계 메모(architect)를 따른다.
+// 얼마나 움직였나 #61, 수익은 어디서 왔나·얼마에 샀나 #64). node --test로 돈다.
+// 함수 이름·반환 모양·규칙은 이슈 #60·#61·#64의 설계 메모(architect)를 따른다.
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 
 import {
+  NO_BUYS,
   NO_MONTHS,
   RISK_COLUMNS,
   analysisIntro,
   analysisNotes,
+  buyPriceDist,
+  buyPriceIntro,
+  buyPriceText,
   drawdownAria,
   drawdownChart,
   drawdownLegend,
+  fxIncluded,
   monthsGrid,
   monthsIntro,
   monthsStats,
+  profitIntro,
+  profitNotes,
+  profitRows,
   riskIntro,
   riskRow,
   yearsFoot,
@@ -1156,4 +1164,1086 @@ test("monthsStats: 오른·내린 달은 원래 값으로 센다 (+0.04는 오�
 
 test("monthsStats: 끝난 달이 없어 months가 비면 null", () => {
   assert.equal(monthsStats({}), null);
+});
+
+// ---------- 수익은 어디서 왔나 (F-14, 계산 규칙 9-4, #64) ----------
+
+/** expected.json 7절 사례의 종목별 값 (buys·first_buy·last_buy·invested·value·평단가·평가 가격·환율). */
+function caseOf(name) {
+  const found = EXPECTED.cases.find((c) => c.name === name);
+  assert.ok(found, `expected.json에 ${name} 사례가 없다`);
+  return found.results;
+}
+
+/** 예시 4종목: 매월 1일 200만원, 2021-11-25 ~ 2026-11-24, 원화 (9-8과 같은 조건, 이슈 #64 완료 기준). */
+const KRW_CASE = caseOf("월1일_200만원_5년");
+
+/**
+ * 예시 조건의 매수일 60번 (2021-12 ~ 2026-11 매달 1일, 휴장이면 다음 거래일): 그달 며칠에 샀는지.
+ * 아래 환율·가격과 함께 fixture로 부른 /api/backtest(예시 조건) 응답의 buys[]에서 옮겼다.
+ */
+const BUY_DAYS = [
+  1, 3, 1, 1, 1, 2, 1, 1, 1, 1, 3, 1, 1, 3, 1, 1, 3, 1, 1, 3, 1, 1, 2, 1, 1, 2, 1, 1, 1, 1, 3, 1, 1,
+  3, 1, 1, 2, 2, 3, 3, 1, 1, 2, 1, 1, 2, 1, 3, 1, 2, 2, 2, 1, 1, 1, 1, 3, 1, 1, 2,
+];
+const BUY_DATES = monthKeys("2021-12", BUY_DAYS.length).map(
+  (month, i) => `${month}-${String(BUY_DAYS[i]).padStart(2, "0")}`,
+);
+
+/** 그날 환율 buys[].fx (원/달러). 같은 날 같은 원화를 바꾸므로 4종목이 같다 (9-4). */
+const BUY_FX = [
+  1182.86, 1187.78, 1205.12, 1200.93, 1214.5, 1262.53, 1241.74, 1287.71, 1302.28, 1342.26, 1439.23,
+  1424.67, 1279.8, 1270.1, 1232.15, 1321.6, 1305.48, 1337.17, 1321.74, 1315.3, 1277.93, 1324.64,
+  1351.94, 1350.16, 1296.66, 1293.54, 1333.91, 1335.2, 1345.31, 1385.46, 1382.1, 1380.29, 1367.92,
+  1337.55, 1315.33, 1372.93, 1399.86, 1473.52, 1456.78, 1459.8, 1471.96, 1423.75, 1381.99, 1348.5,
+  1391.51, 1392.94, 1403.15, 1427.17, 1465.62, 1443.64, 1448.8, 1438.5, 1503.33, 1474.01, 1506.84,
+  1548.61, 1435.7, 1366.62, 1356.84, 1325.52,
+];
+
+/** 그날 매수 가격 buys[].price (달러, 분할 반영). */
+const BUY_PRICES = {
+  QQQ: [
+    387.12, 401.68, 365.52, 341.49, 361.85, 318.48, 306, 282.13, 315.27, 299.4, 273.53, 275.11,
+    293.72, 264.48, 300.92, 291.2, 320.15, 322.19, 352.01, 370.29, 382.79, 377.59, 361.26, 356.96,
+    389.94, 402.59, 421.88, 445.61, 444.95, 421.52, 453.13, 481.92, 459.66, 461.81, 481.27, 487.43,
+    515.29, 510.23, 518.11, 497.05, 472.7, 481.68, 523.21, 546.99, 553.88, 565.62, 603.25, 632.08,
+    617.17, 613.12, 626.14, 608.09, 584.31, 674.15, 742.74, 725.17, 700.07, 707.64, 742.03, 681.09,
+  ],
+  QLD: [
+    42.32, 45.435, 37.295, 32.24, 35.935, 27.495, 24.965, 20.975, 25.98, 23.2, 19.195, 19.145,
+    21.49, 17.275, 22.155, 20.53, 24.66, 24.805, 29.37, 32.345, 34.32, 33.095, 30.15, 29.19, 34.555,
+    36.72, 40.03, 44.305, 43.945, 39.075, 44.845, 50.515, 45.445, 45.31, 48.925, 49.825, 55.285,
+    53.88, 55.115, 50.395, 45.135, 45.375, 53.17, 57.83, 58.935, 61.08, 69.26, 75.41, 71.35, 70.1,
+    72.73, 68.13, 62.49, 82.6, 99.63, 93.9, 86.62, 87.92, 96.24, 80.3,
+  ],
+  TQQQ: [
+    38.775, 42.7825, 31.505, 25.02, 28.965, 19.125, 16.14, 12.195, 16.655, 13.92, 10.33, 10.15,
+    11.845, 8.455, 12.195, 10.795, 14.03, 14.085, 18.005, 20.64, 22.48, 21.145, 18.235, 17.235,
+    22.12, 24.065, 27.25, 31.565, 30.97, 25.8, 31.57, 37.515, 31.68, 31.175, 34.71, 35.465, 41.24,
+    39.315, 40.36, 35.04, 29.31, 28.385, 35.805, 40.445, 41.46, 43.54, 52.43, 59.16, 54.05, 52.35,
+    55.1, 49.7, 43.23, 65.3, 86.04, 77.46, 67.96, 69.15, 78.73, 59.46,
+  ],
+  SOXL: [
+    63.16, 72.1, 45.91, 36.58, 36.29, 24.5, 23.71, 11.6, 20.01, 13.22, 9.7, 9.1, 13.5, 9.36, 16.8,
+    14.68, 17.81, 14.66, 22.16, 25.49, 28.53, 24.02, 19.08, 15.95, 23.07, 28.04, 32.45, 48.33,
+    47.99, 34.37, 48.59, 55.36, 35, 30.07, 33.83, 30.83, 30.2, 27.67, 25.61, 20.51, 15.95, 12.1,
+    16.9, 24.71, 24.08, 25.25, 36.86, 48.58, 41.31, 47.24, 65.2, 62.76, 52.26, 130.4, 227.03,
+    217.55, 116.71, 105.91, 153.69, 68.17,
+  ],
+};
+
+/**
+ * 예시 매수일마다 한 줄인 buys[] (상세 설계 4절)에서 두 묶음이 읽는 date·price·fx·lot_return_pct.
+ * 산 줄인지는 lot_return_pct가 null이 아닌지로만 가린다 (4절, 결정 d58). 산 줄의 값은 이 구역이
+ * 쓰지 않아 1로 둔다. skipped는 사지 않은 매수일(lot_return_pct null)이다.
+ */
+function exampleBuys(prices, { fx = BUY_FX, skipped = [] } = {}) {
+  return BUY_DATES.map((date, i) => ({
+    date,
+    price: prices[i],
+    fx: fx[i],
+    lot_return_pct: skipped.includes(date) ? null : 1,
+  }));
+}
+
+/** 손으로 만든 결과 한 줄 (상세 설계 4절 results[]): 두 묶음이 읽는 summary·analysis·buys만. */
+function holding(symbol, currency, summary, { buys = [], analysis = {} } = {}) {
+  return { symbol, name: `${symbol} 이름`, currency, summary, analysis, buys };
+}
+
+/** 결과 한 줄에서 summary 일부만 바꾼 것. */
+function withSummary(row, changes) {
+  return { ...row, summary: { ...row.summary, ...changes } };
+}
+
+/** 주가 효과. QQQ·TQQQ·SOXL은 expected.json에 없어 fixture 응답의 summary.price_effect에서 옮겼다. */
+const PRICE_EFFECT = {
+  QQQ: 65_805_493,
+  QLD: METRICS.price_effect,
+  TQQQ: 120_025_457,
+  SOXL: 83_383_114,
+};
+
+/** 싸게 산 횟수 [지금 가격보다, 평단가보다]. QLD는 expected.json, 나머지는 fixture 응답의 analysis. */
+const BELOW = {
+  QQQ: [53, 26],
+  QLD: [METRICS.buys_below_eval_price, METRICS.buys_below_avg_cost],
+  TQQQ: [47, 21],
+  SOXL: [41, 25],
+};
+
+/**
+ * 예시 조건 결과 한 줄. summary는 expected.json 사례 값이고 손익은 평가금 − 투자금(응답 summary.profit과
+ * 같다). 환율 효과·평균 매수 환율은 종목과 상관없어(9-4) v2.metrics(QLD) 값을 4종목에 쓴다
+ * (fixture 응답도 4종목 모두 −746,367원·1,352.57원).
+ */
+function exampleResult(symbol) {
+  const c = KRW_CASE[symbol];
+  const [belowEval, belowAvg] = BELOW[symbol];
+  return holding(
+    symbol,
+    "USD",
+    {
+      buys: c.buys,
+      first_buy: c.first_buy,
+      last_buy: c.last_buy,
+      avg_cost_asset: c.avg_cost_asset,
+      eval_price: c.eval_price,
+      eval_fx: c.eval_fx,
+      profit: c.value - c.invested,
+      price_effect: PRICE_EFFECT[symbol],
+      fx_effect: METRICS.fx_effect,
+      avg_buy_fx: METRICS.avg_buy_fx,
+    },
+    {
+      buys: exampleBuys(BUY_PRICES[symbol]),
+      analysis: { buys_below_eval_price: belowEval, buys_below_avg_cost: belowAvg },
+    },
+  );
+}
+
+const KRW4 = Object.fromEntries(Object.keys(BUY_PRICES).map((s) => [s, exampleResult(s)]));
+const KRW4_RESULTS = Object.values(KRW4);
+
+/**
+ * QQQ를 달러로 산 결과 (매월 1일 $1,500, expected.json "월1일_1500달러_5년"). 종목 통화가 투자 통화와
+ * 같아 환율 효과 0, 평균 매수 환율 null이다 (상세 설계 4절). 주가 효과는 fixture 응답(달러) 값이다.
+ */
+const USD_CASE = caseOf("월1일_1500달러_5년").QQQ;
+const USD_QQQ = holding(
+  "QQQ",
+  "USD",
+  {
+    buys: USD_CASE.buys,
+    first_buy: USD_CASE.first_buy,
+    last_buy: USD_CASE.last_buy,
+    avg_cost_asset: USD_CASE.avg_cost_asset,
+    eval_price: USD_CASE.eval_price,
+    eval_fx: USD_CASE.eval_fx,
+    profit: USD_CASE.value - USD_CASE.invested,
+    price_effect: 48_170.85,
+    fx_effect: 0,
+    avg_buy_fx: null,
+  },
+  { buys: exampleBuys(BUY_PRICES.QQQ, { fx: BUY_FX.map(() => USD_CASE.eval_fx) }) },
+);
+
+/**
+ * 같은 조건 rule=switch (QLD, QQQ 200일선 아래인 매수일은 쉰다). 쉰 매수일 15번은 fixture 응답
+ * (rule switch)의 buys에서 lot_return_pct가 null인 날이고, 매수일·가격·환율은 기본 적립과 같다.
+ * summary.buys는 쉰 날도 세어 60이다 (fixture 응답, 9-4). 평단가·평가금은 expected.json
+ * v2.strategies.switch, 싸게 산 횟수는 v2.rule_bought.switch, 주가 효과는 fixture 응답 값이다.
+ */
+const SWITCH = EXPECTED.v2.strategies.switch;
+const SWITCH_BOUGHT = EXPECTED.v2.rule_bought.switch;
+const SWITCH_SKIPPED = [
+  "2022-02-01",
+  "2022-03-01",
+  "2022-04-01",
+  "2022-05-02",
+  "2022-06-01",
+  "2022-07-01",
+  "2022-08-01",
+  "2022-09-01",
+  "2022-10-03",
+  "2022-11-01",
+  "2022-12-01",
+  "2023-01-03",
+  "2025-04-01",
+  "2025-05-01",
+  "2026-04-01",
+];
+const SWITCH_QLD = {
+  ...withSummary(KRW4.QLD, {
+    avg_cost_asset: SWITCH.avg_cost_asset,
+    profit: SWITCH.value - KRW_CASE.QLD.invested,
+    price_effect: 112_140_459,
+  }),
+  analysis: {
+    buys_below_eval_price: SWITCH_BOUGHT.buys_below_eval_price,
+    buys_below_avg_cost: SWITCH_BOUGHT.buys_below_avg_cost,
+  },
+  buys: exampleBuys(BUY_PRICES.QLD, { skipped: SWITCH_SKIPPED }),
+};
+
+/** 원화 종목을 원화로 산 결과: 통화가 같아 환율 효과 0, 평균 매수 환율 null (상세 설계 4절). */
+const KS_KRW = holding("005930.KS", "KRW", {
+  buys: 60,
+  price_effect: 50_000_000,
+  fx_effect: 0,
+  profit: 50_000_000,
+  avg_buy_fx: null,
+});
+
+/**
+ * 원화 종목을 달러로 산 결과 (3번). 환율은 원 1당 달러라 1보다 작다 (format.js fx는 유효숫자 4자리).
+ * 값은 문장 모양만 보려고 둔 것이다.
+ */
+const KS_USD = holding(
+  "005930.KS",
+  "KRW",
+  {
+    buys: 3,
+    first_buy: "2026-09-01",
+    last_buy: "2026-11-02",
+    eval_fx: 0.000744,
+    avg_buy_fx: 0.000741,
+    price_effect: 1234.5,
+    fx_effect: 12.34,
+    profit: 1246.84,
+  },
+  {
+    buys: [
+      { date: "2026-09-01", price: 71_000, fx: 0.000752, lot_return_pct: 1 },
+      { date: "2026-10-01", price: 74_500, fx: 0.000731, lot_return_pct: 1 },
+      { date: "2026-11-02", price: 76_200, fx: 0.000741, lot_return_pct: 1 },
+    ],
+  },
+);
+
+/** 엔화 종목을 원화로 산 결과 (종목 통화가 여럿인 경우를 보려고 둔 값). */
+const JP = holding("7203.T", "JPY", {
+  buys: 60,
+  price_effect: 3_000_000,
+  fx_effect: -500_000,
+  profit: 2_500_000,
+  avg_buy_fx: 9.12,
+});
+
+test("예시 매수일(테스트 도구): 60번이고 첫날·끝날이 expected.json과 같다. 가격·환율도 60개", () => {
+  assert.equal(BUY_DATES.length, KRW_CASE.QLD.buys);
+  assert.equal(BUY_DATES[0], KRW_CASE.QLD.first_buy);
+  assert.equal(BUY_DATES.at(-1), KRW_CASE.QLD.last_buy);
+  assert.ok(BUY_DATES.includes("2023-01-03") && BUY_DATES.includes("2026-07-01"));
+  assert.equal(BUY_FX.length, BUY_DATES.length);
+  for (const [symbol, prices] of Object.entries(BUY_PRICES)) {
+    assert.equal(prices.length, BUY_DATES.length, symbol);
+  }
+});
+
+test("SWITCH_QLD(테스트 도구): 쉰 날 15번(v2.strategies.switch.rule_days), 산 날 45번(v2.rule_bought)", () => {
+  assert.equal(SWITCH_SKIPPED.length, SWITCH.rule_days);
+  for (const date of SWITCH_SKIPPED) assert.ok(BUY_DATES.includes(date), date);
+  const bought = SWITCH_QLD.buys.filter((b) => b.lot_return_pct !== null);
+  assert.equal(bought.length, SWITCH_BOUGHT.bought);
+});
+
+// 위 글 (이슈 #64 할 일): "원화"는 투자 통화, "달러"는 수익 줄 종목 통화 이름 (여럿이면 "종목 통화")
+const KRW_VS_USD =
+  "원화 손익 = 주가 효과(달러로 번 돈 × 지금 환율) + " +
+  `환율 효과(산 달러를 지금 환율로 바꾼 값 ${MINUS} 넣은 원화)`;
+const PROFIT_INTRO_CASES = [
+  {
+    id: "원화로 달러 종목을 사면 원화 손익, 달러로 번 돈 (예시 4종목)",
+    results: KRW4_RESULTS,
+    currency: "KRW",
+    want: KRW_VS_USD,
+  },
+  {
+    id: "달러로 원화 종목을 사면 달러 손익, 원화로 번 돈",
+    results: [KS_USD],
+    currency: "USD",
+    want:
+      "달러 손익 = 주가 효과(원화로 번 돈 × 지금 환율) + " +
+      `환율 효과(산 원화를 지금 환율로 바꾼 값 ${MINUS} 넣은 달러)`,
+  },
+  {
+    id: "수익 줄의 종목 통화가 여럿이면 종목 통화",
+    results: [KRW4.QQQ, JP],
+    currency: "KRW",
+    want:
+      "원화 손익 = 주가 효과(종목 통화로 번 돈 × 지금 환율) + " +
+      `환율 효과(산 종목 통화를 지금 환율로 바꾼 값 ${MINUS} 넣은 원화)`,
+  },
+  {
+    id: "투자 통화와 같은 원화 종목은 수익 줄이 아니라 통화 이름에 들지 않는다",
+    results: [KRW4.QQQ, KS_KRW],
+    currency: "KRW",
+    want: KRW_VS_USD,
+  },
+];
+
+for (const { id, results, currency, want } of PROFIT_INTRO_CASES) {
+  test(`profitIntro: ${id}`, () => {
+    assert.equal(profitIntro(results, currency), want);
+  });
+}
+
+test("profitRows: 예시 4종목은 네 줄, 주가 효과 · 환율 효과 → 손익이 이슈 완료 기준(시안)과 같다", () => {
+  // QLD는 9-8 값 +106,570,957원 / −746,367원. 폭은 |손익| ÷ 가장 큰 |손익|(TQQQ), 소수 4자리
+  assert.deepEqual(profitRows(KRW4_RESULTS, "KRW"), [
+    {
+      symbol: "QQQ",
+      price: "+6,581만원",
+      priceTone: "pos",
+      fx: `${MINUS}75만원`,
+      fxTone: "neg",
+      total: "+6,506만원",
+      tone: "pos",
+      width: 0.5454,
+    },
+    {
+      symbol: "QLD",
+      price: "+1억 657만원",
+      priceTone: "pos",
+      fx: `${MINUS}75만원`,
+      fxTone: "neg",
+      total: "+1억 582만원",
+      tone: "pos",
+      width: 0.8872,
+    },
+    {
+      symbol: "TQQQ",
+      price: "+1억 2,003만원",
+      priceTone: "pos",
+      fx: `${MINUS}75만원`,
+      fxTone: "neg",
+      total: "+1억 1,928만원",
+      tone: "pos",
+      width: 1,
+    },
+    {
+      symbol: "SOXL",
+      price: "+8,338만원",
+      priceTone: "pos",
+      fx: `${MINUS}75만원`,
+      fxTone: "neg",
+      total: "+8,264만원",
+      tone: "pos",
+      width: 0.6928,
+    },
+  ]);
+});
+
+test("profitRows: 줄은 results 순서", () => {
+  const rows = profitRows([...KRW4_RESULTS].reverse(), "KRW");
+  assert.deepEqual(
+    rows.map((r) => r.symbol),
+    ["SOXL", "TQQQ", "QLD", "QQQ"],
+  );
+});
+
+test("profitRows: 손익은 summary.profit이다 (두 효과의 합과 1원 다를 수 있다, 상세 설계 4절)", () => {
+  // 합 9,999원이면 "+9,999원"이지만 손익 10,000원은 "+1만원"
+  const row = holding("QQQ", "USD", { price_effect: 5000, fx_effect: 4999, profit: 10_000 });
+  const [shown] = profitRows([row], "KRW");
+  assert.deepEqual([shown.price, shown.fx, shown.total], ["+5,000원", "+4,999원", "+1만원"]);
+});
+
+test("profitRows: QQQ를 달러로 산 결과는 줄이 없다 (종목 통화 = 투자 통화, 9-4, 이슈 완료 기준)", () => {
+  assert.deepEqual(profitRows([USD_QQQ], "USD"), []);
+});
+
+test("profitRows: 원화 종목만 원화로 사면 줄이 없다", () => {
+  assert.deepEqual(profitRows([KS_KRW], "KRW"), []);
+});
+
+test("profitRows: price_effect가 없는 옛 응답(v1)은 줄이 아니고, 폭은 남은 줄끼리 견준다", () => {
+  const old = { ...KRW4.TQQQ, summary: { ...KRW4.TQQQ.summary } };
+  delete old.summary.price_effect;
+  const rows = profitRows([KRW4.QQQ, old], "KRW");
+  assert.deepEqual(
+    rows.map((r) => [r.symbol, r.width]),
+    [["QQQ", 1]],
+  );
+});
+
+test("profitRows: 손실이면 폭은 |손익|, 세 값의 색은 보이는 값의 부호 (0원은 색 없음)", () => {
+  const loss = holding("LOSS", "USD", {
+    price_effect: -19_253_633,
+    fx_effect: -746_367,
+    profit: -20_000_000,
+  });
+  const gain = holding("GAIN", "USD", {
+    price_effect: 10_000_000,
+    fx_effect: 0,
+    profit: 10_000_000,
+  });
+  assert.deepEqual(profitRows([loss, gain], "KRW"), [
+    {
+      symbol: "LOSS",
+      price: `${MINUS}1,925만원`,
+      priceTone: "neg",
+      fx: `${MINUS}75만원`,
+      fxTone: "neg",
+      total: `${MINUS}2,000만원`,
+      tone: "neg",
+      width: 1,
+    },
+    {
+      symbol: "GAIN",
+      price: "+1,000만원",
+      priceTone: "pos",
+      fx: "0원",
+      fxTone: "",
+      total: "+1,000만원",
+      tone: "pos",
+      width: 0.5,
+    },
+  ]);
+});
+
+test("profitRows: 손익이 모두 0이면 폭 0 (가장 큰 |손익|이 0)", () => {
+  const flat = holding("FLAT", "USD", { price_effect: 0, fx_effect: 0, profit: 0 });
+  assert.deepEqual(profitRows([flat], "KRW"), [
+    {
+      symbol: "FLAT",
+      price: "0원",
+      priceTone: "",
+      fx: "0원",
+      fxTone: "",
+      total: "0원",
+      tone: "",
+      width: 0,
+    },
+  ]);
+});
+
+// 상자 글 (이슈 #64 완료 기준, 결정 d62). 조각은 한 <p>에 잇고 strong 조각만 굵게 쓴다
+const FX_SAME = `환율 효과는 4개 종목 모두 ${MINUS}75만원으로 같습니다.`;
+const FX_WHY = "같은 날 같은 원화를 달러로 바꿨기 때문입니다.";
+const AVG_FX_LEAD =
+  "60번 평균 매수 환율은 1,352.57원(가장 쌀 때 1,182.86원 2021-12-01, 가장 비쌀 때 1,548.61원 " +
+  "2026-07-01)이고, ";
+const AVG_FX = `${AVG_FX_LEAD}평가 환율 1,344.16원이 그보다 낮습니다.`;
+
+test("profitNotes: 예시 4종목은 굵은 첫 문장, 그 이유, 평균 매수 환율 문장 (이슈 완료 기준)", () => {
+  assert.deepEqual(profitNotes(KRW4_RESULTS, "KRW"), [
+    { text: FX_SAME, strong: true },
+    { text: FX_WHY, strong: false },
+    { text: AVG_FX, strong: false },
+  ]);
+});
+
+test("profitNotes: QQQ를 달러로 산 결과는 빈 목록 (상자가 없다)", () => {
+  assert.deepEqual(profitNotes([USD_QQQ], "USD"), []);
+});
+
+test("profitNotes: 레버리지 전환 QLD 하나는 평균 매수 환율 문장만. 60번은 산 45번이 아니라 매수일 수 (9-4)", () => {
+  // 줄이 하나라 첫 문장이 없다. 쉰 날도 그날 환율로 바꾸므로 summary.buys(60)를 쓴다
+  assert.deepEqual(profitNotes([SWITCH_QLD], "KRW"), [{ text: AVG_FX, strong: false }]);
+});
+
+test("profitNotes: 환율 효과 원래 값이 달라도 보이는 글(−75만원)이 같으면 첫 문장을 쓴다", () => {
+  const results = [withSummary(KRW4.QQQ, { fx_effect: -746_400 }), ...KRW4_RESULTS.slice(1)];
+  assert.deepEqual(
+    profitNotes(results, "KRW").map((n) => n.text),
+    [FX_SAME, FX_WHY, AVG_FX],
+  );
+});
+
+/** 첫 문장 조건(설계 메모): 줄 2개 이상, 환율 효과 글·종목 통화·매수일(횟수·첫날·끝날)이 모두 같다. */
+const NO_FIRST_CASES = [
+  { id: "환율 효과 글이 다르면 (−80만원)", soxl: withSummary(KRW4.SOXL, { fx_effect: -800_000 }) },
+  { id: "첫 매수일이 다르면", soxl: withSummary(KRW4.SOXL, { first_buy: "2021-12-02" }) },
+  { id: "끝 매수일이 다르면", soxl: withSummary(KRW4.SOXL, { last_buy: "2026-10-01" }) },
+  { id: "종목 통화가 다르면", soxl: { ...KRW4.SOXL, currency: "JPY" } },
+];
+
+for (const { id, soxl } of NO_FIRST_CASES) {
+  test(`profitNotes: ${id} 첫 문장 없이 평균 매수 환율 문장만`, () => {
+    const results = [...KRW4_RESULTS.slice(0, 3), soxl];
+    assert.deepEqual(profitNotes(results, "KRW"), [{ text: AVG_FX, strong: false }]);
+  });
+}
+
+test("profitNotes: 매수 횟수가 달라 문장이 다르면 줄마다 종목 코드를 앞에 붙인다", () => {
+  // 2024-07 상장이라 예시 매수일 가운데 뒤 29번만 산 종목. 환율 효과 글은 같게 두어 매수일만 다르다.
+  // 평균 매수 환율 1,421.07은 문장 모양만 보려고 둔 값이다
+  const late = holding(
+    "LATE",
+    "USD",
+    {
+      buys: 29,
+      first_buy: "2024-07-01",
+      last_buy: "2026-11-02",
+      eval_fx: KRW_CASE.QQQ.eval_fx,
+      avg_buy_fx: 1421.07,
+      price_effect: 10_000_000,
+      fx_effect: METRICS.fx_effect,
+      profit: 9_253_633,
+    },
+    { buys: exampleBuys(BUY_PRICES.QQQ).slice(31) },
+  );
+  assert.deepEqual(profitNotes([KRW4.QQQ, late], "KRW"), [
+    { text: `QQQ ${AVG_FX}`, strong: false },
+    {
+      text:
+        "LATE 29번 평균 매수 환율은 1,421.07원(가장 쌀 때 1,315.33원 2024-10-01, 가장 비쌀 때 " +
+        "1,548.61원 2026-07-01)이고, 평가 환율 1,344.16원이 그보다 낮습니다.",
+      strong: false,
+    },
+  ]);
+});
+
+const EVAL_FX_CASES = [
+  {
+    id: "평가 환율이 평균보다 높으면 높습니다",
+    evalFx: 1400,
+    tail: "평가 환율 1,400.00원이 그보다 높습니다.",
+  },
+  {
+    id: "평가 환율이 보이는 값(1,352.57원)으로 같으면 같습니다",
+    evalFx: 1352.574,
+    tail: "평가 환율 1,352.57원이 그와 같습니다.",
+  },
+  {
+    id: "원래 값은 낮아도(1,352.566) 보이는 값이 같으면 같습니다",
+    evalFx: 1352.566,
+    tail: "평가 환율 1,352.57원이 그와 같습니다.",
+  },
+];
+
+for (const { id, evalFx, tail } of EVAL_FX_CASES) {
+  test(`profitNotes: ${id}`, () => {
+    const notes = profitNotes([withSummary(KRW4.QLD, { eval_fx: evalFx })], "KRW");
+    assert.deepEqual(notes, [{ text: `${AVG_FX_LEAD}${tail}`, strong: false }]);
+  });
+}
+
+test("profitNotes: 가장 쌀 때·비쌀 때는 쉰 매수일의 환율도 본다 (쉰 날도 그날 환전, 9-4)", () => {
+  // 2026-02-02는 쉬었지만(lot_return_pct null) 환율이 가장 비싸다. 평균 1,443.65는 모양만 보려는 값
+  const row = holding(
+    "QLD",
+    "USD",
+    {
+      buys: 3,
+      first_buy: "2026-01-02",
+      last_buy: "2026-03-02",
+      eval_fx: KRW_CASE.QLD.eval_fx,
+      avg_buy_fx: 1443.65,
+      price_effect: 1_000_000,
+      fx_effect: -500_000,
+      profit: 500_000,
+    },
+    {
+      buys: [
+        { date: "2026-01-02", price: 70.1, fx: 1443.64, lot_return_pct: 1 },
+        { date: "2026-02-02", price: 72.73, fx: 1448.8, lot_return_pct: null },
+        { date: "2026-03-02", price: 68.13, fx: 1438.5, lot_return_pct: 1 },
+      ],
+    },
+  );
+  assert.deepEqual(profitNotes([row], "KRW"), [
+    {
+      text:
+        "3번 평균 매수 환율은 1,443.65원(가장 쌀 때 1,438.50원 2026-03-02, 가장 비쌀 때 1,448.80원 " +
+        "2026-02-02)이고, 평가 환율 1,344.16원이 그보다 낮습니다.",
+      strong: false,
+    },
+  ]);
+});
+
+test("profitNotes: 환율이 같은 날이 여럿이면 가장 쌀 때·비쌀 때는 앞 날짜", () => {
+  const fxs = [1300, 1250, 1400, 1250, 1400];
+  const dates = ["2025-01-02", "2025-02-03", "2025-03-03", "2025-04-01", "2025-05-01"];
+  const row = holding(
+    "QLD",
+    "USD",
+    {
+      buys: 5,
+      first_buy: dates[0],
+      last_buy: dates[4],
+      eval_fx: 1344.16,
+      avg_buy_fx: 1315.79,
+      price_effect: 1_000_000,
+      fx_effect: 100_000,
+      profit: 1_100_000,
+    },
+    { buys: dates.map((date, i) => ({ date, price: 50, fx: fxs[i], lot_return_pct: 1 })) },
+  );
+  const [note] = profitNotes([row], "KRW");
+  assert.ok(
+    note.text.includes("(가장 쌀 때 1,250.00원 2025-02-03, 가장 비쌀 때 1,400.00원 2025-03-03)"),
+    note.text,
+  );
+});
+
+test("profitNotes: 달러로 원화 종목을 사면 환율 뒤에 원을 붙이지 않는다", () => {
+  const notes = profitNotes([KS_USD], "USD");
+  assert.equal(notes.length, 1);
+  const [{ text, strong }] = notes;
+  assert.equal(strong, false);
+  assert.ok(
+    text.startsWith(
+      "3번 평균 매수 환율은 0.000741(가장 쌀 때 0.000731 2026-10-01, 가장 비쌀 때 0.000752 " +
+        "2026-09-01)이고, 평가 환율 0.000744",
+    ),
+    text,
+  );
+  assert.ok(text.endsWith("그보다 높습니다."), text);
+  assert.ok(!text.includes("원"), text);
+});
+
+const SKIP_NOTE_CASES = [
+  { id: "avg_buy_fx가 null", row: withSummary(KRW4.QLD, { avg_buy_fx: null }) },
+  {
+    id: "avg_buy_fx가 빠진 응답(undefined)",
+    row: withSummary(KRW4.QLD, { avg_buy_fx: undefined }),
+  },
+  { id: "buys가 빈 목록", row: { ...KRW4.QLD, buys: [] } },
+];
+
+for (const { id, row } of SKIP_NOTE_CASES) {
+  test(`profitNotes: ${id}이면 그 줄의 평균 매수 환율 문장을 건너뛴다`, () => {
+    assert.deepEqual(profitNotes([row], "KRW"), []);
+  });
+}
+
+// ---------- 얼마에 샀나 (F-14, 계산 규칙 9-1, #64) ----------
+
+/**
+ * 손으로 만든 매수 가격 분포용 결과: prices마다 산 줄 하나 (날짜는 2025-01부터 매달 2일).
+ * 싸게 산 횟수는 below로 준다.
+ */
+function priced(prices, options = {}) {
+  const { evalPrice, avgCost = null, currency = "USD", symbol = "TEST", below = [0, 0] } = options;
+  const buys = monthKeys("2025-01", prices.length).map((month, i) => ({
+    date: `${month}-02`,
+    price: prices[i],
+    fx: 1400,
+    lot_return_pct: 1,
+  }));
+  return holding(
+    symbol,
+    currency,
+    { buys: prices.length, eval_price: evalPrice, avg_cost_asset: avgCost },
+    { buys, analysis: { buys_below_eval_price: below[0], buys_below_avg_cost: below[1] } },
+  );
+}
+
+/** 원화 종목 (경계 글은 원화 정수). */
+const KS_PRICED = priced([51_000, 60_000, 72_000, 88_000], {
+  evalPrice: 80_000,
+  avgCost: 66_000,
+  currency: "KRW",
+  symbol: "005930.KS",
+});
+
+/** 정수 주만으로 한 주도 못 산 결과: 매수일은 있지만 산 줄이 없고 평단가도 없다. */
+const NONE_BOUGHT = holding(
+  "BRK-A",
+  "USD",
+  { buys: 3, eval_price: 720_000, avg_cost_asset: null },
+  {
+    buys: [
+      { date: "2026-09-01", price: 690_000, fx: 1392.94, lot_return_pct: null },
+      { date: "2026-10-01", price: 701_000, fx: 1403.15, lot_return_pct: null },
+      { date: "2026-11-02", price: 712_500, fx: 1427.17, lot_return_pct: null },
+    ],
+    analysis: { buys_below_eval_price: 0, buys_below_avg_cost: 0 },
+  },
+);
+
+test("NO_BUYS: 산 날이 없을 때 글", () => {
+  assert.equal(NO_BUYS, "산 날이 없어 매수 가격 분포가 없습니다");
+});
+
+const BUY_INTRO_CASES = [
+  { id: "QLD는 산 60번, 달러", row: KRW4.QLD, want: "60번 매수 가격의 분포 (달러, 분할 반영)" },
+  {
+    id: "레버리지 전환 QLD는 쉰 날을 빼고 산 45번",
+    row: SWITCH_QLD,
+    want: "45번 매수 가격의 분포 (달러, 분할 반영)",
+  },
+  { id: "원화 종목은 원화", row: KS_PRICED, want: "4번 매수 가격의 분포 (원화, 분할 반영)" },
+  {
+    id: "산 날이 없으면 횟수 없이",
+    row: NONE_BOUGHT,
+    want: "매수 가격의 분포 (달러, 분할 반영)",
+  },
+];
+
+for (const { id, row, want } of BUY_INTRO_CASES) {
+  test(`buyPriceIntro: ${id}`, () => {
+    assert.equal(buyPriceIntro(row), want);
+  });
+}
+
+/** 칸 개수 목록. */
+function countsOf(dist) {
+  return dist.bins.map((b) => b.count);
+}
+
+/** 칸 개수 합. */
+function totalOf(dist) {
+  return countsOf(dist).reduce((a, b) => a + b, 0);
+}
+
+const QLD_COUNTS = [8, 8, 8, 8, 7, 6, 2, 5, 2, 2, 2, 2];
+
+test("buyPriceDist: QLD는 $17 ~ $102를 12칸, 칸 합 60 (이슈 완료 기준, 시안)", () => {
+  const dist = buyPriceDist(KRW4.QLD);
+  assert.equal(dist.count, METRICS.buys);
+  assert.deepEqual([dist.lo, dist.hi, dist.loLabel, dist.hiLabel], [17, 102, "$17", "$102"]);
+  assert.deepEqual(countsOf(dist), QLD_COUNTS);
+  assert.equal(totalOf(dist), METRICS.buys);
+});
+
+test("buyPriceDist: QLD는 칸 위 끝이 지금 가격 $71.91 이하인 앞 7칸만 색칠", () => {
+  assert.deepEqual(
+    buyPriceDist(KRW4.QLD).bins.map((b) => b.filled),
+    [...Array(7).fill(true), ...Array(5).fill(false)],
+  );
+});
+
+test("buyPriceDist: QLD 칸 높이는 가장 많은 칸(8번) 기준", () => {
+  assert.deepEqual(
+    buyPriceDist(KRW4.QLD).bins.map((b) => b.height),
+    [1, 1, 1, 1, 0.875, 0.75, 0.25, 0.625, 0.25, 0.25, 0.25, 0.25],
+  );
+});
+
+test("buyPriceDist: 칸 높이는 소수 3자리 (레버리지 전환 QLD, 가장 많은 칸 7번)", () => {
+  assert.deepEqual(
+    buyPriceDist(SWITCH_QLD).bins.map((b) => b.height),
+    [0.571, 0.714, 0.714, 1, 0.857, 0.571, 0.143, 0.714, 0.286, 0.429, 0.143, 0.286],
+  );
+});
+
+test("buyPriceDist: 칸은 lo에서 hi까지 빈틈없이 [from, to)로 잇는다", () => {
+  const { bins, lo, hi } = buyPriceDist(KRW4.QLD);
+  assert.equal(bins[0].from, lo);
+  assert.ok(Math.abs(bins.at(-1).to - hi) < 1e-9, `${bins.at(-1).to}`);
+  for (let i = 1; i < bins.length; i += 1) {
+    assert.ok(Math.abs(bins[i].from - bins[i - 1].to) < 1e-9, `${i}번째 칸`);
+    assert.ok(bins[i].from > bins[i - 1].from, `${i}번째 칸`);
+  }
+});
+
+test("buyPriceDist: QLD 막대 title은 정수 경계 가격과 횟수 (칸 너비 85 ÷ 12 ≥ 1)", () => {
+  const { bins } = buyPriceDist(KRW4.QLD);
+  // 설계 메모 4: 이슈의 "$17 ~ $24: 7번"은 예시이고 첫 칸은 8번이다
+  assert.equal(bins[0].title, "$17 ~ $24: 8번");
+  assert.equal(bins.at(-1).title, "$95 ~ $102: 2번");
+});
+
+test("buyPriceDist: QLD 평단가 선 $37.97, 지금 선 $71.91 (이슈 완료 기준)", () => {
+  const dist = buyPriceDist(KRW4.QLD);
+  // left = (값 − 17) ÷ (102 − 17), 소수 4자리. 0.8을 넘지 않아 글은 선 오른쪽
+  assert.deepEqual(dist.avg, { left: 0.2468, label: "평단가 $37.97", flip: false });
+  assert.deepEqual(dist.now, { left: 0.646, label: "지금 $71.91", flip: false });
+});
+
+test("buyPriceDist: QLD aria-label은 가격 범위·칸별 횟수·평단가·지금 가격", () => {
+  assert.equal(
+    buyPriceDist(KRW4.QLD).aria,
+    "QLD 매수 가격 분포 그래프. $17 ~ $102를 12칸으로 나눈 칸별 횟수 " +
+      "8, 8, 8, 8, 7, 6, 2, 5, 2, 2, 2, 2. 평단가 $37.97, 지금 $71.91.",
+  );
+});
+
+for (const symbol of ["QQQ", "TQQQ", "SOXL"]) {
+  test(`buyPriceDist: ${symbol} 막대 12칸의 합은 산 60번`, () => {
+    const dist = buyPriceDist(KRW4[symbol]);
+    assert.equal(dist.bins.length, 12);
+    assert.equal(dist.count, KRW_CASE[symbol].buys);
+    assert.equal(totalOf(dist), KRW_CASE[symbol].buys);
+  });
+}
+
+test("buyPriceDist: 레버리지 전환 QLD는 산 45번만 센다 (쉰 2023-01-03 $17.275를 빼 lo $20, #62)", () => {
+  const dist = buyPriceDist(SWITCH_QLD);
+  assert.equal(dist.count, SWITCH_BOUGHT.bought);
+  assert.deepEqual([dist.lo, dist.hi, dist.loLabel], [20, 102, "$20"]);
+  assert.deepEqual(countsOf(dist), [4, 5, 5, 7, 6, 4, 1, 5, 2, 3, 1, 2]);
+  assert.equal(totalOf(dist), SWITCH_BOUGHT.bought);
+});
+
+test("buyPriceDist: bins를 주면 그 칸 수 (QLD 6칸은 12칸을 둘씩 합친 값)", () => {
+  const dist = buyPriceDist(KRW4.QLD, { bins: 6 });
+  assert.deepEqual([dist.lo, dist.hi], [17, 102]);
+  assert.deepEqual(countsOf(dist), [16, 16, 13, 7, 4, 4]);
+  assert.ok(
+    dist.aria.includes("$17 ~ $102를 6칸으로 나눈 칸별 횟수 16, 16, 13, 7, 4, 4."),
+    dist.aria,
+  );
+});
+
+// 칸 너비 1: lo 10, hi = ceil(21.5 × 1.02) = 22. 칸 i는 [10 + i, 11 + i)
+const WIDTH_ONE = priced([10.5, 13, 21.5], { evalPrice: 15, avgCost: 15 });
+
+test("buyPriceDist: 경계에 걸린 가격은 위 칸 ($13은 [$13, $14) 칸)", () => {
+  const dist = buyPriceDist(WIDTH_ONE);
+  assert.deepEqual([dist.lo, dist.hi], [10, 22]);
+  assert.deepEqual(countsOf(dist), [1, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 1]);
+  assert.equal(dist.bins[3].title, "$13 ~ $14: 1번");
+});
+
+test("buyPriceDist: 칸 위 끝이 지금 가격과 같으면 색칠 ($14 ~ $15 칸, 지금 $15)", () => {
+  assert.deepEqual(
+    buyPriceDist(WIDTH_ONE).bins.map((b) => b.filled),
+    [...Array(5).fill(true), ...Array(7).fill(false)],
+  );
+});
+
+test("buyPriceDist: 지금 가격이 가장 높은 매수 가격보다 높으면 hi는 지금 가격 × 1.02 올림", () => {
+  // 가장 높은 매수 가격 $30이면 hi 31이지만 지금 $49라 ceil(49.98) = 50
+  const dist = buyPriceDist(priced([10, 20, 30], { evalPrice: 49, avgCost: 20 }));
+  assert.deepEqual([dist.lo, dist.hi, dist.hiLabel], [10, 50, "$50"]);
+  assert.deepEqual(countsOf(dist), [1, 0, 0, 1, 0, 0, 1, 0, 0, 0, 0, 0]);
+  // 마지막 칸 위 끝 $50만 지금 가격 위라 회색
+  assert.deepEqual(
+    dist.bins.map((b) => b.filled),
+    [...Array(11).fill(true), false],
+  );
+  // 지금 선은 0.975로 오른쪽 끝(0.8 넘음)이라 글을 선 왼쪽에 둔다
+  assert.deepEqual(dist.now, { left: 0.975, label: "지금 $49.00", flip: true });
+  assert.deepEqual(dist.avg, { left: 0.25, label: "평단가 $20.00", flip: false });
+});
+
+test("buyPriceDist: 칸 너비가 1보다 작으면 경계 글은 소수 2자리", () => {
+  // lo 10, hi = ceil(12.5 × 1.02) = 13, 칸 너비 0.25
+  const dist = buyPriceDist(priced([10.2, 12.5], { evalPrice: 12 }));
+  assert.deepEqual([dist.lo, dist.hi, dist.loLabel, dist.hiLabel], [10, 13, "$10.00", "$13.00"]);
+  assert.equal(dist.bins[0].title, "$10.00 ~ $10.25: 1번");
+  assert.equal(dist.bins[10].title, "$12.50 ~ $12.75: 1번");
+});
+
+test("buyPriceDist: 원화 종목 경계 글은 원화 정수", () => {
+  // lo 51,000, hi = ceil(88,000 × 1.02) = 89,760, 칸 너비 3,230
+  const dist = buyPriceDist(KS_PRICED);
+  assert.deepEqual(
+    [dist.lo, dist.hi, dist.loLabel, dist.hiLabel],
+    [51_000, 89_760, "51,000원", "89,760원"],
+  );
+  assert.equal(dist.bins[0].title, "51,000원 ~ 54,230원: 1번");
+  assert.equal(dist.avg.label, "평단가 66,000원");
+  assert.equal(dist.now.label, "지금 80,000원");
+});
+
+test("buyPriceDist: 선 글은 left가 0.8을 넘을 때만 왼쪽 (0.8은 그대로 오른쪽)", () => {
+  // lo 0, hi = ceil(9.8 × 1.02) = 10: 평단가 $8은 0.8, $8.01은 0.801
+  const at = buyPriceDist(priced([0.5, 9.8], { evalPrice: 5, avgCost: 8 }));
+  assert.deepEqual([at.lo, at.hi], [0, 10]);
+  assert.deepEqual([at.avg.left, at.avg.flip], [0.8, false]);
+  const over = buyPriceDist(priced([0.5, 9.8], { evalPrice: 5, avgCost: 8.01 }));
+  assert.deepEqual([over.avg.left, over.avg.flip], [0.801, true]);
+});
+
+test("buyPriceDist: 평단가가 없으면 평단가 선(avg)이 null이고 aria-label에도 없다", () => {
+  const dist = buyPriceDist(withSummary(KRW4.QLD, { avg_cost_asset: null }));
+  assert.equal(dist.avg, null);
+  assert.deepEqual(dist.now, { left: 0.646, label: "지금 $71.91", flip: false });
+  assert.ok(!dist.aria.includes("평단가"), dist.aria);
+  assert.ok(dist.aria.includes("지금 $71.91"), dist.aria);
+});
+
+test("buyPriceDist: 산 날이 없으면(정수 주만으로 한 주도 못 삼) null", () => {
+  assert.equal(buyPriceDist(NONE_BOUGHT), null);
+});
+
+test("buyPriceDist: buys가 비면 null", () => {
+  assert.equal(buyPriceDist({ ...KRW4.QLD, buys: [] }), null);
+});
+
+test("buyPriceIntro·Dist·Text: 산 줄은 lot_return_pct로 센다 (qty가 0으로 보여도, 값이 0.0이어도 산 줄)", () => {
+  // qty는 소수 4자리 반올림이라 아주 적게 산 회차가 0으로 보일 수 있다 (설계 메모 1)
+  const row = holding(
+    "QLD",
+    "USD",
+    { buys: 4, eval_price: 12.5, avg_cost_asset: 10.2 },
+    {
+      buys: [
+        { date: "2025-01-02", price: 10, fx: 1456.78, qty: 0, lot_return_pct: 25.12 },
+        { date: "2025-02-03", price: 12, fx: 1459.8, qty: 1.5, lot_return_pct: 0 },
+        { date: "2025-03-03", price: 11, fx: 1471.96, qty: 0, lot_return_pct: null },
+        { date: "2025-04-01", price: 9, fx: 1423.75, qty: 2, lot_return_pct: -3.2 },
+      ],
+      analysis: { buys_below_eval_price: 3, buys_below_avg_cost: 2 },
+    },
+  );
+  assert.equal(buyPriceIntro(row), "3번 매수 가격의 분포 (달러, 분할 반영)");
+  assert.equal(buyPriceDist(row).count, 3);
+  assert.ok(buyPriceText(row).startsWith("3번 중 3번은 지금 가격보다 싸게"), buyPriceText(row));
+});
+
+const SHINE = "색칠한 막대는 지금 가격보다 싸게 산 구간입니다.";
+
+/** 아래 글 (이슈 #64 완료 기준). QLD 51·24는 9-8 값, $17.28은 결정 d61(시안 $17.27)이다. */
+const BUY_TEXT_CASES = [
+  {
+    id: "QLD 60번 중 51번·24번, 2023-01-03 $17.28 ~ 2026-06-01 $99.63",
+    row: KRW4.QLD,
+    want:
+      "60번 중 51번은 지금 가격보다 싸게, 24번은 평단가보다 싸게 샀습니다. 가장 싸게 산 날은 " +
+      `2023-01-03 $17.28, 가장 비싸게 산 날은 2026-06-01 $99.63입니다. ${SHINE}`,
+  },
+  {
+    id: "QQQ 53번·26번",
+    row: KRW4.QQQ,
+    want:
+      "60번 중 53번은 지금 가격보다 싸게, 26번은 평단가보다 싸게 샀습니다. 가장 싸게 산 날은 " +
+      `2023-01-03 $264.48, 가장 비싸게 산 날은 2026-06-01 $742.74입니다. ${SHINE}`,
+  },
+  {
+    id: "TQQQ 47번·21번, $8.455는 $8.46 (결정 d61, 시안 $8.45)",
+    row: KRW4.TQQQ,
+    want:
+      "60번 중 47번은 지금 가격보다 싸게, 21번은 평단가보다 싸게 샀습니다. 가장 싸게 산 날은 " +
+      `2023-01-03 $8.46, 가장 비싸게 산 날은 2026-06-01 $86.04입니다. ${SHINE}`,
+  },
+  {
+    id: "SOXL 41번·25번",
+    row: KRW4.SOXL,
+    want:
+      "60번 중 41번은 지금 가격보다 싸게, 25번은 평단가보다 싸게 샀습니다. 가장 싸게 산 날은 " +
+      `2022-11-01 $9.10, 가장 비싸게 산 날은 2026-06-01 $227.03입니다. ${SHINE}`,
+  },
+  {
+    id: "레버리지 전환 QLD 45번 중 36번·12번, 가장 싸게 산 날은 쉰 2023-01-03이 아니라 2023-03-01 (#62)",
+    row: SWITCH_QLD,
+    want:
+      "45번 중 36번은 지금 가격보다 싸게, 12번은 평단가보다 싸게 샀습니다. 가장 싸게 산 날은 " +
+      `2023-03-01 $20.53, 가장 비싸게 산 날은 2026-06-01 $99.63입니다. ${SHINE}`,
+  },
+  {
+    id: "평단가가 없으면 평단가보다 부분을 뺀다",
+    row: withSummary(KRW4.QLD, { avg_cost_asset: null }),
+    want:
+      "60번 중 51번은 지금 가격보다 싸게 샀습니다. 가장 싸게 산 날은 " +
+      `2023-01-03 $17.28, 가장 비싸게 산 날은 2026-06-01 $99.63입니다. ${SHINE}`,
+  },
+];
+
+for (const { id, row, want } of BUY_TEXT_CASES) {
+  test(`buyPriceText: ${id}`, () => {
+    assert.equal(buyPriceText(row), want);
+  });
+}
+
+test("buyPriceText: 같은 가격이면 앞 날짜 (가장 싸게 2025-02-02, 가장 비싸게 2025-03-02)", () => {
+  const row = priced([12, 10, 15, 10, 15], { evalPrice: 14, avgCost: 12.4, below: [3, 2] });
+  const text = buyPriceText(row);
+  assert.ok(
+    text.includes(
+      "가장 싸게 산 날은 2025-02-02 $10.00, 가장 비싸게 산 날은 2025-03-02 $15.00입니다.",
+    ),
+    text,
+  );
+});
+
+test("buyPriceText: 산 날이 없으면 null", () => {
+  assert.equal(buyPriceText(NONE_BOUGHT), null);
+});
+
+// ---------- 환율 변동 제외 (F-24, 결정 d74·d75) ----------
+// 응답 params.include_fx === false면 통화가 다른 종목은 그날까지의 평균 매수 환율로 평가돼 fx_effect 0,
+// price_effect = 손익, eval_fx = avg_buy_fx다 (#74). 수익 상자는 "환율 변동 제외로 계산" 안내를 넣고,
+// 끔에서 틀린 두 글(환율 효과가 같은 이유, 평가 환율과 평균 매수 환율 비교)을 뺀다. include_fx가 없으면 켬이다
+
+/** 예시 결과를 끔 응답 모양으로: 환율 효과 0, 주가 효과 = 손익, 평가 환율 = 평균 매수 환율. */
+function fxOff(result) {
+  const s = result.summary;
+  return withSummary(result, { fx_effect: 0, price_effect: s.profit, eval_fx: s.avg_buy_fx });
+}
+const FX_OFF4 = KRW4_RESULTS.map(fxOff);
+
+test("profitIntro: 환율 변동 제외면 지금 환율 대신 평균 매수 환율, 환율 효과는 0", () => {
+  assert.equal(
+    profitIntro(FX_OFF4, "KRW", { includeFx: false }),
+    "원화 손익 = 주가 효과(달러로 번 돈 × 평균 매수 환율) + 환율 효과(환율 변동 제외라 0)",
+  );
+});
+
+test("profitIntro: includeFx를 true로 주면 주지 않은 것과 같다 (include_fx가 없는 응답은 켬)", () => {
+  assert.equal(profitIntro(KRW4_RESULTS, "KRW", { includeFx: true }), KRW_VS_USD);
+});
+
+test("profitNotes: 환율 변동 제외면 안내 두 조각과 평균 매수 환율 사실만 (같은 이유·평가 환율 비교는 뺀다, 결정 d75)", () => {
+  // 평균 매수 환율은 끔에서도 그대로이고 평가에 쓴 환율이다 (#74). 비교 문장만 틀린 말이 된다
+  assert.deepEqual(profitNotes(FX_OFF4, "KRW", { includeFx: false }), [
+    { text: "환율 변동 제외로 계산했습니다.", strong: true },
+    {
+      text: "통화가 다른 종목은 지금 환율 대신 그날까지의 평균 매수 환율로 평가해 환율 효과가 0입니다.",
+      strong: false,
+    },
+    {
+      text:
+        "60번 평균 매수 환율은 1,352.57원(가장 쌀 때 1,182.86원 2021-12-01, " +
+        "가장 비쌀 때 1,548.61원 2026-07-01)입니다.",
+      strong: false,
+    },
+  ]);
+});
+
+test("profitNotes: includeFx를 true로 주면 주지 않은 것과 같다", () => {
+  assert.deepEqual(
+    profitNotes(KRW4_RESULTS, "KRW", { includeFx: true }),
+    profitNotes(KRW4_RESULTS, "KRW"),
+  );
+});
+
+test("profitNotes: 환율 변동 제외여도 수익 줄이 없으면 빈 목록 (상자가 없다)", () => {
+  assert.deepEqual(profitNotes([USD_QQQ], "USD", { includeFx: false }), []);
+});
+
+test("profitRows: 환율 변동 제외 응답은 환율 효과 0원(색 없음), 주가 효과 = 손익", () => {
+  const qld = profitRows(FX_OFF4, "KRW")[1];
+  assert.equal(qld.symbol, "QLD");
+  assert.equal(qld.fx, "0원");
+  assert.equal(qld.fxTone, "");
+  assert.equal(qld.price, qld.total);
+  assert.equal(qld.priceTone, qld.tone);
+});
+
+// include_fx가 없는 응답(#74 전, v1)은 켬이다. false일 때만 끔 (결정 d75)
+const FX_INCLUDED_CASES = [
+  { id: "false면 끔", params: { currency: "KRW", include_fx: false }, want: false },
+  { id: "true면 켬", params: { currency: "KRW", include_fx: true }, want: true },
+  { id: "키가 없으면 켬", params: { currency: "KRW" }, want: true },
+];
+
+for (const { id, params, want } of FX_INCLUDED_CASES) {
+  test(`fxIncluded: ${id}`, () => {
+    assert.equal(fxIncluded(params), want);
+  });
+}
+
+// ---------- 분포 양 끝: 지금 가격·평단가도 범위에 든다 (PR #77 리뷰 필수 1) ----------
+
+test("buyPriceDist: 지금 가격이 가장 낮은 매수 가격보다 낮으면 lo는 지금 가격 내림, 선은 판 안, 칸은 모두 회색", () => {
+  // 하락장 한 구간만 적립한 경우. 시안 식(lo = 가장 낮은 매수 가격 내림)이면 now.left가 음수였다
+  const dist = buyPriceDist(priced([10, 12, 15], { evalPrice: 5, avgCost: 12.1 }));
+  assert.equal(dist.lo, 5);
+  assert.equal(dist.hi, 16);
+  assert.equal(dist.now.left, 0);
+  assert.ok(dist.avg.left >= 0 && dist.avg.left <= 1, `avg.left ${dist.avg.left}`);
+  assert.deepEqual(
+    dist.bins.map((b) => b.filled),
+    Array(12).fill(false),
+  );
+  assert.equal(
+    dist.bins.reduce((n, b) => n + b.count, 0),
+    3,
+  );
+});
+
+test("buyPriceDist: 평단가가 가장 높은 가격보다 높으면(큰 수수료) hi는 평단가 기준, 평단가 선은 판 안", () => {
+  // 한 번에 $100을 수수료 10%로 사면 평단가 $111.11, 지금 $95
+  const dist = buyPriceDist(priced([100], { evalPrice: 95, avgCost: 111.11 }));
+  assert.equal(dist.lo, 95);
+  assert.equal(dist.hi, 114);
+  assert.ok(dist.avg.left > 0.8 && dist.avg.left <= 1, `avg.left ${dist.avg.left}`);
+  assert.equal(dist.avg.flip, true);
+  assert.ok(dist.now.left >= 0, `now.left ${dist.now.left}`);
+});
+
+test("buyPriceText: 색칠한 막대가 하나도 없으면(지금 가격이 모든 칸 위 끝보다 낮음) 색칠 안내 문장을 뺀다", () => {
+  // PR #77 다시 리뷰 참고 1: 가리키는 막대가 없는 문장을 붙이지 않는다
+  const result = priced([10, 12, 15], { evalPrice: 5, avgCost: 12.1, below: [0, 1] });
+  assert.equal(
+    buyPriceText(result),
+    "3번 중 0번은 지금 가격보다 싸게, 1번은 평단가보다 싸게 샀습니다. " +
+      "가장 싸게 산 날은 2025-01-02 $10.00, 가장 비싸게 산 날은 2025-03-02 $15.00입니다.",
+  );
+});
+
+test("buyPriceText: 비어 있는 칸은 위 끝이 지금 가격 이하여도 색칠한 막대로 세지 않는다", () => {
+  // PR #77 Actions 리뷰 권장 1: 지금 $5.95면 lo 5, 칸 너비 11/12라 매수가 없는 첫 칸([5, 5.92))이
+  // filled지만 막대가 보이지 않는다
+  const result = priced([10, 12, 15], { evalPrice: 5.95, avgCost: 12.1, below: [0, 1] });
+  assert.equal(buyPriceDist(result).bins[0].filled, true);
+  assert.equal(buyPriceDist(result).bins[0].count, 0);
+  assert.ok(!buyPriceText(result).includes("색칠한 막대"), buyPriceText(result));
 });
