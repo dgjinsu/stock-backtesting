@@ -104,6 +104,16 @@ export function price(value, currency) {
   return currency === "USD" ? `$${text}` : `${text} ${currency}`;
 }
 
+/**
+ * price(value, currency)가 화면에 보여 주는 자리로 반올림한 값 (전략 카드 평단가의 가장 좋은 값 견주기, #65).
+ * 원은 원 단위, 그 밖은 소수 2자리(1보다 작으면 4자리). 값이 없으면 null.
+ */
+export function shownPrice(value, currency) {
+  if (value === null || value === undefined) return null;
+  if (currency === "KRW") return Math.round(value);
+  return Number(value.toFixed(Math.abs(value) < 1 ? 4 : 2));
+}
+
 /** 수량: 소수 digits자리까지 (정수면 정수로). fixed면 자리를 채워 표에서 줄이 맞는다. */
 export function qty(value, digits = 2, { fixed = false } = {}) {
   if (value === null || value === undefined) return "—";

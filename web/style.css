@@ -1881,3 +1881,197 @@ select.field,
   font-size: 14px;
   line-height: 1.7;
 }
+
+/* 전략 비교 탭 (F-15). 시안 v2 전략 비교 보드를 B 토큰·부품(.box, .seg, .alert)으로 그린다 */
+.st-head {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.st-head h3 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 800;
+}
+.st-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px 24px;
+}
+.st-picks {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 20px;
+}
+.st-pick {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.st-pick .seg button {
+  font-size: 13px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+.st-refs {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.st-ref,
+.st-ref-note {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.st-status {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.st-status:empty {
+  display: none;
+}
+.st-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  container-type: inline-size;
+  transition: opacity 0.15s;
+}
+.st-body.dim {
+  opacity: 0.45;
+}
+.st-frac {
+  margin: 0;
+}
+.st-retry {
+  display: block;
+  margin-top: 10px;
+  height: 40px;
+  padding: 0 16px;
+  border: 1px solid var(--neg);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--neg);
+  font-weight: 600;
+}
+/* 카드 5장: 넓으면 한 줄, 1024px(접힌 패널)이면 3+2, 더 좁으면 2열 */
+.st-cards {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+@container (min-width: 700px) {
+  .st-cards {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@container (min-width: 1150px) {
+  .st-cards {
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+  }
+}
+.st-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+/* 기본 적립은 테두리를 굵게 (시안) */
+.st-card.base {
+  border: 2px solid var(--text);
+  padding: 15px;
+}
+.st-card-head h4 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 800;
+}
+.st-rule {
+  margin: 2px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.st-value {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  overflow-wrap: anywhere;
+}
+.st-cells {
+  margin: 0;
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 13px;
+}
+.st-cells > div {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.st-cells dt {
+  color: var(--muted);
+}
+.st-cells dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  text-align: right;
+  overflow-wrap: anywhere;
+}
+.st-cells dd strong {
+  font-weight: 800;
+}
+.st-fact {
+  margin: auto 0 0;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line);
+  font-size: 12px;
+  color: var(--muted);
+}
+.st-card-error .st-error-title {
+  margin: 0;
+  font-weight: 700;
+  color: var(--neg);
+}
+.st-card-error .st-error-detail {
+  margin: 0;
+  font-size: 13px;
+  color: var(--neg);
+}
+.st-methods {
+  margin: 0;
+  padding: 0 20px 18px;
+  list-style: none;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+}
+.st-methods strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+.st-methods p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+/* 다시 시도 뒤 포커스를 옮기는 본문 (tabindex -1). 마우스로 눌렀을 때는 테두리를 두지 않는다 */
+.st-body:focus:not(:focus-visible) {
+  outline: none;
+}
