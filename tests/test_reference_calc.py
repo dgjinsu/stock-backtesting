@@ -165,13 +165,15 @@ V2_KEYS_BEFORE_D25_D29 = [
 
 def test_v2_keys_keep_existing_and_append_check_cases_in_order() -> None:
     """기존 v2 키는 그대로 두고 검증용 묶음만 뒤에 더한다 (기존 값은 위 9-8 표 테스트가 지킨다).
-    결정 d25·d29에서 dollar_tax·switch_cross_exchange, 결정 d58·d59(이슈 #62)에서 buy_rows·rule_bought."""
+    결정 d25·d29에서 dollar_tax·switch_cross_exchange, 결정 d58·d59(이슈 #62)에서 buy_rows·rule_bought,
+    F-24(이슈 #74, 9-9)에서 fx_off."""
     assert list(EXPECTED["v2"]) == [
         *V2_KEYS_BEFORE_D25_D29,
         "dollar_tax",
         "switch_cross_exchange",
         "buy_rows",
         "rule_bought",
+        "fx_off",
     ]
 
 
@@ -293,3 +295,154 @@ def test_reference_v2_months_ended_month_matches_engine_rule(
     start = date.fromisoformat(v2["period"][0])
     got = reference_calc.v2_metrics(qld, fx, start, end, v2["anchor"], v2["amount"])
     assert got["months"]["count"] == count
+
+
+# ---------- F-24 환율 변동 제외 (9-9, 이슈 #74) ----------
+
+FX_OFF: dict[str, Any] = EXPECTED["v2"]["fx_off"]
+# 7절 사례: 9-8 매수일은 이 사례들과 같다 (60번, 2021-12-01 ~ 2026-11-02)
+V1_QLD = EXPECTED_CASES["월1일_200만원_5년"]["results"]["QLD"]
+V1_QLD_WHOLE = EXPECTED_CASES["월1일_200만원_5년_정수주"]["results"]["QLD"]
+# 9-9 이 회차 지금 1회·14회·60회 (기준값 표 "환율 변동 제외" 열)
+FX_OFF_LOT_TABLE = {"2021-12-01": 69.92, "2023-01-03": 316.27, "2026-11-02": -10.45}
+# 9-9 전략 줄: 전략 → (평가금 원, 수익률 %). 기본 적립은 표 첫 줄
+FX_OFF_STRATEGY_TABLE = {
+    "none": (227_237_947, 89.36),
+    "ma_dip": (210_501_927, 75.42),
+    "ma_hot": (218_554_778, 82.13),
+    "switch": (232_842_307, 94.04),
+    "lump_sum": (203_903_604, 69.92),
+}
+
+
+def test_v2_fx_off_keys_follow_v2_and_cases() -> None:
+    """fx_off는 9-8과 같은 이름을 쓴다: metrics·strategies·buy_rows·start_sweep은 v2의 같은 키, integer는
+    cases 결과와 같은 키다 (이슈 #74 기준값)."""
+    v2 = EXPECTED["v2"]
+    assert list(FX_OFF) == ["metrics", "strategies", "buy_rows", "start_sweep", "integer"]
+    assert list(FX_OFF["metrics"]) == list(v2["metrics"])
+    assert list(FX_OFF["strategies"]) == list(v2["strategies"])
+    for rule, values in FX_OFF["strategies"].items():
+        assert list(values) == list(v2["strategies"][rule]), rule
+    assert list(FX_OFF["buy_rows"]) == list(v2["buy_rows"])
+    for day, values in FX_OFF["buy_rows"].items():
+        assert list(values) == list(v2["buy_rows"][day]), day
+    assert list(FX_OFF["start_sweep"]) == list(v2["start_sweep"])
+    assert list(FX_OFF["integer"]) == list(V1_QLD_WHOLE)
+
+
+def test_v2_fx_off_metrics_match_rules_table() -> None:
+    """계산 규칙 9-9 기준값 표의 "환율 변동 제외" 열 (수익률 ±0.01%p, 금액 ±1원, 환율 ±0.01원)."""
+    m, none = FX_OFF["metrics"], FX_OFF["strategies"]["none"]
+    assert none["value"] == pytest.approx(227_237_947, abs=1)
+    assert none["return_pct"] == pytest.approx(89.36, abs=0.01)
+    assert none["xirr_pct"] == pytest.approx(26.01, abs=0.01)
+    assert m["avg_buy_fx"] == pytest.approx(1352.57, abs=0.01)
+    assert m["price_effect"] == pytest.approx(107_237_947, abs=1)
+    assert m["fx_effect"] == 0
+    assert none["worst_return_pct"] == pytest.approx(-42.48, abs=0.01)
+    assert m["max_drawdown"] == {"date": "2025-04-08", "pct": pytest.approx(-39.73, abs=0.01)}
+    assert m["underwater_days"] == 344
+    assert m["longest_underwater"] == {
+        "days": 338,
+        "start": "2022-01-05",
+        "recovered": "2023-05-11",
+    }
+    assert m["years"]["2022"]["return_pct"] == pytest.approx(-35.23, abs=0.01)
+    assert m["months"]["best"] == {"month": "2026-04", "return_pct": pytest.approx(32.87, abs=0.01)}
+    assert m["months"]["worst"] == {
+        "month": "2022-04",
+        "return_pct": pytest.approx(-26.03, abs=0.01),
+    }
+    assert m["tax"] == pytest.approx(23_042_348, abs=1)
+    assert m["profit_after_tax"] == pytest.approx(84_195_599, abs=1)
+
+
+def test_v2_fx_off_buy_rows_lot_return_match_rules_table() -> None:
+    """9-9 표 "이 회차 지금 1회 / 14회 / 60회" (결정 d72): +69.92% / +316.27% / −10.45%. 1회는 첫 매수라
+    그날 수익률이 0이다 (5절)."""
+    got = FX_OFF["buy_rows"]
+    assert list(got) == list(FX_OFF_LOT_TABLE)
+    for day, lot in FX_OFF_LOT_TABLE.items():
+        assert got[day]["lot_return_pct"] == pytest.approx(lot, abs=0.01), day
+    assert got["2021-12-01"]["return_pct"] == 0
+
+
+@pytest.mark.parametrize("rule", list(FX_OFF_STRATEGY_TABLE), ids=list(FX_OFF_STRATEGY_TABLE))
+def test_v2_fx_off_strategy_matches_rules_table(rule: str) -> None:
+    """9-9 전략 줄 (200일선, 기준 종목 QQQ): 평가금과 수익률. 일시금 XIRR은 11.22%."""
+    value, ret = FX_OFF_STRATEGY_TABLE[rule]
+    s = FX_OFF["strategies"][rule]
+    assert s["value"] == pytest.approx(value, abs=1)
+    assert s["return_pct"] == pytest.approx(ret, abs=0.01)
+    if rule == "lump_sum":
+        assert s["xirr_pct"] == pytest.approx(11.22, abs=0.01)
+
+
+def test_v2_fx_off_integer_matches_rules_table() -> None:
+    """9-9 정수 주만 (같은 조건): 평가금 227,255,019원, 수익률 +89.38%, 남은 현금 $35.10."""
+    got = FX_OFF["integer"]
+    assert got["value"] == pytest.approx(227_255_019, abs=1)
+    assert got["return_pct"] == pytest.approx(89.38, abs=0.01)
+    assert got["leftover_cash_asset"] == pytest.approx(35.10, abs=0.01)
+
+
+def test_v2_fx_off_keeps_values_fixed_at_buy_time() -> None:
+    """9-9: 평단가, 매수 횟수, 싸게 산 횟수, 평균 매수 환율, 주가 등락, 규칙이 걸린 매수일은 매수 때 정해져
+    켬(v2)과 같다. 정수 주만도 수량·남은 현금·평단가가 7절 정수 주 사례와 같다 (매수일이 같다)."""
+    v2 = EXPECTED["v2"]
+    m, on = FX_OFF["metrics"], v2["metrics"]
+    for key in (
+        "avg_buy_fx",
+        "buys",
+        "buys_below_eval_price",
+        "buys_below_avg_cost",
+        "trading_days",
+    ):
+        assert m[key] == on[key], key
+    assert m["months"]["count"] == on["months"]["count"]
+    for year, want in on["years"].items():
+        assert m["years"][year]["price_change_pct"] == want["price_change_pct"], year
+    for rule, want in v2["strategies"].items():
+        got = FX_OFF["strategies"][rule]
+        assert got["avg_cost_asset"] == want["avg_cost_asset"], rule
+        assert got["rule_days"] == want["rule_days"], rule
+    for key in (
+        "buys",
+        "first_buy",
+        "last_buy",
+        "invested",
+        "shares",
+        "leftover_cash_asset",
+        "avg_cost_asset",
+        "avg_cost_invest",
+        "eval_price",
+    ):
+        assert FX_OFF["integer"][key] == V1_QLD_WHOLE[key], key
+
+
+def test_v2_fx_off_profit_is_all_price_effect() -> None:
+    """9-9 → 9-4: 평가 환율이 평균 매수 환율이라 환율 효과는 0이고 주가 효과가 손익이다.
+    손익 = 평가금 − 투자금, 세후 손익 = 손익 − 양도세 (반올림 1원 안쪽)."""
+    m, none = FX_OFF["metrics"], FX_OFF["strategies"]["none"]
+    assert m["fx_effect"] == 0
+    assert m["price_effect"] == m["profit"]
+    assert m["profit"] == pytest.approx(none["value"] - V1_QLD["invested"], abs=1)
+    assert m["profit"] - m["tax"] == pytest.approx(m["profit_after_tax"], abs=1)
+
+
+def test_v2_fx_off_lump_sum_return_equals_first_buy_lot_return() -> None:
+    """9-9: 일시금은 첫날 한 번에 사서 평균 매수 환율이 그날 환율이다. 그래서 수익률이 1회차 이 회차 지금
+    (+69.92%, QLD 종가 $42.32 → $71.91)과 같다."""
+    first = FX_OFF["buy_rows"][V1_QLD["first_buy"]]
+    lump = FX_OFF["strategies"]["lump_sum"]
+    assert lump["return_pct"] == pytest.approx(first["lot_return_pct"], abs=0.01)
+
+
+def test_v2_fx_off_eval_fx_and_whole_period_returns_line_up() -> None:
+    """평가에 쓴 환율은 평균 매수 환율이다 (정수 주만도 남은 현금까지 든 달러 원가라 같은 값, 9-4 결정 d26).
+    올해 누적 수익률(9-2)과 2021-12 시작 시점(9-7, 매수일이 같다)은 요약 수익률과 같다."""
+    m, none = FX_OFF["metrics"], FX_OFF["strategies"]["none"]
+    assert FX_OFF["integer"]["eval_fx"] == pytest.approx(m["avg_buy_fx"], abs=0.01)
+    assert m["years"]["2026"]["return_pct"] == none["return_pct"]
+    assert FX_OFF["start_sweep"]["2021-12"] == none["return_pct"]

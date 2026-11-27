@@ -1483,3 +1483,543 @@ def test_analyze_rule_none_buy_counts_stay_v2_metrics() -> None:
         m["buys_below_eval_price"],
         m["buys_below_avg_cost"],
     )
+
+
+# ---------- 이슈 #74: 환율 변동 제외 (F-24, 9-9) ----------
+
+# 9-9 기준값: 9-8 조건(QLD, 매월 1일 200만원, 원화)을 환율 변동 없이 계산한 값. 키는 v2와 같다
+FX_OFF: dict[str, Any] = V2["fx_off"]
+FX_OFF_METRICS: dict[str, Any] = FX_OFF["metrics"]
+# 9-8 달러 양도세의 원/달러 환율. 같은 통화(달러로 QQQ) 사례의 양도세 환율로 쓴다
+DOLLAR_TAX_FX: float = V2["dollar_tax"]["tax_fx"]
+# 9-9: 종목 통화가 투자 통화와 같으면 켬과 같다. 사례 id → (7절 사례 id, 종목, 양도세 환율)
+SAME_CURRENCY_CASES: dict[str, tuple[str, str, float]] = {
+    "monthly1-usd1500-QQQ": ("monthly1-usd1500", "QQQ", DOLLAR_TAX_FX),
+    "monthly1-krw2m-005930": ("monthly1-krw2m-005930", "005930.KS", 1.0),
+}
+# 같은 통화 사례를 계산하는 방법들. 받는 것: 종목, 조건, 양도세 환율. 기준 종목은 9-8과 같은 QQQ 200일선
+SAME_CURRENCY_RUNS: dict[str, Callable[[Series, Params, float], object]] = {
+    "simulate": lambda asset, p, tax_fx: simulate(asset, None, p),
+    "with-rule-ma-dip": lambda asset, p, tax_fx: engine.simulate_with_rule(
+        asset, None, load_series(V2["switch_ref"]), p, "ma_dip", ma_days=V2["ma_days"]
+    ),
+    "with-rule-switch": lambda asset, p, tax_fx: engine.simulate_with_rule(
+        asset, None, load_series(V2["switch_ref"]), p, "switch", ma_days=V2["ma_days"]
+    ),
+    "rule-lump-sum": lambda asset, p, tax_fx: simulate_rule(asset, None, None, p, "lump_sum"),
+    "analyze": lambda asset, p, tax_fx: analyze(
+        simulate(asset, None, p), asset, None, p.end, tax_fx=tax_fx
+    ),
+}
+# fx_excluded 값 (설계 메모: fx가 있고 include_fx가 꺼졌을 때만 True). 사례 id → (계산, 기대값)
+FX_EXCLUDED_CASES: dict[str, tuple[Callable[[], engine.SimResult], bool]] = {
+    "qld-krw-fx-on": (_basic, False),
+    "qld-krw-fx-off": (lambda: _basic(include_fx=False), True),
+    "qld-krw-fx-off-whole-shares": (lambda: _basic(fractional=False, include_fx=False), True),
+    "qld-krw-fx-off-ma-dip": (lambda: _with_rule("ma_dip", include_fx=False), True),
+    "qqq-usd-fx-off": (
+        lambda: _run("QQQ", _v2_params(amount=1500.0, currency="USD", include_fx=False)),
+        False,
+    ),
+    "005930-krw-fx-off": (lambda: _run("005930.KS", _v2_params(include_fx=False)), False),
+}
+# 매수 규칙이 끝날에 남긴 현금이 있는 사례: 사례 id → (규칙, Params 바꿀 것). 레버리지 전환은 2022년에
+# 쉬어서 끝날짜를 2022-12-30으로 당기면 현금이 남는다 (9-8 끝날짜에는 0)
+LEFTOVER_CASES: dict[str, tuple[str, dict[str, Any]]] = {
+    "ma-dip": ("ma_dip", {}),
+    "ma-hot": ("ma_hot", {}),
+    "switch-end-2022-12-30": ("switch", {"end": date(2022, 12, 30)}),
+}
+
+
+def _fx_off_analysis() -> Analysis:
+    """9-8 조건을 환율 변동 없이 simulate하고 analyze한다 (원화 투자라 tax_fx 1)."""
+    return _analyze("QLD", _v2_params(include_fx=False))
+
+
+def _qld_run(method: str, fx: Series, **changes: Any) -> engine.SimResult:
+    """9-8 조건 QLD를 주어진 환율로 계산한다. method는 fractional(simulate) 또는 매수 규칙 이름."""
+    asset, ref = load_series("QLD"), load_series(V2["switch_ref"])
+    params = _v2_params(**changes)
+    if method == "fractional":
+        return simulate(asset, fx, params)
+    return engine.simulate_with_rule(asset, fx, ref, params, method, ma_days=V2["ma_days"])
+
+
+def _bought_at(row: engine.BuyRow) -> tuple[Any, ...]:
+    """매수 때 정해지는 매수 내역 값 (9-9: 환율 변동을 빼도 바뀌지 않는다)."""
+    return (
+        row.date,
+        row.price,
+        row.fx,
+        row.qty,
+        row.cum_qty,
+        row.avg_cost_asset,
+        row.avg_cost_invest,
+        row.invested,
+        row.cash,
+    )
+
+
+def _fixed_summary(s: engine.Summary) -> tuple[Any, ...]:
+    """매수 때 정해지는 요약 값: 매수 횟수, 투자금, 수량, 남은 현금(종목 통화), 평단가 둘, 평가 가격."""
+    return (
+        s.buys,
+        s.first_buy,
+        s.last_buy,
+        s.invested,
+        s.shares,
+        s.leftover_cash,
+        s.avg_cost_asset,
+        s.avg_cost_invest,
+        s.eval_date,
+        s.eval_price,
+        s.listed_after_start,
+    )
+
+
+# 입력과 결과 모양
+
+
+def test_params_include_fx_defaults_to_true() -> None:
+    """F-24: 환율 변동 포함이 기본이다. 기존 호출은 그대로 3절 평가 환율로 계산한다."""
+    assert _v2_params().include_fx is True
+
+
+@pytest.mark.parametrize("case", list(FX_EXCLUDED_CASES), ids=list(FX_EXCLUDED_CASES))
+def test_sim_result_fx_excluded_true_only_when_fx_off_and_currencies_differ(case: str) -> None:
+    """SimResult.fx_excluded = 환율이 있고(fx가 None이 아님) include_fx가 꺼졌다. 같은 통화면 끄더라도 False다."""
+    run, want = FX_EXCLUDED_CASES[case]
+    assert run().fx_excluded is want
+
+
+def test_sim_result_without_fx_excluded_raises_type_error() -> None:
+    """설계 메모: fx_excluded는 기본값이 없다. 결과가 자기 평가 방식을 늘 들고 가 analyze와 어긋나지 않는다."""
+    s = _basic().summary
+    with pytest.raises(TypeError, match="fx_excluded"):
+        engine.SimResult("QLD", "USD", s, [], [])
+
+
+# 9-9 기준값 (expected.json v2.fx_off)
+
+
+@pytest.mark.parametrize(
+    "method", ["simulate", "with-rule-none"], ids=["simulate", "with-rule-none"]
+)
+def test_simulate_fx_off_reference_case_summary_matches_v2_fx_off_none(method: str) -> None:
+    """9-9: 평가금 227,237,947원, +89.36%, XIRR 26.01%, 최저 −42.48%, 평단가 $37.9743. 평가에 쓴 환율은
+    평균 매수 환율 1,352.57원이다 (결정 d74). simulate와 simulate_with_rule(none)이 같다."""
+    if method == "simulate":
+        result = _basic(include_fx=False)
+    else:
+        result = _with_rule("none", include_fx=False)
+    s = result.summary
+    _assert_rule_summary(s, FX_OFF["strategies"]["none"])
+    assert s.eval_fx == pytest.approx(FX_OFF_METRICS["avg_buy_fx"], abs=0.01)
+    assert s.profit == pytest.approx(FX_OFF_METRICS["profit"], abs=1)
+    assert s.buys == FX_OFF_METRICS["buys"]
+
+
+def test_analyze_fx_off_drawdown_and_underwater_match_v2_fx_off_metrics() -> None:
+    """9-9 → 9-1: 최대 낙폭 −39.73% (2025-04-08), 원금 아래 344일 / 1,250 거래일, 가장 길게 338 거래일
+    (2022-01-05 ~ 2023-05-11 회복), 마지막으로 원금 아래 2023-05-12. 싸게 산 횟수는 켬과 같다."""
+    a, m = _fx_off_analysis(), FX_OFF_METRICS
+    assert a.max_drawdown is not None
+    assert a.max_drawdown.date == date.fromisoformat(m["max_drawdown"]["date"])
+    assert a.max_drawdown.value == pytest.approx(m["max_drawdown"]["pct"], abs=0.01)
+    assert (a.underwater_days, a.trading_days) == (m["underwater_days"], m["trading_days"])
+    assert a.underwater_pct == pytest.approx(m["underwater_pct"], abs=0.01)
+    assert a.longest_underwater is not None
+    longest = m["longest_underwater"]
+    assert a.longest_underwater.days == longest["days"]
+    assert a.longest_underwater.start.isoformat() == longest["start"]
+    assert a.longest_underwater.recovered is not None
+    assert a.longest_underwater.recovered.isoformat() == longest["recovered"]
+    assert a.last_underwater == date.fromisoformat(m["last_underwater"])
+    assert a.buys_below_eval_price == m["buys_below_eval_price"]
+    assert a.buys_below_avg_cost == m["buys_below_avg_cost"]
+
+
+def test_analyze_fx_off_years_and_months_match_v2_fx_off_metrics() -> None:
+    """9-9 → 9-2·9-3: 2022년 누적 −35.23% (주가 등락 −60.64%는 그대로), 월 최고 2026-04 +32.87%,
+    최저 2022-04 −26.03%, 59달 중 34달 오름. 월별은 월말 종가만으로 잰다 (결정 d73)."""
+    a, m = _fx_off_analysis(), FX_OFF_METRICS
+    years = {str(y.year): y for y in a.years}
+    assert list(years) == list(m["years"])
+    for year, want in m["years"].items():
+        assert years[year].return_pct == pytest.approx(want["return_pct"], abs=0.01), year
+        if want["price_change_pct"] is None:
+            assert years[year].price_change_pct is None, year
+        else:
+            change = pytest.approx(want["price_change_pct"], abs=0.01)
+            assert years[year].price_change_pct == change, year
+    assert len(a.months) == m["months"]["count"]
+    assert sum(1 for x in a.months if x.return_pct > 0) == m["months"]["up"]
+    best = max(a.months, key=lambda x: x.return_pct)
+    worst = min(a.months, key=lambda x: x.return_pct)
+    assert (best.month, worst.month) == (
+        m["months"]["best"]["month"],
+        m["months"]["worst"]["month"],
+    )
+    assert best.return_pct == pytest.approx(m["months"]["best"]["return_pct"], abs=0.01)
+    assert worst.return_pct == pytest.approx(m["months"]["worst"]["return_pct"], abs=0.01)
+
+
+def test_analyze_fx_off_profit_split_and_tax_match_v2_fx_off_metrics() -> None:
+    """9-9 → 9-4·9-5: 주가 효과 107,237,947원 = 손익, 환율 효과 0, 평균 매수 환율 1,352.57원은 그대로,
+    양도세 23,042,348원, 세후 손익 84,195,599원."""
+    a, m = _fx_off_analysis(), FX_OFF_METRICS
+    assert a.price_effect == pytest.approx(m["price_effect"], abs=1)
+    assert a.fx_effect == pytest.approx(m["fx_effect"], abs=1)
+    assert a.avg_buy_fx == pytest.approx(m["avg_buy_fx"], abs=0.01)
+    assert a.tax == pytest.approx(m["tax"], abs=1)
+    assert a.profit_after_tax == pytest.approx(m["profit_after_tax"], abs=1)
+
+
+@pytest.mark.parametrize("rule", RULES, ids=RULES)
+def test_simulate_rule_fx_off_matches_v2_fx_off_strategies(rule: str) -> None:
+    """9-9 전략 (200일선, 기준 종목 QQQ): 남은 현금도 평균 매수 환율로 평가한다. 평단가·rule_days는 켬과 같다."""
+    got, want = _strategy(rule, include_fx=False), FX_OFF["strategies"][rule]
+    assert got.value == pytest.approx(want["value"], abs=1)
+    assert got.return_pct == pytest.approx(want["return_pct"], abs=0.01)
+    assert got.xirr_pct == pytest.approx(want["xirr_pct"], abs=0.01)
+    assert got.avg_cost_asset == pytest.approx(want["avg_cost_asset"], abs=0.01)
+    assert got.worst_return_pct == pytest.approx(want["worst_return_pct"], abs=0.01)
+    assert got.leftover_cash_invest == pytest.approx(want["leftover_cash_invest"], abs=1)
+    assert got.rule_days == want["rule_days"]
+
+
+@pytest.mark.parametrize("rule", BACKTEST_RULES, ids=BACKTEST_RULES)
+def test_simulate_with_rule_fx_off_matches_v2_fx_off_strategies(rule: str) -> None:
+    """매수 규칙(F-17)도 같은 루프라 9-9 전략 줄과 같다. 남은 현금은 leftover_cash × eval_fx로 본다."""
+    _assert_rule_summary(_with_rule(rule, include_fx=False).summary, FX_OFF["strategies"][rule])
+
+
+@pytest.mark.parametrize(
+    "method", ["simulate", "with-rule-none"], ids=["simulate", "with-rule-none"]
+)
+def test_buy_rows_fx_off_reference_case_match_v2_fx_off_buy_rows(method: str) -> None:
+    """9-9: 1회 2021-12-01 0.00 / +69.92, 14회 2023-01-03 −33.56 / +316.27, 60회 2026-11-02 +111.46 / −10.45.
+    그날 수익률은 끔의 수익률 추이, 이 회차 지금은 종목 통화 수익률이다 (결정 d72)."""
+    if method == "simulate":
+        result = _basic(include_fx=False)
+    else:
+        result = _with_rule("none", include_fx=False)
+    want_rows: dict[str, dict[str, float]] = FX_OFF["buy_rows"]
+    assert [result.buys[k].date.isoformat() for k in BUY_ROW_INDEXES] == list(want_rows)
+    for k in BUY_ROW_INDEXES:
+        row = result.buys[k]
+        want = want_rows[row.date.isoformat()]
+        assert row.return_pct == pytest.approx(want["return_pct"], abs=0.01), row.date
+        assert row.lot_return_pct == pytest.approx(want["lot_return_pct"], abs=0.01), row.date
+
+
+def test_start_sweep_fx_off_matches_v2_fx_off_start_sweep() -> None:
+    """9-9 → 9-7: 시작 시점 바꿔 보기도 끔으로 계산한다. 2025-04 시작은 +5.30% (켬은 −0.71%)."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    got = start_sweep(asset, fx, _v2_params(include_fx=False))
+    assert list(got) == list(FX_OFF["start_sweep"])
+    for month, ret in FX_OFF["start_sweep"].items():
+        assert got[month] == pytest.approx(ret, abs=0.01), month
+
+
+def test_anchor_sweep_fx_off_equals_v2_anchor_sweep() -> None:
+    """9-9: 매수일 바꿔 보기는 평단가(종목 통화)라 끄더라도 켬의 v2.anchor_sweep과 같다."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    got = anchor_sweep(asset, fx, _v2_params(include_fx=False))
+    assert list(got) == [int(a) for a in V2["anchor_sweep"]]
+    for anchor, avg in V2["anchor_sweep"].items():
+        assert got[int(anchor)] == pytest.approx(avg, abs=0.01), anchor
+
+
+def test_simulate_fx_off_whole_shares_matches_v2_fx_off_integer() -> None:
+    """9-9 정수 주만: 평가금 227,255,019원 (+89.38%), XIRR 26.02%, 남은 현금 $35.0968도 평균 매수 환율로
+    평가한다. eval_fx는 남은 현금까지 든 달러 원가로 낸 평균 매수 환율이다 (9-4, 결정 d26)."""
+    want = FX_OFF["integer"]
+    s = _basic(fractional=False, include_fx=False).summary
+    assert s.buys == want["buys"]
+    assert (s.first_buy.isoformat(), s.last_buy.isoformat()) == (
+        want["first_buy"],
+        want["last_buy"],
+    )
+    actual = {
+        "invested": s.invested,
+        "shares": s.shares,
+        "leftover_cash_asset": s.leftover_cash,
+        "avg_cost_asset": s.avg_cost_asset,
+        "avg_cost_invest": s.avg_cost_invest,
+        "eval_price": s.eval_price,
+        "eval_fx": s.eval_fx,
+        "value": s.value,
+        "return_pct": s.return_pct,
+        "xirr_pct": s.xirr_pct,
+    }
+    for field, tolerance in TOLERANCE.items():
+        assert actual[field] == pytest.approx(want[field], abs=tolerance), field
+
+
+# 같은 통화면 켬과 같다 (9-9)
+
+
+@pytest.mark.parametrize("run", list(SAME_CURRENCY_RUNS), ids=list(SAME_CURRENCY_RUNS))
+@pytest.mark.parametrize("case", list(SAME_CURRENCY_CASES), ids=list(SAME_CURRENCY_CASES))
+def test_engine_same_currency_fx_off_result_equals_fx_on(case: str, run: str) -> None:
+    """9-9: 종목 통화가 투자 통화와 같으면(fx None) include_fx를 보지 않는다. 7절 "월1일 1,500달러" QQQ와
+    "월1일 200만원 삼성전자"의 simulate·simulate_with_rule·simulate_rule·analyze 결과가 ==로 같다."""
+    case_id, symbol, tax_fx = SAME_CURRENCY_CASES[case]
+    params = _params(next(c for c in EXPECTED["cases"] if CASE_IDS[c["name"]] == case_id))
+    asset = load_series(symbol)
+    on = SAME_CURRENCY_RUNS[run](asset, params, tax_fx)
+    off = SAME_CURRENCY_RUNS[run](asset, replace(params, include_fx=False), tax_fx)
+    assert off == on
+
+
+# 매수 때 정해지는 값은 그대로 (9-9)
+
+
+@pytest.mark.parametrize("method", list(BUY_METHODS), ids=list(BUY_METHODS))
+def test_simulate_fx_off_keeps_buy_rows_fx_quantities_and_avg_costs_of_fx_on(method: str) -> None:
+    """9-9: 매수는 그대로 매수일 환율로 한다. buys[].fx(매수 환율), 수량, 평단가(종목·투자 통화), 투자금,
+    남은 현금(종목 통화), 평가 가격은 켬과 같다. 바뀌는 것은 평가뿐이다 (결정 d74)."""
+    run = BUY_METHODS[method]
+    on, off = run(), run(include_fx=False)
+    assert [_bought_at(row) for row in off.buys] == [_bought_at(row) for row in on.buys]
+    assert _fixed_summary(off.summary) == _fixed_summary(on.summary)
+    assert [row.date for row in off.daily] == [row.date for row in on.daily]
+    assert [row.invested for row in off.daily] == [row.invested for row in on.daily]
+
+
+@pytest.mark.parametrize("fee", [0.0, FEE], ids=["fee0", "fee0.25"])
+def test_simulate_fx_off_fractional_avg_cost_asset_times_eval_fx_equals_avg_cost_invest(
+    fee: float,
+) -> None:
+    """9-9: 소수점 매수면 평단가(종목) × 평가에 쓴 환율 = 평단가(투자 통화)다. 둘 다 달러 원가·투자금을 같은
+    수량으로 나눈 값이라 수수료가 있어도 같다 (반올림 전)."""
+    s = _basic(fee=fee, include_fx=False).summary
+    assert s.avg_cost_asset is not None
+    assert s.avg_cost_invest is not None
+    assert s.avg_cost_asset * s.eval_fx == pytest.approx(s.avg_cost_invest, rel=1e-12)
+
+
+# 평가에 쓴 환율 = 그날까지의 평균 매수 환율 (9-9, 결정 d74)
+
+
+@pytest.mark.parametrize("method", list(BUY_METHODS), ids=list(BUY_METHODS))
+def test_simulate_fx_off_eval_fx_equals_fx_on_avg_buy_fx(method: str) -> None:
+    """끔의 eval_fx는 켬 analyze의 평균 매수 환율(9-4, 1,352.57원)이다. 매수 방식과 상관없다 (결정 d26).
+    끔 analyze의 avg_buy_fx도 그대로다 (buys[].fx로 다시 센다)."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    end = _v2_params().end
+    run = BUY_METHODS[method]
+    on, off = run(), run(include_fx=False)
+    a_on = analyze(on, asset, fx, end, tax_fx=1.0)
+    a_off = analyze(off, asset, fx, end, tax_fx=1.0)
+    assert a_on.avg_buy_fx is not None
+    assert off.summary.eval_fx == pytest.approx(a_on.avg_buy_fx, rel=1e-12)
+    assert off.summary.eval_fx == pytest.approx(FX_OFF_METRICS["avg_buy_fx"], abs=0.01)
+    assert a_off.avg_buy_fx == a_on.avg_buy_fx
+
+
+@pytest.mark.parametrize("method", list(BUY_METHODS), ids=list(BUY_METHODS))
+def test_simulate_fx_off_return_is_dollar_value_over_dollar_cost(method: str) -> None:
+    """9-9: 끔 수익률 = 달러 평가금 ÷ 달러 원가 − 1 = (보유 수량 × 평가 가격 + 남은 현금) ÷ Σ(A ÷ r) − 1.
+    켬 analyze의 9-4 값으로 쓰면 주가 효과 ÷ (투자금 + 환율 효과)다 (둘 다 평가 환율을 곱한 값)."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    run = BUY_METHODS[method]
+    on, off = run(), run(include_fx=False)
+    a_on = analyze(on, asset, fx, _v2_params().end, tax_fx=1.0)
+    want = a_on.price_effect / (on.summary.invested + a_on.fx_effect) * 100
+    assert off.summary.return_pct == pytest.approx(want, rel=1e-9)
+
+
+@pytest.mark.parametrize("method", list(BUY_METHODS), ids=list(BUY_METHODS))
+def test_simulate_fx_off_daily_ends_at_summary_and_buy_rows_follow_daily(method: str) -> None:
+    """매일 10만원(마지막 거래일도 매수일). 끔이어도 마지막 daily는 요약과 같다: fx = eval_fx, value = 평가금
+    (5절 끝). 그날 수익률(buys[].return_pct)은 끔의 같은 날 daily 값이다 (9-1)."""
+    result = BUY_METHODS[method](include_fx=False, **DAILY_BUY)
+    s, last = result.summary, result.daily[-1]
+    assert last.fx == s.eval_fx
+    assert last.value == s.value
+    assert last.return_pct == pytest.approx(s.return_pct, abs=1e-9)
+    daily = {row.date: row.return_pct for row in result.daily}
+    for row in result.buys:
+        assert row.return_pct == pytest.approx(daily[row.date], abs=1e-6), row.date
+    assert result.buys[-1].date == last.date
+
+
+def test_simulate_fx_off_daily_fx_changes_only_on_buy_days() -> None:
+    """9-9: 그날의 평가 환율은 그날까지 투자금 ÷ 그날까지 달러 원가라 매수일에만 바뀐다 (DailyRow.fx, 결정 d74).
+    켬은 그날 환율이라 매수일이 아닌 날에도 바뀐다."""
+    on, off = _basic(), _basic(include_fx=False)
+    buy_dates = {row.date for row in off.buys}
+
+    def changed(rows: list[engine.DailyRow]) -> set[date]:
+        return {rows[i].date for i in range(1, len(rows)) if rows[i].fx != rows[i - 1].fx}
+
+    assert changed(on.daily) - buy_dates  # 이 테스트가 가려내는지: 켬은 매수일이 아닌 날에도 바뀐다
+    assert changed(off.daily)
+    assert changed(off.daily) <= buy_dates
+
+
+# 이 회차 지금 (예외 ①, 결정 d72)
+
+
+@pytest.mark.parametrize("method", list(BUY_METHODS), ids=list(BUY_METHODS))
+def test_buy_rows_fx_off_lot_return_with_fee_is_one_minus_fee_times_without_fee(
+    method: str,
+) -> None:
+    """끔: 이 회차 지금 = (1 − f) × 평가 가격 ÷ 매수 가격 − 1. 수수료 0.25%면 같은 회차의 (1 + 이 회차 지금)이
+    수수료 0일 때의 (1 − 0.0025)배다. 두 결과에서 모두 산 회차만 비교한다."""
+    run = BUY_METHODS[method]
+    base, with_fee = run(include_fx=False), run(fee=FEE, include_fx=False)
+    assert [row.date for row in base.buys] == [row.date for row in with_fee.buys]
+    pairs = [
+        (b, f) for b, f in zip(base.buys, with_fee.buys, strict=True) if b.qty > 0 and f.qty > 0
+    ]
+    assert pairs
+    for b, f in pairs:
+        assert b.lot_return_pct is not None, b.date
+        assert f.lot_return_pct is not None, b.date
+        want = (1 + b.lot_return_pct / 100) * (1 - FEE)
+        assert 1 + f.lot_return_pct / 100 == pytest.approx(want, rel=1e-12), b.date
+
+
+@pytest.mark.parametrize("method", ["fractional", "switch"], ids=["fractional", "switch"])
+def test_buy_rows_fx_off_lot_return_equals_fx_on_lot_return_under_flat_fx(method: str) -> None:
+    """결정 d72: 끔의 이 회차 지금은 그 회차의 매수 환율로 평가해 환율이 빠진 종목 통화 수익률이다. 그래서
+    실제 환율로 끈 값이 환율이 내내 같은(환율 변동이 없는) 켬 값과 같다. 수수료 0.25%, 쉰 날은 둘 다 None."""
+    fx = load_series("USDKRW=X")
+    flat = replace(fx, close=[fx.close[-1]] * len(fx.close))
+    off = _qld_run(method, fx, fee=FEE, include_fx=False)
+    flat_on = _qld_run(method, flat, fee=FEE)
+    on = _qld_run(method, fx, fee=FEE)
+    want = [
+        None if row.lot_return_pct is None else pytest.approx(row.lot_return_pct, abs=1e-9)
+        for row in flat_on.buys
+    ]
+    assert [row.lot_return_pct for row in off.buys] == want
+    # 이 테스트가 가려내는지: 켬(실제 환율)의 1회차는 매수 환율과 끝날 환율이 달라 값이 다르다
+    assert on.buys[0].lot_return_pct != pytest.approx(off.buys[0].lot_return_pct, abs=0.01)
+
+
+@pytest.mark.parametrize(
+    "method", ["switch", "whole-shares-daily"], ids=["switch", "whole-shares-daily"]
+)
+def test_buy_rows_fx_off_zero_qty_rows_have_no_lot_return(method: str) -> None:
+    """끔이어도 산 수량이 0인 매수일(레버리지 전환에서 쉰 날, 정수 주만에서 한 주 값이 모자란 날)은 이 회차
+    지금이 None이고 산 날은 값이 있다 (9-1, 결정 d59)."""
+    if method == "switch":
+        buys = _with_rule("switch", include_fx=False).buys
+    else:
+        buys = _basic(fractional=False, include_fx=False, **DAILY_BUY).buys
+    assert any(row.qty == 0 for row in buys)  # 이 테스트가 가려내는지: 사지 않은 날이 있다
+    assert [row.lot_return_pct is None for row in buys] == [row.qty == 0 for row in buys]
+
+
+@pytest.mark.parametrize("fee", [0.0, FEE], ids=["fee0", "fee0.25"])
+def test_simulate_rule_fx_off_lump_sum_return_equals_first_buy_lot_return(fee: float) -> None:
+    """9-9: 일시금은 첫날 A × 매수 횟수를 한 번에 사서 평균 매수 환율이 그날 환율이다. 그래서 수익률이 기본 적립
+    1회차의 이 회차 지금과 같다 (9-8 조건 +69.92%)."""
+    lump = _strategy("lump_sum", fee=fee, include_fx=False)
+    first = _basic(fee=fee, include_fx=False).buys[0]
+    assert first.lot_return_pct is not None
+    assert lump.return_pct == pytest.approx(first.lot_return_pct, abs=1e-9)
+
+
+# 남은 현금 (9-9 → 9-6)
+
+
+@pytest.mark.parametrize("case", list(LEFTOVER_CASES), ids=list(LEFTOVER_CASES))
+def test_simulate_rule_fx_off_leftover_cash_invest_is_cash_times_avg_buy_fx(case: str) -> None:
+    """9-9: 매수 규칙의 남은 현금도 평균 매수 환율로 평가한다. leftover_cash_invest = 남은 현금(종목 통화) ×
+    끝날 평균 매수 환율(켬 analyze의 avg_buy_fx)."""
+    rule, changes = LEFTOVER_CASES[case]
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    sim = _with_rule(rule, include_fx=False, **changes)
+    strategy = _strategy(rule, include_fx=False, **changes)
+    a_on = analyze(_with_rule(rule, **changes), asset, fx, _v2_params(**changes).end, tax_fx=1.0)
+    s = sim.summary
+    assert s.leftover_cash > 0  # 이 테스트가 가려내는지: 남은 현금이 있다
+    assert strategy.leftover_cash_invest == s.leftover_cash * s.eval_fx
+    assert s.eval_fx == pytest.approx(a_on.avg_buy_fx, rel=1e-12)
+
+
+# analyze (9-4 환율 효과 0, 예외 ② 월별, 결정 d73)
+
+
+@pytest.mark.parametrize(
+    "method", ["fractional", "whole-shares", "ma-dip"], ids=["fractional", "whole-shares", "ma-dip"]
+)
+def test_analyze_fx_off_profit_is_all_price_effect_with_positive_zero_fx_effect(
+    method: str,
+) -> None:
+    """9-9 → 9-4: 끔이면 (주가 효과, 환율 효과) = (손익, 0.0)이다. 환율 효과는 −0.0이 아니라 0.0이다
+    (응답에 −0으로 나가지 않게)."""
+    import math  # 맨 위 import 블록은 이슈 #63과 겹쳐 고치지 않는다
+
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    sim = BUY_METHODS[method](include_fx=False)
+    a = analyze(sim, asset, fx, _v2_params().end, tax_fx=1.0)
+    assert a.price_effect == sim.summary.profit
+    assert a.fx_effect == 0.0
+    assert math.copysign(1.0, a.fx_effect) == 1.0
+
+
+def test_analyze_fx_off_months_equal_asset_currency_months_of_dollar_investment() -> None:
+    """예외 ② (결정 d73): 끔의 월별은 월말 종가만으로 잰 종목 통화 월 수익률이다. 같은 기간에 QLD를 달러로 산
+    결과(환율 없음)의 월별과 같다."""
+    off = _fx_off_analysis().months
+    usd = _analyze("QLD", _v2_params(amount=1500.0, currency="USD")).months
+    assert off == usd
+
+
+def test_analyze_fx_off_months_include_first_buy_month_when_fx_starts_that_month() -> None:
+    """9-3 끝: 환율 데이터가 첫 매수 달에 시작하면 켬은 지난달 월말 값(종가 × 환율)이 없어 그 달이 빠진다.
+    끔은 환율을 곱하지 않고 환율 없는 날도 건너뛰지 않으니 첫 매수 달(2023-03)이 든다."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    params = _v2_params(start=date(2023, 3, 1))
+    first_buy = buy_days(asset.dates, params.start, params.end, params.freq, params.anchor)[0]
+    k = bisect_right(fx.dates, first_buy) - 1
+    late_fx = replace(fx, dates=fx.dates[k:], close=fx.close[k:])
+    month = f"{first_buy:%Y-%m}"
+    assert f"{late_fx.dates[0]:%Y-%m}" == month  # 환율이 첫 매수 달에 시작한다
+    on = analyze(simulate(asset, late_fx, params), asset, late_fx, params.end, tax_fx=1.0)
+    off_params = replace(params, include_fx=False)
+    off = analyze(simulate(asset, late_fx, off_params), asset, late_fx, params.end, tax_fx=1.0)
+    assert on.months[0].month != month
+    assert off.months[0].month == month
+    assert [m.month for m in off.months[1:]] == [m.month for m in on.months]
+
+
+# 실패 경로: 끄더라도 매수에는 환율을 쓴다
+
+
+def _simulate_or_ma_dip(method: str, asset: Series, fx: Series, params: Params) -> engine.SimResult:
+    """method가 simulate면 기본 적립, 아니면 이평선 아래 2배·위 절반 매수 규칙(200일선)으로 계산한다."""
+    if method == "simulate":
+        return simulate(asset, fx, params)
+    return engine.simulate_with_rule(asset, fx, None, params, "ma_dip", ma_days=200)
+
+
+@pytest.mark.parametrize(
+    "method", ["simulate", "with-rule-ma-dip"], ids=["simulate", "with-rule-ma-dip"]
+)
+def test_simulate_fx_off_fx_starting_after_first_buy_raises_engine_error(method: str) -> None:
+    """끔이어도 매수는 매수일 환율로 한다. 환율이 2024년부터만 있으면 첫 매수일(2021-12-01)에 환율이 없다 (3절)."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    cut = next(i for i, d in enumerate(fx.dates) if d >= date(2024, 1, 1))
+    short_fx = replace(fx, dates=fx.dates[cut:], close=fx.close[cut:])
+    params = _v2_params(include_fx=False)
+    with pytest.raises(EngineError, match="환율"):
+        _simulate_or_ma_dip(method, asset, short_fx, params)
+
+
+@pytest.mark.parametrize(
+    "method", ["simulate", "with-rule-ma-dip"], ids=["simulate", "with-rule-ma-dip"]
+)
+def test_simulate_fx_off_without_buy_days_in_period_raises_engine_error(method: str) -> None:
+    """끔이어도 기간 안에 매수일이 없으면 EngineError다 (켬과 같은 메시지)."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    params = _v2_params(start=date(2030, 1, 1), end=date(2030, 2, 1), include_fx=False)
+    with pytest.raises(EngineError, match="매수일"):
+        _simulate_or_ma_dip(method, asset, fx, params)
