@@ -621,6 +621,202 @@
         "buys_below_eval_price": 36,
         "buys_below_avg_cost": 12
       }
+    },
+    "fx_off": {
+      "metrics": {
+        "max_drawdown": {
+          "date": "2025-04-08",
+          "pct": -39.73
+        },
+        "underwater_days": 344,
+        "trading_days": 1250,
+        "underwater_pct": 27.52,
+        "longest_underwater": {
+          "days": 338,
+          "start": "2022-01-05",
+          "recovered": "2023-05-11"
+        },
+        "last_underwater": "2023-05-12",
+        "years": {
+          "2021": {
+            "return_pct": 5.17,
+            "price_change_pct": 54.67
+          },
+          "2022": {
+            "return_pct": -35.23,
+            "price_change_pct": -60.64
+          },
+          "2023": {
+            "return_pct": 42.08,
+            "price_change_pct": 116.89
+          },
+          "2024": {
+            "return_pct": 76.84,
+            "price_change_pct": 42.42
+          },
+          "2025": {
+            "return_pct": 105.76,
+            "price_change_pct": 30.1
+          },
+          "2026": {
+            "return_pct": 89.36,
+            "price_change_pct": 2.13
+          }
+        },
+        "months": {
+          "count": 59,
+          "up": 34,
+          "best": {
+            "month": "2026-04",
+            "return_pct": 32.87
+          },
+          "worst": {
+            "month": "2022-04",
+            "return_pct": -26.03
+          }
+        },
+        "profit": 107237947.0,
+        "price_effect": 107237947.0,
+        "fx_effect": 0.0,
+        "avg_buy_fx": 1352.57,
+        "tax": 23042348.0,
+        "profit_after_tax": 84195599.0,
+        "buys": 60,
+        "buys_below_eval_price": 51,
+        "buys_below_avg_cost": 24
+      },
+      "strategies": {
+        "none": {
+          "value": 227237947.0,
+          "return_pct": 89.36,
+          "xirr_pct": 26.01,
+          "avg_cost_asset": 37.9743,
+          "worst_return_pct": -42.48,
+          "leftover_cash_invest": 0.0,
+          "rule_days": 0
+        },
+        "ma_dip": {
+          "value": 210501927.0,
+          "return_pct": 75.42,
+          "xirr_pct": 22.81,
+          "avg_cost_asset": 36.0893,
+          "worst_return_pct": -41.33,
+          "leftover_cash_invest": 28819356.0,
+          "rule_days": 18
+        },
+        "ma_hot": {
+          "value": 218554778.0,
+          "return_pct": 82.13,
+          "xirr_pct": 24.38,
+          "avg_cost_asset": 36.9473,
+          "worst_return_pct": -38.31,
+          "leftover_cash_invest": 15851057.0,
+          "rule_days": 16
+        },
+        "switch": {
+          "value": 232842307.0,
+          "return_pct": 94.04,
+          "xirr_pct": 27.04,
+          "avg_cost_asset": 37.0603,
+          "worst_return_pct": -25.72,
+          "leftover_cash_invest": 0.0,
+          "rule_days": 15
+        },
+        "lump_sum": {
+          "value": 203903604.0,
+          "return_pct": 69.92,
+          "xirr_pct": 11.22,
+          "avg_cost_asset": 42.32,
+          "worst_return_pct": -60.48,
+          "leftover_cash_invest": 0.0,
+          "rule_days": 0
+        }
+      },
+      "buy_rows": {
+        "2021-12-01": {
+          "return_pct": 0.0,
+          "lot_return_pct": 69.92
+        },
+        "2023-01-03": {
+          "return_pct": -33.56,
+          "lot_return_pct": 316.27
+        },
+        "2026-11-02": {
+          "return_pct": 111.46,
+          "lot_return_pct": -10.45
+        }
+      },
+      "start_sweep": {
+        "2021-12": 89.36,
+        "2022-01": 89.74,
+        "2022-02": 90.36,
+        "2022-03": 90.32,
+        "2022-04": 89.65,
+        "2022-05": 89.44,
+        "2022-06": 87.99,
+        "2022-07": 85.9,
+        "2022-08": 82.68,
+        "2022-09": 80.72,
+        "2022-10": 78.07,
+        "2022-11": 74.24,
+        "2022-12": 70.19,
+        "2023-01": 66.42,
+        "2023-02": 60.52,
+        "2023-03": 56.43,
+        "2023-04": 51.81,
+        "2023-05": 48.35,
+        "2023-06": 44.86,
+        "2023-07": 42.29,
+        "2023-08": 40.17,
+        "2023-09": 38.23,
+        "2023-10": 36.04,
+        "2023-11": 33.17,
+        "2023-12": 29.91,
+        "2024-01": 27.5,
+        "2024-02": 25.31,
+        "2024-03": 23.57,
+        "2024-04": 22.29,
+        "2024-05": 20.89,
+        "2024-06": 18.74,
+        "2024-07": 17.27,
+        "2024-08": 16.35,
+        "2024-09": 14.74,
+        "2024-10": 12.95,
+        "2024-11": 11.47,
+        "2024-12": 10.05,
+        "2025-01": 9.16,
+        "2025-02": 8.08,
+        "2025-03": 7.04,
+        "2025-04": 5.3,
+        "2025-05": 2.55,
+        "2025-06": -0.56,
+        "2025-07": -2.73,
+        "2025-08": -4.52,
+        "2025-09": -6.35,
+        "2025-10": -8.12,
+        "2025-11": -9.06,
+        "2025-12": -9.43,
+        "2026-01": -10.34,
+        "2026-02": -11.63,
+        "2026-03": -12.79,
+        "2026-04": -15.07,
+        "2026-05": -19.16
+      },
+      "integer": {
+        "buys": 60,
+        "first_buy": "2021-12-01",
+        "last_buy": "2026-11-02",
+        "invested": 120000000.0,
+        "shares": 2336.0,
+        "leftover_cash_asset": 35.0968,
+        "avg_cost_asset": 37.9643,
+        "avg_cost_invest": 51349.95,
+        "eval_price": 71.91,
+        "eval_fx": 1352.5727,
+        "value": 227255019.0,
+        "return_pct": 89.38,
+        "xirr_pct": 26.02
+      }
     }
   }
 }
