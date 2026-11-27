@@ -960,16 +960,21 @@ def build_strategy_chart(
 def anchor_sweep(asset: Series, fx: Series | None, p: Params) -> dict[int, float | None]:
     """매월 기준일을 1~28일과 말일(31)로 바꿨을 때의 평단가(종목 통화). 9-7절.
 
-    주기와 상관없이 매월로 계산한다. 그 기준일로는 기간 안에 매수일이 없으면 None이다.
-    정수 주만 살 때 한 주도 사지 못하면 보유 수량이 0이라 평단가가 없어 None이다 (결정 d35).
+    주기와 상관없이 매월로 계산한다. 그 기준일로 계산할 수 없으면 그 기준일만 None이다 (결정 d56):
+    기간 안에 매수일이 없을 때, 그 기준일로 사는 날 당일이나 그 이전 환율이 없을 때(환율 데이터가 더 늦게
+    시작). 정수 주만 살 때 한 주도 사지 못하면 보유 수량이 0이라 평단가가 없어 None이다 (결정 d35).
+    시작일이 끝날짜보다 앞서지 않으면 기준일과 상관없는 오류라 그대로 올린다.
     """
+    _check_params(p)  # 기준일과 상관없는 오류를 None 29개로 숨기지 않는다
     out: dict[int, float | None] = {}
     for anchor in [*range(1, 29), 31]:
-        q = replace(p, freq="monthly", anchor=anchor)
-        if not buy_days(asset.dates, q.start, q.end, q.freq, q.anchor):
+        # 그 기준일로는 매수일이 없거나 그날 환율이 없으면 None. ValueError(계약 위반)는 올린다
+        try:
+            sim = simulate(asset, fx, replace(p, freq="monthly", anchor=anchor))
+        except EngineError:
             out[anchor] = None
             continue
-        out[anchor] = simulate(asset, fx, q).summary.avg_cost_asset
+        out[anchor] = sim.summary.avg_cost_asset
     return out
 
 
@@ -977,7 +982,8 @@ def start_sweep(asset: Series, fx: Series | None, p: Params) -> dict[str, float]
     """시작일을 각 달 1일로 바꿔 끝날짜까지 계산한 수익률. 끝날짜가 든 달의 6개월 전 달까지. 9-7절.
 
     상장 달보다 앞선 달은 뺀다 (상장 달은 남긴다). 그 달부터 매수일이 없으면 뺀다. 그 밖의 오류(환율 없음 등)는
-    그대로 올린다.
+    그대로 올린다. 매수일은 전체 거래일로 고른 뒤 기간으로 거르므로 각 달의 매수일은 같은 p의 매수일 중
+    일부다. 그래서 같은 p로 요청이 계산되면 환율 없음은 나지 않는다.
     """
     listed = asset.dates[0].year * 12 + asset.dates[0].month - 1
     first_index = max(p.start.year * 12 + p.start.month - 1, listed)

@@ -581,7 +581,8 @@ async def run_strategy(market: Market, request: StrategyRequest, today: date) ->
     전략별 평가금 그래프와 매수일·시작 시점 바꿔 보기(9-7)도 같이 만든다. 엔진에는 시작일·끝날짜로
     자르지 않은 전체 데이터를 넘긴다. 이평선은 시작일 이전 주가를 쓰고(9-6), 진행 중인 달은 데이터 마지막
     날을 보고 판정한다(2절). 기준 종목만 실패하면 레버리지 전환만 빼고 돌려준다 (결정 d31). 전략이나
-    바꿔 보기에서 EngineError가 나면 result는 null이고 종목 오류다.
+    시작 시점 바꿔 보기에서 EngineError가 나면 result는 null이고 종목 오류다. 매수일 바꿔 보기는 계산할 수
+    없는 기준일만 null이다 (결정 d56).
     """
     params = _to_params(request, today)
     fetched, ref_fetched = await asyncio.gather(
@@ -619,11 +620,13 @@ async def run_strategy(market: Market, request: StrategyRequest, today: date) ->
             if rule != "switch" or ref is not None
         }
         # 바꿔 보기(9-7)는 요청의 조건(주기·수수료·소수점 매수) 그대로, 기준 종목 없이 계산한다
-        anchors = engine.anchor_sweep(asset, fx, params)
         starts = engine.start_sweep(asset, fx, params)
     except engine.EngineError as error:  # 기간 안 매수일 없음 등
         errors.append(SymbolError(symbol=request.symbol, message=str(error)))
         return StrategyResponse(params=request, result=None, errors=errors + ref_errors)
+    # 그 기준일로 계산할 수 없으면(그날 환율 없음 등) 그 기준일만 None이다 (결정 d56). try 밖이라
+    # EngineError를 내면 500이지만, 기준일과 상관없는 오류는 위 전략 계산이 먼저 내서 여기까지 오지 않는다
+    anchors = engine.anchor_sweep(asset, fx, params)
     chart = engine.build_strategy_chart(list(sims.values()))
 
     invest = request.currency

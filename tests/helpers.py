@@ -34,6 +34,12 @@ MONTH_END_CASES: dict[str, tuple[date | None, date, str, int]] = {
     "data-1030fri-end-1031sat-skips-oct": (date(2026, 10, 30), date(2026, 10, 31), "2026-09", 58),
 }
 
+# 결정 d56 (이슈 #63, PR #30 재현 조건): 9-8 조건에서 USDKRW=X를 이 날부터만 남기면 요청(첫 매수 2021-12-01)과
+# 시작 시점 바꿔 보기는 계산되고, 매수일 바꿔 보기의 25·26일만 2021-11-26에 사서 그날 환율이 없다 (11-25는 미국
+# 휴장일). 기준일은 expected.json v2.anchor_sweep 키 모양. 엔진과 API 테스트가 같이 쓴다
+LATE_FX_FIRST_DAY = date(2021, 11, 29)
+LATE_FX_NULL_ANCHORS = ("25", "26")
+
 
 @cache
 def load_expected() -> dict[str, Any]:
