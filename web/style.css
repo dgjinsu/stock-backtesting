@@ -1666,15 +1666,21 @@ select.field,
   font-size: 12px;
 }
 .hm-tbl th,
-.hm-tbl td,
-.hm-tbl tr > :first-child,
-.hm-tbl tr > :last-child {
+.hm-tbl td {
   height: 34px;
-  padding: 0 1px;
   border-top: 0;
   text-align: center;
 }
-.hm-tbl thead th {
+/* .tbl의 첫·끝 칸 좌우 여백(16px)만 덮는다. 높이·정렬은 넣지 않는다: 이 선택자가 아래
+   thead th·tbody th 규칙보다 우선순위가 높아 머리 줄 높이와 연도 왼쪽 정렬을 덮어 버린다 */
+.hm-tbl th,
+.hm-tbl td,
+.hm-tbl tr > :first-child,
+.hm-tbl tr > :last-child {
+  padding: 0 1px;
+}
+.hm-tbl thead th,
+.hm-tbl thead td {
   height: 22px;
   background: none;
 }
