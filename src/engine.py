@@ -49,7 +49,11 @@ class Series:
 
 @dataclass(frozen=True, slots=True)
 class Params:
-    """백테스트 조건. amount는 투자 통화, fee는 비율(0.0025 = 0.25%)."""
+    """백테스트 조건. amount는 투자 통화, fee는 비율(0.0025 = 0.25%).
+
+    include_fx가 False면 평가 환율 자리에 그날까지의 평균 매수 환율을 쓴다 (계산 규칙 9-9, F-24).
+    종목 통화와 투자 통화가 같으면(fx가 None이면) 보지 않는다.
+    """
 
     start: date
     end: date
@@ -59,6 +63,7 @@ class Params:
     currency: str
     fractional: bool = True
     fee: float = 0.0
+    include_fx: bool = True
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,8 +71,10 @@ class BuyRow:
     """매수 1회. 평단가는 이번 매수까지의 값이고, 아직 산 수량이 없으면 None.
 
     매수 규칙(simulate_with_rule)이면 쉰 날은 qty 0이고 avg_cost_invest는 None이다 (결정 d39).
+    fx는 매수 환율이다 (환율 변동을 빼도 그대로).
     return_pct는 그날 수익률(그 매수일의 DailyRow.return_pct, 마지막 거래일이면 평가 환율로 다시 평가한 값),
-    lot_return_pct는 이 회차 지금(%, 9-1)이고 qty가 0이면 None이다 (결정 d59).
+    lot_return_pct는 이 회차 지금(%, 9-1)이고 qty가 0이면 None이다 (결정 d59). 환율 변동을 빼면
+    그 회차의 매수 환율로 평가한 종목 통화 수익률이다 (9-9, 결정 d72).
     """
 
     date: date
@@ -85,7 +92,10 @@ class BuyRow:
 
 @dataclass(frozen=True, slots=True)
 class DailyRow:
-    """첫 매수일부터 거래일마다 평가한 값. value·invested는 투자 통화."""
+    """첫 매수일부터 거래일마다 평가한 값. value·invested는 투자 통화.
+
+    fx는 그날 평가에 쓴 환율이다. 환율 변동을 빼면 그날까지의 평균 매수 환율이다 (9-9).
+    """
 
     date: date
     price: float
@@ -110,6 +120,7 @@ class Summary:
 
     simulate_with_rule 결과면 avg_cost_invest는 None(결정 d39), leftover_cash는 9-6에서 쓰지 않고 쌓인
     현금(종목 통화), invested는 A × 매수 횟수다.
+    eval_fx는 평가에 쓴 환율이다: 끝날짜 환율(3절), 환율 변동을 빼면 평균 매수 환율(9-9, 결정 d74).
     """
 
     buys: int
@@ -140,13 +151,18 @@ class Summary:
 
 @dataclass(frozen=True, slots=True)
 class SimResult:
-    """종목 하나의 시뮬레이션 결과."""
+    """종목 하나의 시뮬레이션 결과.
+
+    fx_excluded는 환율 변동을 빼고 평가했는지다 (종목 통화가 투자 통화와 다르고 include_fx가 False, 9-9).
+    analyze가 이 값을 보고 9-3·9-4를 고른다.
+    """
 
     symbol: str
     currency: str
     summary: Summary
     buys: list[BuyRow]
     daily: list[DailyRow]
+    fx_excluded: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,8 +326,18 @@ def _lot_return_pct(
 
     eval_price_invest는 평가 가격 × 평가 환율(한 주의 투자 통화 평가 값)이다. 그날 산 몫의 원가가
     매수 가격 × 매수 환율 ÷ (1 − f)라서 소수점·정수 주·매수 규칙 모두 같은 식이다. 산 수량이 0이면 None.
+    환율 변동을 빼면 평가 환율 자리에 그 회차의 매수 환율을 넘긴다 (9-9, 결정 d72).
     """
     return ((1 - fee) * eval_price_invest / (price * fx_rate) - 1) * 100 if qty > 0 else None
+
+
+def _value_fx(market_fx: float, invested: float, dollar_cost: float, fx_excluded: bool) -> float:
+    """평가에 쓰는 환율. 보통은 market_fx(3절), fx_excluded면 그때까지 투자금 ÷ 달러 원가 (9-9).
+
+    달러 원가는 넣은 돈을 매수일 환율로 바꾼 종목 통화 금액의 합 Σ(A ÷ r)이다 (9-4, 결정 d26). 첫 평가일이
+    늘 첫 매수일이라 0으로 나누는 일은 없다.
+    """
+    return invested / dollar_cost if fx_excluded else market_fx
 
 
 def _revalue_last_day(
@@ -324,7 +350,10 @@ def _revalue_last_day(
 
 
 def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
-    """종목 하나에 매번 p.amount씩 산 결과. fx는 종목 통화 → 투자 통화 환율 (같으면 None)."""
+    """종목 하나에 매번 p.amount씩 산 결과. fx는 종목 통화 → 투자 통화 환율 (같으면 None).
+
+    p.include_fx가 False이고 fx가 있으면 날마다·끝날 평가에 그때까지의 평균 매수 환율을 쓴다 (9-9).
+    """
     _check_params(p)
     if (fx is None) != (asset.currency == p.currency):
         raise ValueError(
@@ -334,21 +363,24 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
     if not picked:
         raise EngineError(f"{asset.symbol}: 기간 안에 매수일이 없습니다")
     buy_set = set(picked)
+    fx_excluded = fx is not None and not p.include_fx
 
-    shares = cash = cost_asset = cost_invest = invested = 0.0
+    shares = cash = cost_asset = cost_invest = invested = dollar_cost = 0.0
     buys: list[BuyRow] = []
     daily: list[DailyRow] = []
     flows: list[tuple[date, float]] = []
 
     eval_index = _asof_index(asset.dates, p.end)
     eval_price = asset.close[eval_index]
-    eval_fx = rate_on(fx, p.end)
+    end_fx = rate_on(fx, p.end)  # 3절 평가 환율 (끝날짜)
     for i in range(_asof_index(asset.dates, picked[0]), eval_index + 1):
         day, price = asset.dates[i], asset.close[i]
         fx_rate = rate_on(fx, day)
         bought: float | None = None  # 매수일이면 산 수량
         if day in buy_set:
             invested += p.amount
+            # 9-4 달러 원가. 정수 주는 남은 현금 몫까지 든다 (결정 d26)
+            dollar_cost += p.amount / fx_rate
             flows.append((day, -p.amount))
             net = p.amount * (1 - p.fee) / fx_rate  # 수수료를 뺀 종목 통화 금액
             if p.fractional:
@@ -362,10 +394,14 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
                 cost_asset += bought * price / (1 - p.fee)
                 cost_invest += bought * price / (1 - p.fee) * fx_rate
             shares += bought
-        value = (shares * price + cash) * fx_rate
+        value_fx = _value_fx(fx_rate, invested, dollar_cost, fx_excluded)
+        value = (shares * price + cash) * value_fx
         return_pct = (value / invested - 1) * 100
         avg_cost_asset = cost_asset / shares if shares > 0 else None
         if bought is not None:
+            lot_fx = (
+                fx_rate if fx_excluded else end_fx
+            )  # 환율 변동을 빼면 그 회차의 매수 환율 (d72)
             buys.append(
                 BuyRow(
                     date=day,
@@ -379,7 +415,7 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
                     cash=cash,
                     return_pct=return_pct,
                     lot_return_pct=_lot_return_pct(
-                        bought, price, fx_rate, eval_price * eval_fx, p.fee
+                        bought, price, fx_rate, eval_price * lot_fx, p.fee
                     ),
                 )
             )
@@ -387,7 +423,7 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
             DailyRow(
                 date=day,
                 price=price,
-                fx=fx_rate,
+                fx=value_fx,
                 value=value,
                 invested=invested,
                 return_pct=return_pct,
@@ -395,6 +431,7 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
             )
         )
 
+    eval_fx = _value_fx(end_fx, invested, dollar_cost, fx_excluded)
     value = (shares * eval_price + cash) * eval_fx
     flows.append((p.end, value))
     annual_rate = xirr(flows)
@@ -425,7 +462,7 @@ def simulate(asset: Series, fx: Series | None, p: Params) -> SimResult:
         peak_value=Extreme(peak.date, peak.value),
         listed_after_start=asset.dates[0] > p.start,
     )
-    return SimResult(asset.symbol, asset.currency, summary, buys, daily)
+    return SimResult(asset.symbol, asset.currency, summary, buys, daily, fx_excluded)
 
 
 # ---------- 그래프 날짜축 (계산 규칙 6절, 상세 설계 3절) ----------
@@ -543,7 +580,10 @@ class YearResult:
 
 @dataclass(frozen=True, slots=True)
 class MonthResult:
-    """월 수익률 (9-3절). month는 "YYYY-MM", 투자 통화 기준의 종목 자체 수익률."""
+    """월 수익률 (9-3절). month는 "YYYY-MM", 투자 통화 기준의 종목 자체 수익률.
+
+    환율 변동을 빼면(9-9) 종목 통화 기준이다.
+    """
 
     month: str
     return_pct: float
@@ -594,6 +634,8 @@ def _longest_run(rows: Sequence[DailyRow], flags: Sequence[bool]) -> Underwater 
 
 def _months(asset: Series, fx: Series | None, first_buy: date, end: date) -> list[MonthResult]:
     """9-3절: 월말 값 = 그 달 마지막 거래일 종가 × 그날 환율. 첫 매수 달부터 끝난 달까지.
+
+    fx가 None이면(같은 통화, 또는 환율 변동 제외 9-9) 월말 값은 종가 그대로다.
 
     끝난 달은 말일이 끝날짜 이하이고 종목 데이터도 그 말일까지 있는 달이다. 2절 매수일의 진행 중인 달과
     같은 판정이다 (결정 d24). asset은 끝날짜로 자르기 전 전체 데이터이고, 환율 데이터의 끝은 보지 않는다.
@@ -646,6 +688,7 @@ def analyze(
     USDKRW=X 종가, 9-5절).
     엔진은 투자 통화를 모르므로 기본값을 두지 않는다. 0 이하면 ValueError.
     양도세는 원화로 계산해 투자 통화로 돌려준다. 종목 통화가 원화(한국 종목)면 0이다.
+    result.fx_excluded(환율 변동 제외, 9-9)면 9-3 월별은 월말 종가만으로 재고(결정 d73) 9-4 환율 효과는 0이다.
     """
     if not (tax_fx > 0 and math.isfinite(tax_fx)):
         raise ValueError(f"tax_fx는 0보다 큰 유한한 값이어야 합니다: {tax_fx}")
@@ -659,7 +702,8 @@ def analyze(
     amount = s.invested / s.buys
     dollar_cost = sum(amount / b.fx for b in result.buys)
     asset_value = s.shares * s.eval_price + s.leftover_cash
-    if fx is None:  # 투자 통화와 종목 통화가 같으면 환율 효과 0
+    # 투자 통화와 종목 통화가 같거나 환율 변동을 뺐으면(9-9) 환율 효과 0, 손익이 모두 주가 효과다
+    if fx is None or result.fx_excluded:
         price_effect, fx_effect = s.profit, 0.0
     else:
         price_effect = (asset_value - dollar_cost) * s.eval_fx
@@ -682,7 +726,8 @@ def analyze(
             if b.qty > 0 and s.avg_cost_asset is not None and b.price < s.avg_cost_asset
         ),
         years=_years(result, asset, end),
-        months=_months(asset, fx, s.first_buy, end),
+        # 환율 변동을 뺐으면 월말 종가만으로 잰 종목 통화 월 수익률 (9-9, 결정 d73)
+        months=_months(asset, None if result.fx_excluded else fx, s.first_buy, end),
         price_effect=price_effect,
         fx_effect=fx_effect,
         avg_buy_fx=s.invested / dollar_cost if fx is not None else None,
@@ -763,6 +808,7 @@ def simulate_with_rule(
     rule은 none·ma_dip·ma_hot·switch이고, lump_sum(전략 비교 전용)이면 ValueError다. 소수점 매수로 계산하고
     p.fractional은 보지 않는다. buys는 매수일마다 한 줄이고, 레버리지 전환에서 쉰 날은 qty 0이다.
     cash는 남은 현금(종목 통화), avg_cost_invest는 None이다 (결정 d39). ref는 switch에서만 쓴다.
+    p.include_fx(환율 변동 제외, 9-9)는 simulate와 같다. 남은 현금도 평가금과 같은 환율로 평가한다.
     """
     if rule == "lump_sum":
         raise ValueError("일시금은 매수 규칙으로 쓸 수 없습니다 (전략 비교 전용)")
@@ -789,15 +835,16 @@ def _run_rule(
         raise EngineError(f"{asset.symbol}: 기간 안에 매수일이 없습니다")
     buy_set = set(picked)
     on_buy_day = ref is not None and same_exchange(asset, ref)  # 모르면 다른 거래소로 본다
+    fx_excluded = fx is not None and not p.include_fx  # 9-9
     keep = 1 - p.fee
-    shares = cash = cost = invested = 0.0
+    shares = cash = cost = invested = dollar_cost = 0.0
     rule_days = 0
     flows: list[tuple[date, float]] = []
     buys: list[BuyRow] = []
     daily: list[DailyRow] = []
     eval_index = _asof_index(asset.dates, p.end)
     eval_price = asset.close[eval_index]
-    eval_fx = rate_on(fx, p.end)
+    end_fx = rate_on(fx, p.end)  # 3절 평가 환율 (끝날짜)
     for i in range(_asof_index(asset.dates, picked[0]), eval_index + 1):
         day, price = asset.dates[i], asset.close[i]
         fx_rate = rate_on(fx, day)
@@ -828,14 +875,19 @@ def _run_rule(
                 cash -= spend
             if put:
                 invested += put
+                dollar_cost += put / fx_rate  # 9-4 달러 원가 (일시금은 첫날 A × 매수 횟수)
                 flows.append((day, -put))
             bought = spend / price
             shares += bought
             cost += spend / keep
-        value = (shares * price + cash) * fx_rate
+        value_fx = _value_fx(fx_rate, invested, dollar_cost, fx_excluded)
+        value = (shares * price + cash) * value_fx
         return_pct = (value / invested - 1) * 100
         avg_cost_asset = cost / shares if shares > 0 else None
         if bought is not None:
+            lot_fx = (
+                fx_rate if fx_excluded else end_fx
+            )  # 환율 변동을 빼면 그 회차의 매수 환율 (d72)
             buys.append(
                 BuyRow(
                     date=day,
@@ -849,7 +901,7 @@ def _run_rule(
                     cash=cash,
                     return_pct=return_pct,
                     lot_return_pct=_lot_return_pct(
-                        bought, price, fx_rate, eval_price * eval_fx, p.fee
+                        bought, price, fx_rate, eval_price * lot_fx, p.fee
                     ),
                 )
             )
@@ -857,13 +909,15 @@ def _run_rule(
             DailyRow(
                 date=day,
                 price=price,
-                fx=fx_rate,
+                fx=value_fx,
                 value=value,
                 invested=invested,
                 return_pct=return_pct,
                 avg_cost_asset=avg_cost_asset,
             )
         )
+    # 환율 변동을 빼면 끝날까지 넣은 돈(invested, A × 매수 횟수와 같다) ÷ 달러 원가로 평가한다 (9-9)
+    eval_fx = _value_fx(end_fx, invested, dollar_cost, fx_excluded)
     value = (shares * eval_price + cash) * eval_fx
     total = p.amount * len(picked)
     flows.append((p.end, value))
@@ -895,7 +949,12 @@ def _run_rule(
         listed_after_start=asset.dates[0] > p.start,
     )
     result = SimResult(
-        symbol=asset.symbol, currency=asset.currency, summary=summary, buys=buys, daily=daily
+        symbol=asset.symbol,
+        currency=asset.currency,
+        summary=summary,
+        buys=buys,
+        daily=daily,
+        fx_excluded=fx_excluded,
     )
     return result, rule_days
 
