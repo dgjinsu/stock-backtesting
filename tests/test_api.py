@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import math
 import re
 import time
 from collections import Counter
@@ -1391,6 +1392,9 @@ def test_backtest_four_symbols_five_years_daily_with_tax_from_saved_data_within_
     for result in body["results"]:
         assert "analysis" in result, result["symbol"]
         assert result["summary"].get("tax") is not None, result["symbol"]
+        assert result["daily"] is None, result[
+            "symbol"
+        ]  # include_daily를 보내지 않으면 꺼진 응답을 잰다
         if rule == "switch":  # 잰 응답이 레버리지 전환으로 계산한 것인지
             assert result["switch_ref"] is not None, result["symbol"]
     for symbol, series in body["chart"]["series"].items():
@@ -2078,3 +2082,16 @@ def test_backtest_include_daily_from_saved_data_equals_fresh_daily(api: Api) -> 
     assert saved["stale"] is True
     assert saved["daily"] is not None
     assert saved["daily"] == fresh["daily"]
+
+
+def test_backtest_first_buy_zero_return_is_not_negative_zero(api: Api) -> None:
+    """첫 매수일의 그날 수익률은 계산 오차로 −1.1e-14가 될 수 있다. 응답은 −0.0이 아니라 0.0이다 (PR #72 리뷰).
+
+    QLD를 2023-01-03 하루만 사서 그날 평가하면 buys와 daily의 첫 return_pct가 그 경우다."""
+    body = _backtest(
+        api.client, start="2023-01-02", end="2023-01-03", tax=False, include_daily=True
+    )
+    qld = _result(body, "QLD")
+    first_buy, first_day = qld["buys"][0]["return_pct"], qld["daily"]["return_pct"][0]
+    assert first_buy == first_day == 0.0
+    assert math.copysign(1.0, first_buy) == math.copysign(1.0, first_day) == 1.0

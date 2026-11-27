@@ -1347,7 +1347,7 @@ def test_buy_rows_lot_return_with_fee_is_one_minus_fee_times_without_fee(method:
         assert b.lot_return_pct is not None, b.date
         assert f.lot_return_pct is not None, b.date
         want = (1 + b.lot_return_pct / 100) * (1 - FEE)
-        assert 1 + f.lot_return_pct / 100 == pytest.approx(want, abs=1e-4), b.date
+        assert 1 + f.lot_return_pct / 100 == pytest.approx(want, rel=1e-12), b.date
 
 
 @pytest.mark.parametrize(

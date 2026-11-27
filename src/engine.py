@@ -304,14 +304,14 @@ def _check_params(p: Params) -> None:
 
 
 def _lot_return_pct(
-    qty: float, price: float, fx_rate: float, now: float, fee: float
+    qty: float, price: float, fx_rate: float, eval_price_invest: float, fee: float
 ) -> float | None:
     """이 회차 지금 (9-1, 결정 d59): (1 − f) × 평가 가격 × 평가 환율 ÷ (매수 가격 × 매수 환율) − 1 (%).
 
-    now는 평가 가격 × 평가 환율이다. 그날 산 몫의 원가가 매수 가격 × 매수 환율 ÷ (1 − f)라서 소수점·정수 주·
-    매수 규칙 모두 같은 식이다. 산 수량이 0이면 None.
+    eval_price_invest는 평가 가격 × 평가 환율(한 주의 투자 통화 평가 값)이다. 그날 산 몫의 원가가
+    매수 가격 × 매수 환율 ÷ (1 − f)라서 소수점·정수 주·매수 규칙 모두 같은 식이다. 산 수량이 0이면 None.
     """
-    return ((1 - fee) * now / (price * fx_rate) - 1) * 100 if qty > 0 else None
+    return ((1 - fee) * eval_price_invest / (price * fx_rate) - 1) * 100 if qty > 0 else None
 
 
 def _revalue_last_day(

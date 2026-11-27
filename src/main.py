@@ -184,6 +184,11 @@ def _maybe_money(value: float | None, currency: str) -> float | None:
     return None if value is None else _money(value, currency)
 
 
+def _pct(value: float) -> float:
+    """% 값을 소수 2자리로. 첫 매수일처럼 −1e-14 같은 값이 −0.0으로 나가지 않게 0.0으로 맞춘다."""
+    return round(value, 2) + 0.0
+
+
 def _fx(value: float) -> float:
     """환율은 유효숫자 6자리. KRWUSD=X(약 0.000744)처럼 작은 환율도 0이 되지 않는다."""
     return float(f"{value:.6g}")
@@ -318,8 +323,8 @@ def _result_out(
                 avg_cost_asset=_maybe(b.avg_cost_asset, 4),
                 avg_cost_invest=_maybe_money(b.avg_cost_invest, invest),
                 invested=_money(b.invested, invest),
-                return_pct=round(b.return_pct, 2),
-                lot_return_pct=_maybe(b.lot_return_pct, 2),
+                return_pct=_pct(b.return_pct),
+                lot_return_pct=None if b.lot_return_pct is None else _pct(b.lot_return_pct),
             )
             for b in sim.buys
         ],
@@ -333,7 +338,7 @@ def _daily_out(rows: Sequence[engine.DailyRow], invest: str) -> DailyOut:
         dates=[row.date for row in rows],
         value=[_money(row.value, invest) for row in rows],
         invested=[_money(row.invested, invest) for row in rows],
-        return_pct=[round(row.return_pct, 2) for row in rows],
+        return_pct=[_pct(row.return_pct) for row in rows],
     )
 
 
