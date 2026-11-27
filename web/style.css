@@ -1657,10 +1657,10 @@ select.field,
    글자는 본문 색이다 (기호와 글자로도 읽힌다) */
 .hm-scroll {
   border-top: 0;
-  padding: 0 17px 4px;
+  padding: 0 14px 4px;
 }
 .hm-tbl {
-  min-width: 620px;
+  min-width: 600px;
   border-collapse: separate;
   border-spacing: 3px;
   font-size: 12px;
@@ -1670,7 +1670,7 @@ select.field,
 .hm-tbl tr > :first-child,
 .hm-tbl tr > :last-child {
   height: 34px;
-  padding: 0 2px;
+  padding: 0 1px;
   border-top: 0;
   text-align: center;
 }
