@@ -17,6 +17,7 @@ import {
   drawdownAria,
   drawdownChart,
   drawdownLegend,
+  fxIncluded,
   monthsGrid,
   monthsIntro,
   monthsStats,
@@ -2149,11 +2150,18 @@ test("profitIntro: includeFx를 true로 주면 주지 않은 것과 같다 (incl
   assert.equal(profitIntro(KRW4_RESULTS, "KRW", { includeFx: true }), KRW_VS_USD);
 });
 
-test("profitNotes: 환율 변동 제외면 안내 두 조각만 (같은 이유·평가 환율 비교 문장은 뺀다, 결정 d75)", () => {
+test("profitNotes: 환율 변동 제외면 안내 두 조각과 평균 매수 환율 사실만 (같은 이유·평가 환율 비교는 뺀다, 결정 d75)", () => {
+  // 평균 매수 환율은 끔에서도 그대로이고 평가에 쓴 환율이다 (#74). 비교 문장만 틀린 말이 된다
   assert.deepEqual(profitNotes(FX_OFF4, "KRW", { includeFx: false }), [
     { text: "환율 변동 제외로 계산했습니다.", strong: true },
     {
       text: "통화가 다른 종목은 지금 환율 대신 그날까지의 평균 매수 환율로 평가해 환율 효과가 0입니다.",
+      strong: false,
+    },
+    {
+      text:
+        "60번 평균 매수 환율은 1,352.57원(가장 쌀 때 1,182.86원 2021-12-01, " +
+        "가장 비쌀 때 1,548.61원 2026-07-01)입니다.",
       strong: false,
     },
   ]);
@@ -2177,4 +2185,46 @@ test("profitRows: 환율 변동 제외 응답은 환율 효과 0원(색 없음),
   assert.equal(qld.fxTone, "");
   assert.equal(qld.price, qld.total);
   assert.equal(qld.priceTone, qld.tone);
+});
+
+// include_fx가 없는 응답(#74 전, v1)은 켬이다. false일 때만 끔 (결정 d75)
+const FX_INCLUDED_CASES = [
+  { id: "false면 끔", params: { currency: "KRW", include_fx: false }, want: false },
+  { id: "true면 켬", params: { currency: "KRW", include_fx: true }, want: true },
+  { id: "키가 없으면 켬", params: { currency: "KRW" }, want: true },
+];
+
+for (const { id, params, want } of FX_INCLUDED_CASES) {
+  test(`fxIncluded: ${id}`, () => {
+    assert.equal(fxIncluded(params), want);
+  });
+}
+
+// ---------- 분포 양 끝: 지금 가격·평단가도 범위에 든다 (PR #77 리뷰 필수 1) ----------
+
+test("buyPriceDist: 지금 가격이 가장 낮은 매수 가격보다 낮으면 lo는 지금 가격 내림, 선은 판 안, 칸은 모두 회색", () => {
+  // 하락장 한 구간만 적립한 경우. 시안 식(lo = 가장 낮은 매수 가격 내림)이면 now.left가 음수였다
+  const dist = buyPriceDist(priced([10, 12, 15], { evalPrice: 5, avgCost: 12.1 }));
+  assert.equal(dist.lo, 5);
+  assert.equal(dist.hi, 16);
+  assert.equal(dist.now.left, 0);
+  assert.ok(dist.avg.left >= 0 && dist.avg.left <= 1, `avg.left ${dist.avg.left}`);
+  assert.deepEqual(
+    dist.bins.map((b) => b.filled),
+    Array(12).fill(false),
+  );
+  assert.equal(
+    dist.bins.reduce((n, b) => n + b.count, 0),
+    3,
+  );
+});
+
+test("buyPriceDist: 평단가가 가장 높은 가격보다 높으면(큰 수수료) hi는 평단가 기준, 평단가 선은 판 안", () => {
+  // 한 번에 $100을 수수료 10%로 사면 평단가 $111.11, 지금 $95
+  const dist = buyPriceDist(priced([100], { evalPrice: 95, avgCost: 111.11 }));
+  assert.equal(dist.lo, 95);
+  assert.equal(dist.hi, 114);
+  assert.ok(dist.avg.left > 0.8 && dist.avg.left <= 1, `avg.left ${dist.avg.left}`);
+  assert.equal(dist.avg.flip, true);
+  assert.ok(dist.now.left >= 0, `now.left ${dist.now.left}`);
 });
