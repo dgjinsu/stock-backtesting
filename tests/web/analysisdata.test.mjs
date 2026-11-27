@@ -2228,3 +2228,13 @@ test("buyPriceDist: 평단가가 가장 높은 가격보다 높으면(큰 수수
   assert.equal(dist.avg.flip, true);
   assert.ok(dist.now.left >= 0, `now.left ${dist.now.left}`);
 });
+
+test("buyPriceText: 색칠한 막대가 하나도 없으면(지금 가격이 모든 칸 위 끝보다 낮음) 색칠 안내 문장을 뺀다", () => {
+  // PR #77 다시 리뷰 참고 1: 가리키는 막대가 없는 문장을 붙이지 않는다
+  const result = priced([10, 12, 15], { evalPrice: 5, avgCost: 12.1, below: [0, 1] });
+  assert.equal(
+    buyPriceText(result),
+    "3번 중 0번은 지금 가격보다 싸게, 1번은 평단가보다 싸게 샀습니다. " +
+      "가장 싸게 산 날은 2025-01-02 $10.00, 가장 비싸게 산 날은 2025-03-02 $15.00입니다.",
+  );
+});
