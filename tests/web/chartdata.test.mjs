@@ -18,7 +18,6 @@ import {
   logFirst,
   logFirstNote,
   logSafe,
-  previewRows,
   rangeFrom,
   rangeStart,
   restCount,
@@ -99,28 +98,6 @@ test("investedLines: 상장일이 달라 투자금이 다르면 종목마다", (
   ]);
 });
 
-test("previewRows: 9회 이상이면 앞 6회와 마지막 2회, 가운데 숨긴 수", () => {
-  const rows = Array.from({ length: 60 }, (_, i) => i + 1);
-  const view = previewRows(rows);
-  assert.deepEqual(
-    view.head.map((r) => r.no),
-    [1, 2, 3, 4, 5, 6],
-  );
-  assert.deepEqual(
-    view.tail.map((r) => r.no),
-    [59, 60],
-  );
-  assert.equal(view.hidden, 52);
-  assert.equal(view.head[0].row, 1);
-});
-
-test("previewRows: 8회 이하는 모두 보인다", () => {
-  const view = previewRows([1, 2, 3, 4, 5, 6, 7, 8]);
-  assert.equal(view.head.length, 8);
-  assert.deepEqual(view.tail, []);
-  assert.equal(view.hidden, 0);
-});
-
 test("buysCsv: UTF-8로 바꾸면 BOM(EF BB BF)으로 시작한다", () => {
   const bytes = new TextEncoder().encode(buysCsv(RESULTS, "KRW"));
   assert.deepEqual([...bytes.slice(0, 3)], [0xef, 0xbb, 0xbf]);
@@ -156,23 +133,43 @@ test("buysCsv: 값이 없으면 빈 칸", () => {
   assert.equal(line.split(",")[8], "");
 });
 
-// ---------- 쉰 매수일 (F-17, #41 댓글: 레버리지 전환에서 qty 0인 줄) ----------
+// ---------- 쉰 매수일 (F-17, #41 댓글, 결정 d76(3): lot_return_pct가 null인 줄) ----------
 
-/** 레버리지 전환 결과처럼 60회 중 15회는 사지 않은 매수 내역 (9-8: 쉰 매수일 15번). */
+/**
+ * 레버리지 전환 결과처럼 60회 중 15회는 사지 않은 매수 내역 (9-8: 쉰 매수일 15번).
+ * lot_return_pct가 없는 옛 응답 모양이라 isRest는 산 수량 0으로 본다.
+ */
 const SWITCH_BUYS = Array.from({ length: 60 }, (_, i) => buy(1, { qty: i % 4 === 1 ? 0 : 1.25 }));
 const RULE_PARAMS = { fractional: true, rule: "switch", ma_days: 200, switch_ref: "QQQ" };
 
-test("REST_LABEL·isRest: 산 수량이 0인 회차는 '쉼'", () => {
+test("REST_LABEL·isRest: lot_return_pct가 없는 옛 응답은 산 수량이 0인 회차가 '쉼'", () => {
   assert.equal(REST_LABEL, "쉼");
   assert.equal(isRest(buy(1, { qty: 0 })), true);
   assert.equal(isRest(buy(1, { qty: 0.0001 })), false);
   assert.equal(isRest(buy(1)), false);
 });
 
+test("isRest: lot_return_pct가 null이면 쉼, 숫자면 qty가 0으로 보여도 산 회차 (결정 d76)", () => {
+  assert.equal(isRest(buy(1, { lot_return_pct: null })), true);
+  assert.equal(isRest(buy(1, { qty: 0, lot_return_pct: null })), true);
+  // qty는 소수 4자리로 반올림해 아주 적게 산 회차가 0으로 올 수 있다 (상세 설계 4절)
+  assert.equal(isRest(buy(1, { qty: 0, lot_return_pct: 12.34 })), false);
+  assert.equal(isRest(buy(1, { lot_return_pct: 0 })), false);
+});
+
 test("restCount: 쉰 회차 수", () => {
   assert.equal(restCount(SWITCH_BUYS), 15);
   assert.equal(restCount([buy(1), buy(2)]), 0);
   assert.equal(restCount([]), 0);
+});
+
+test("restCount: lot_return_pct가 있으면 그것으로 센다 (qty 0으로 반올림된 산 회차는 빼고)", () => {
+  const buys = [
+    buy(1, { qty: 0, lot_return_pct: 3.5 }),
+    buy(2, { qty: 0, lot_return_pct: null }),
+    buy(3, { lot_return_pct: 1.25 }),
+  ];
+  assert.equal(restCount(buys), 1);
 });
 
 test("restNote: 레버리지 전환은 기준 종목이 이평선 아래라 현금으로 모은 날", () => {
@@ -187,6 +184,38 @@ test("restNote: 정수 주만 살 때 한 주 값이 모자라 못 산 날도 �
   assert.equal(
     restNote({ fractional: false, rule: "none" }, buys),
     "쉼: 모은 돈이 한 주 값보다 적어 사지 않고 다음 매수에 보탠 매수일 · 3회 중 1회",
+  );
+  // rule이 없는 v1 응답은 기본 규칙이다
+  assert.equal(
+    restNote({ fractional: false }, buys),
+    "쉼: 모은 돈이 한 주 값보다 적어 사지 않고 다음 매수에 보탠 매수일 · 3회 중 1회",
+  );
+});
+
+/** 산 줄 사이에 쉰 줄(lot_return_pct null) 하나. */
+const ONE_REST = [
+  buy(1, { lot_return_pct: 5.5 }),
+  buy(2, { qty: 0, lot_return_pct: null }),
+  buy(3, { lot_return_pct: 4.25 }),
+];
+
+test("restNote: 레버리지 전환이 아닌 매수 규칙(ma_dip)에서 쉰 줄이 생기면 일반 문구", () => {
+  const ruleParams = { rule: "ma_dip", ma_days: 200, switch_ref: "QQQ" };
+  assert.equal(
+    restNote({ ...ruleParams, fractional: true }, ONE_REST),
+    "쉼: 사지 않은 매수일 · 3회 중 1회",
+  );
+  // 매수 규칙은 정수 주만을 골라도 소수점으로 사므로(9-6) 정수 주 문구를 쓰지 않는다
+  assert.equal(
+    restNote({ ...ruleParams, fractional: false }, ONE_REST),
+    "쉼: 사지 않은 매수일 · 3회 중 1회",
+  );
+});
+
+test("restNote: 기본 규칙에 소수점 매수인데 쉰 줄이 있으면 일반 문구", () => {
+  assert.equal(
+    restNote({ fractional: true, rule: "none" }, ONE_REST),
+    "쉼: 사지 않은 매수일 · 3회 중 1회",
   );
 });
 
