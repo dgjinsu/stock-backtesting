@@ -20,6 +20,7 @@ import {
   readQuery,
   ruleFractionalNote,
   shiftYears,
+  staleSymbols,
   symbolStatus,
   toQuery,
   todayKst,
@@ -521,4 +522,52 @@ test("symbolStatus: 저장본은 짧게, 전체 날짜는 title", () => {
     text: "저장본 11-20",
     title: "2026-11-20까지 저장된 데이터로 계산",
   });
+});
+
+// ---------- 종목 줄 저장본 맵 (F-01, 이슈 #59) ----------
+// 그 종목의 주가(price)가 저장본일 때만 "저장본 MM-DD"를 붙인다. 환율만 저장본이면 붙이지 않는다.
+
+/**
+ * /api/backtest 결과 한 줄의 저장본 부분 (상세 설계 4절). stale은 stale_sources가 비어 있지 않은 것과 같고,
+ * 주가가 저장본이면 결과의 data_through는 price 줄의 기준일과 같다. 날짜는 계산 규칙 7절(주가 11-23,
+ * 환율 11-24)이다.
+ */
+function staleResult(symbol, kinds) {
+  const sources = kinds.map((kind) =>
+    kind === "price"
+      ? { symbol, kind, data_through: "2026-11-23" }
+      : { symbol: "USDKRW=X", kind, data_through: "2026-11-24" },
+  );
+  return { symbol, data_through: "2026-11-23", stale: sources.length > 0, stale_sources: sources };
+}
+
+const LISTED = new Set(["QQQ", "QLD", "TQQQ"]);
+
+test("staleSymbols: 환율(fx)만 저장본인 결과는 맵에 없다", () => {
+  const results = [staleResult("QQQ", ["fx"]), staleResult("QLD", ["fx"])];
+  assert.deepEqual(staleSymbols(results, LISTED), new Map());
+});
+
+test("staleSymbols: 양도세 환율(tax_fx)만 저장본인 결과도 맵에 없다", () => {
+  assert.deepEqual(staleSymbols([staleResult("QQQ", ["tax_fx"])], LISTED), new Map());
+});
+
+test("staleSymbols: 주가(price)가 저장본이면 그 price의 data_through로 들어간다", () => {
+  const results = [
+    staleResult("QQQ", ["fx"]),
+    staleResult("QLD", ["price", "fx"]),
+    staleResult("TQQQ", []),
+  ];
+  assert.deepEqual(staleSymbols(results, LISTED), new Map([["QLD", "2026-11-23"]]));
+});
+
+test("staleSymbols: 지금 패널에 없는 종목(listed에 없음)은 뺀다", () => {
+  const results = [staleResult("QLD", ["price", "fx"]), staleResult("SOXL", ["price", "fx"])];
+  assert.deepEqual(staleSymbols(results, LISTED), new Map([["QLD", "2026-11-23"]]));
+});
+
+test("staleSymbols → symbolStatus: 환율만 저장본인 종목 줄은 기본, 주가 저장본은 저장본 MM-DD", () => {
+  const stale = staleSymbols([staleResult("QQQ", ["fx"]), staleResult("QLD", ["price"])], LISTED);
+  assert.equal(symbolStatus("QQQ", { ...IDLE, stale }), null);
+  assert.equal(symbolStatus("QLD", { ...IDLE, stale }).text, "저장본 11-23");
 });

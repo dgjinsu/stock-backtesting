@@ -5,6 +5,7 @@ python -m src.main --open   # 켜고 준비되면 브라우저 열기
 """
 
 import asyncio
+import bisect
 import logging
 import os
 import sys
@@ -12,7 +13,7 @@ import threading
 import time
 import urllib.request
 import webbrowser
-from collections.abc import AsyncIterator, Callable, Mapping
+from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, timedelta, timezone
@@ -41,6 +42,8 @@ from src.schemas import (
     Peak,
     ResultOut,
     SearchHitOut,
+    StaleKind,
+    StaleSourceOut,
     StrategiesOut,
     StrategyChartOut,
     StrategyChartSeriesOut,
@@ -247,12 +250,45 @@ def _split_notes(history: PriceHistory, start: date) -> list[str]:
     return [f"{day.isoformat()} {ratio} 분할 반영" for day, ratio in history.splits if day >= start]
 
 
+def _date_on_or_before(dates: Sequence[date], day: date) -> date | None:
+    """day 당일 또는 그 이전 마지막 날짜. 없으면 None. dates는 오름차순이다."""
+    i = bisect.bisect_right(dates, day)
+    return dates[i - 1] if i else None
+
+
+def _stale_sources(
+    history: PriceHistory,
+    fx_history: PriceHistory | None,
+    won_history: PriceHistory | None,
+    end: date,
+) -> list[StaleSourceOut]:
+    """그 종목 계산에 저장본으로 쓴 코드들 (F-10). price, fx, tax_fx 순이고 안 쓰거나 새로 받은 것은 뺀다.
+
+    기준일은 끝날짜 당일 또는 그 이전 마지막 거래일이다. 계산이 끝났다면 엔진이 그 날을 이미 찾았으니
+    없으면 코드 버그다.
+    """
+    sources: list[StaleSourceOut] = []
+    used: tuple[tuple[PriceHistory | None, StaleKind], ...] = (
+        (history, "price"),
+        (fx_history, "fx"),
+        (won_history, "tax_fx"),
+    )
+    for h, kind in used:
+        if h is None or not h.stale:
+            continue
+        through = _date_on_or_before(h.dates, end)
+        if through is None:
+            raise RuntimeError(f"{h.symbol}: 끝날짜 {end} 이전 날짜가 없는데 계산이 끝났다")
+        sources.append(StaleSourceOut(symbol=h.symbol, kind=kind, data_through=through))
+    return sources
+
+
 def _result_out(
     history: PriceHistory,
     sim: engine.SimResult,
     analysis: engine.Analysis,
     params: engine.Params,
-    fx_stale: bool,
+    stale_sources: list[StaleSourceOut],
     switch_ref: SwitchRefOut | None,
     *,
     tax: bool,
@@ -264,7 +300,8 @@ def _result_out(
         currency=asset,
         notes=_split_notes(history, params.start),
         data_through=sim.summary.eval_date,
-        stale=history.stale or fx_stale,
+        stale=bool(stale_sources),
+        stale_sources=stale_sources,
         listed_from=history.dates[0] if sim.summary.listed_after_start else None,
         switch_ref=switch_ref,
         summary=_summary_out(sim.summary, analysis, invest, asset, tax=tax),
@@ -410,13 +447,17 @@ async def _fetch_with_tax_fx(
 
 
 def _switch_ref_out(
-    code: str, asset: engine.Series, ref: engine.Series, stale: bool
+    code: str, asset: engine.Series, ref: engine.Series, stale: bool, *, end: date
 ) -> SwitchRefOut:
-    """레버리지 전환의 기준 종목. basis는 engine.same_exchange로만 정한다 (결정 d29). 두 API가 같이 쓴다."""
+    """레버리지 전환의 기준 종목. basis는 engine.same_exchange로만 정한다 (결정 d29). 두 API가 같이 쓴다.
+
+    data_through는 기준 종목의 끝날짜 당일 또는 그 이전 마지막 거래일이다 (결정 d45).
+    """
     return SwitchRefOut(
         symbol=code,
         basis="same_day" if engine.same_exchange(asset, ref) else "previous_day",
         stale=stale,
+        data_through=_date_on_or_before(ref.dates, end),
     )
 
 
@@ -477,12 +518,14 @@ async def run_backtest(market: Market, request: BacktestRequest, today: date) ->
             errors.append(SymbolError(symbol=symbol, message=str(error)))
             continue
         simulated[symbol] = sim
-        fx_stale = any(h is not None and h.stale for h in (fx_history, won_history))
+        stale_sources = _stale_sources(history, fx_history, won_history, params.end)
         switch_ref = (
-            None if ref is None else _switch_ref_out(request.switch_ref, asset, ref, ref_stale)
+            None
+            if ref is None
+            else _switch_ref_out(request.switch_ref, asset, ref, ref_stale, end=params.end)
         )
         results.append(
-            _result_out(history, sim, analysis, params, fx_stale, switch_ref, tax=request.tax)
+            _result_out(history, sim, analysis, params, stale_sources, switch_ref, tax=request.tax)
         )
 
     return BacktestResponse(
@@ -566,7 +609,7 @@ async def run_strategy(market: Market, request: StrategyRequest, today: date) ->
         listed_from=history.dates[0] if history.dates[0] > params.start else None,
         switch_ref=None
         if ref is None
-        else _switch_ref_out(request.switch_ref, asset, ref, ref_stale),
+        else _switch_ref_out(request.switch_ref, asset, ref, ref_stale, end=params.end),
         strategies=StrategiesOut(
             none=_strategy_out(sims["none"], invest),
             ma_dip=_strategy_out(sims["ma_dip"], invest),

@@ -204,16 +204,38 @@ class SwitchRefOut(BaseModel):
     """레버리지 전환의 기준 종목. basis는 기준 종목의 어느 날 종가·이평선을 봤는지다 (결정 d29).
 
     same_day: 같은 거래소라 매수일 것을 봤다. previous_day: 다른 거래소이거나 시간대를 몰라
-    매수일보다 앞선 마지막 거래일 것을 봤다.
+    매수일보다 앞선 마지막 거래일 것을 봤다. data_through는 기준 종목의 끝날짜 당일 또는 그 이전
+    마지막 거래일이고, 없으면 null이다 (결정 d45, 저장본 알림에 기준일을 적는다).
     """
 
     symbol: str
     basis: Literal["same_day", "previous_day"]
     stale: bool
+    data_through: date | None
+
+
+# 저장본 출처의 종류: 종목 주가, 매수·평가 환율, 양도세 환율 (F-10). stale_sources도 이 순서다.
+StaleKind = Literal["price", "fx", "tax_fx"]
+
+
+class StaleSourceOut(BaseModel):
+    """그 종목 계산에 저장본으로 쓴 코드 하나 (F-10).
+
+    data_through는 그 코드의 끝날짜 당일 또는 그 이전 마지막 거래일이다 (계산 규칙 3절 평가 환율과
+    같은 규칙). price면 결과의 data_through와 같다.
+    """
+
+    symbol: str
+    kind: StaleKind
+    data_through: date
 
 
 class ResultOut(BaseModel):
-    """종목 하나의 결과. stale이면 저장본으로 계산했고, listed_from이 있으면 상장일이 시작일보다 늦다."""
+    """종목 하나의 결과. listed_from이 있으면 상장일이 시작일보다 늦다.
+
+    stale_sources는 그 종목 계산에 저장본으로 쓴 코드들이다 (price, fx, tax_fx 순, 기준 종목은
+    switch_ref에 따로 있다). stale은 stale_sources가 비어 있지 않은 것과 같다.
+    """
 
     symbol: str
     name: str
@@ -221,6 +243,7 @@ class ResultOut(BaseModel):
     notes: list[str]
     data_through: date
     stale: bool
+    stale_sources: list[StaleSourceOut]
     listed_from: date | None
     switch_ref: SwitchRefOut | None  # 매수 규칙이 switch일 때만, 아니면 null
     summary: SummaryOut

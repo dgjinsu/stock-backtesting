@@ -16,6 +16,7 @@ import {
   readQuery,
   ruleFractionalNote,
   shiftYears,
+  staleSymbols,
   symbolStatus,
   toQuery,
   todayKst,
@@ -38,7 +39,7 @@ import {
   signedMoney,
 } from "./format.js";
 import { highlights, summaryParts } from "./insights.js";
-import { isSearchShortcut, shortcutAria, shortcutLabel } from "./keys.js";
+import { isSearchShortcut, searchScrollDelta, shortcutAria, shortcutLabel } from "./keys.js";
 import {
   SORT_HINT,
   afterTax,
@@ -49,8 +50,8 @@ import {
   costNotice,
   fxNote,
   nextSort,
-  refStaleAlert,
   sortRows,
+  staleAlerts,
   underwaterText,
 } from "./results.js";
 
@@ -310,6 +311,7 @@ function showNote(text) {
   $("sym-search").setAttribute("aria-expanded", "true");
   search.options = [];
   search.active = -1;
+  revealListIfFocused();
 }
 
 function renderHits(query, hits) {
@@ -361,6 +363,16 @@ function renderHits(query, hits) {
   $("sym-live").textContent =
     `검색 결과 ${search.options.length}개. 위아래 화살표로 고르고 Enter로 넣습니다`;
   search.active = -1;
+  revealListIfFocused();
+}
+
+/**
+ * 목록을 열 때 Tab·마우스로 들어와 쳐도 목록이 패널 바닥에서 잘리지 않게 패널을 스크롤한다.
+ * 검색칸에서 포커스가 나간 직후(목록을 닫기 전 150ms)에 응답이 오면 사용자가 누른 다른 칸이
+ * 움직이지 않게 스크롤하지 않는다.
+ */
+function revealListIfFocused() {
+  if (document.activeElement === $("sym-search")) revealSearch();
 }
 
 async function runSearch(query) {
@@ -425,22 +437,22 @@ function wireSearch() {
 /**
  * 검색칸과 그 아래 목록 자리(최대 높이)가 조건 패널 안에 보이게 패널만 스크롤한다.
  * 패널은 스크롤 영역이라 목록이 패널 바닥을 넘으면 잘린다. 창은 스크롤하지 않는다.
+ * Ctrl K로 왔을 때와 목록을 열 때(찾는 중·결과·안내) 부른다. 스크롤 양은 searchScrollDelta가 정한다.
  * 목록의 top·max-height는 CSS에서 읽는다 (값을 여기 다시 적지 않는다).
- * 패널 끝에 붙으면 포커스 테두리가 잘리므로 위아래로 여백(GAP)을 둔다.
  */
 function revealSearch() {
-  const GAP = 16;
   const panel = $("panel");
   const box = panel.getBoundingClientRect();
-  const top = $("sym-search").closest(".search").getBoundingClientRect().top - GAP;
   const list = getComputedStyle($("sym-results"));
-  const bottom = top + GAP + parseFloat(list.top) + parseFloat(list.maxHeight) + GAP;
-  if (top < box.top) {
-    panel.scrollTop -= box.top - top; // 칸이 패널 위로 숨어 있으면 되올린다
-  } else if (bottom > box.bottom) {
-    // 넘친 만큼 내리되, 칸 위끝이 패널 위로 올라가지는 않게 한다
-    panel.scrollTop += Math.min(bottom - box.bottom, top - box.top);
-  }
+  const delta = searchScrollDelta({
+    panelTop: box.top,
+    panelBottom: box.bottom,
+    fieldTop: $("sym-search").closest(".search").getBoundingClientRect().top,
+    listTop: parseFloat(list.top),
+    listMax: parseFloat(list.maxHeight),
+    gap: 16,
+  });
+  if (delta) panel.scrollTop += delta;
 }
 
 /**
@@ -548,11 +560,7 @@ async function run() {
   state.badSymbols = new Map(
     json.errors.filter((e) => listed.has(e.symbol)).map((e) => [e.symbol, e.message]),
   );
-  state.staleSymbols = new Map(
-    json.results
-      .filter((r) => r.stale && listed.has(r.symbol))
-      .map((r) => [r.symbol, r.data_through]),
-  );
+  state.staleSymbols = staleSymbols(json.results, listed);
   for (const result of json.results) {
     const entry = state.symbols.find((s) => s.code === result.symbol);
     if (entry) entry.name = result.name;
@@ -694,32 +702,14 @@ function alerts(data) {
       ),
     );
   }
-  for (const r of data.results.filter((x) => x.stale)) {
+  // 저장본 노랑 알림: 종목 주가, 환율·양도세 환율, 레버리지 전환의 기준 종목 순 (F-10, F-17)
+  for (const alert of staleAlerts(data.results, data.params)) {
     boxes.push(
       h(
         "div",
         { class: "alert warn" },
         alertIcon(),
-        h(
-          "div",
-          {},
-          h("strong", {
-            text: `${r.symbol}는 ${r.data_through}까지 저장된 데이터로 계산했습니다.`,
-          }),
-          ` Yahoo Finance에서 새로 받지 못했습니다. 평가 기준일도 ${r.data_through}입니다.`,
-        ),
-      ),
-    );
-  }
-  // 레버리지 전환의 기준 종목을 저장본으로 판단했으면 같은 노랑 알림 하나 (F-17, F-10)
-  const ref = refStaleAlert(data.results, data.params);
-  if (ref) {
-    boxes.push(
-      h(
-        "div",
-        { class: "alert warn" },
-        alertIcon(),
-        h("div", {}, h("strong", { text: ref.title }), ` ${ref.detail}`),
+        h("div", {}, h("strong", { text: alert.title }), ` ${alert.detail}`),
       ),
     );
   }
@@ -835,7 +825,10 @@ function card(result, params, chart) {
   const avgCell = foreign
     ? kvCell(
         `${investLabel(invest)} 평단가`,
-        [money(s.avg_cost_invest, invest, { short: false }), infoButton(avgInvestTip(params, s))],
+        [
+          money(s.avg_cost_invest, invest, { short: false }),
+          infoButton(avgInvestTip(params, s, cur)),
+        ],
         { light: true },
       )
     : kvCell(`${investLabel(invest)} 평단가`, "종목 통화 그대로", { light: true });

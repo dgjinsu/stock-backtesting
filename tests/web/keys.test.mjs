@@ -1,10 +1,16 @@
-// web/keys.js 키보드 단축키 판정 (F-01 검색 Ctrl K, 결정 d49·d52). node --test로 돈다.
+// web/keys.js 키보드 단축키 판정 (F-01 검색 Ctrl K, 결정 d49·d52)과 검색 목록 자리 스크롤 양
+// (이슈 #59). node --test로 돈다.
 // 가짜 이벤트 객체 {ctrlKey, metaKey, shiftKey, altKey, code, key}로 시험한다.
 // 빠진 필드는 브라우저 이벤트에서 false/undefined인 것과 같게 본다.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { isSearchShortcut, shortcutAria, shortcutLabel } from "../../web/keys.js";
+import {
+  isSearchShortcut,
+  searchScrollDelta,
+  shortcutAria,
+  shortcutLabel,
+} from "../../web/keys.js";
 
 // ---------- isSearchShortcut: 맥이 아닐 때 (Ctrl+K) ----------
 
@@ -108,3 +114,30 @@ test('shortcutAria: 맥이 아니면 "Control+K"', () => {
 test('shortcutAria: 맥이면 "Meta+K"', () => {
   assert.equal(shortcutAria(true), "Meta+K");
 });
+
+// ---------- searchScrollDelta: 검색칸과 목록 자리가 조건 패널 안에 보이게 할 스크롤 양 (이슈 #59) ----------
+// 목록 자리: 칸 위끝 − gap부터 gap + listTop + listMax + gap까지. 위로 숨으면 음수(되올림),
+// 바닥을 넘으면 넘친 만큼 양수(내림)이되 칸 위끝까지 거리로 막힌다. 다 보이면 0.
+// gap 16, listTop 44, listMax 360은 이슈 #59 완료 기준의 값이다 (px).
+
+const LIST = { listTop: 44, listMax: 360, gap: 16 };
+
+const SCROLL = [
+  { label: "칸이 패널 위로 숨으면 되올린다", panel: [60, 740], fieldTop: 40, want: -36 },
+  { label: "목록 자리가 패널 바닥을 넘으면 넘친 만큼 내린다", panel: [60, 740], fieldTop: 500, want: 180 },
+  {
+    label: "낮은 패널에서는 칸 위끝까지 거리로 막힌다",
+    panel: [60, 400],
+    fieldTop: 200,
+    want: 124,
+  },
+  { label: "칸과 목록 자리가 이미 보이면 스크롤하지 않는다", panel: [60, 740], fieldTop: 100, want: 0 },
+];
+
+for (const { label, panel, fieldTop, want } of SCROLL) {
+  const [panelTop, panelBottom] = panel;
+  const name = `패널 ${panelTop}~${panelBottom}, 칸 위끝 ${fieldTop} → ${want}`;
+  test(`searchScrollDelta: ${label} (${name})`, () => {
+    assert.equal(searchScrollDelta({ panelTop, panelBottom, fieldTop, ...LIST }), want);
+  });
+}
