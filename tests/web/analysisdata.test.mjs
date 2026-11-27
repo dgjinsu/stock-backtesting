@@ -2125,3 +2125,56 @@ test("buyPriceText: 같은 가격이면 앞 날짜 (가장 싸게 2025-02-02, �
 test("buyPriceText: 산 날이 없으면 null", () => {
   assert.equal(buyPriceText(NONE_BOUGHT), null);
 });
+
+// ---------- 환율 변동 제외 (F-24, 결정 d74·d75) ----------
+// 응답 params.include_fx === false면 통화가 다른 종목은 그날까지의 평균 매수 환율로 평가돼 fx_effect 0,
+// price_effect = 손익, eval_fx = avg_buy_fx다 (#74). 수익 상자는 "환율 변동 제외로 계산" 안내를 넣고,
+// 끔에서 틀린 두 글(환율 효과가 같은 이유, 평가 환율과 평균 매수 환율 비교)을 뺀다. include_fx가 없으면 켬이다
+
+/** 예시 결과를 끔 응답 모양으로: 환율 효과 0, 주가 효과 = 손익, 평가 환율 = 평균 매수 환율. */
+function fxOff(result) {
+  const s = result.summary;
+  return withSummary(result, { fx_effect: 0, price_effect: s.profit, eval_fx: s.avg_buy_fx });
+}
+const FX_OFF4 = KRW4_RESULTS.map(fxOff);
+
+test("profitIntro: 환율 변동 제외면 지금 환율 대신 평균 매수 환율, 환율 효과는 0", () => {
+  assert.equal(
+    profitIntro(FX_OFF4, "KRW", { includeFx: false }),
+    "원화 손익 = 주가 효과(달러로 번 돈 × 평균 매수 환율) + 환율 효과(환율 변동 제외라 0)",
+  );
+});
+
+test("profitIntro: includeFx를 true로 주면 주지 않은 것과 같다 (include_fx가 없는 응답은 켬)", () => {
+  assert.equal(profitIntro(KRW4_RESULTS, "KRW", { includeFx: true }), KRW_VS_USD);
+});
+
+test("profitNotes: 환율 변동 제외면 안내 두 조각만 (같은 이유·평가 환율 비교 문장은 뺀다, 결정 d75)", () => {
+  assert.deepEqual(profitNotes(FX_OFF4, "KRW", { includeFx: false }), [
+    { text: "환율 변동 제외로 계산했습니다.", strong: true },
+    {
+      text: "통화가 다른 종목은 지금 환율 대신 그날까지의 평균 매수 환율로 평가해 환율 효과가 0입니다.",
+      strong: false,
+    },
+  ]);
+});
+
+test("profitNotes: includeFx를 true로 주면 주지 않은 것과 같다", () => {
+  assert.deepEqual(
+    profitNotes(KRW4_RESULTS, "KRW", { includeFx: true }),
+    profitNotes(KRW4_RESULTS, "KRW"),
+  );
+});
+
+test("profitNotes: 환율 변동 제외여도 수익 줄이 없으면 빈 목록 (상자가 없다)", () => {
+  assert.deepEqual(profitNotes([USD_QQQ], "USD", { includeFx: false }), []);
+});
+
+test("profitRows: 환율 변동 제외 응답은 환율 효과 0원(색 없음), 주가 효과 = 손익", () => {
+  const qld = profitRows(FX_OFF4, "KRW")[1];
+  assert.equal(qld.symbol, "QLD");
+  assert.equal(qld.fx, "0원");
+  assert.equal(qld.fxTone, "");
+  assert.equal(qld.price, qld.total);
+  assert.equal(qld.priceTone, qld.tone);
+});
