@@ -1,12 +1,14 @@
 """HTTP 진입점(src/main.py)을 확인한다. Yahoo는 fixture를 물린 가짜로 바꿔 네트워크 없이 부른다."""
 
 import asyncio
+import json
 import logging
 import math
 import re
 import time
 from collections import Counter
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import date
 from pathlib import Path
 from typing import Any, get_args
@@ -20,6 +22,8 @@ from src.main import Settings, _to_series, app, create_app
 from src.market import Market, PriceHistory
 from tests.helpers import (
     CASE_IDS,
+    LATE_FX_FIRST_DAY,
+    LATE_FX_NULL_ANCHORS,
     MONTH_END_CASES,
     FakeYahoo,
     inverted_fx_payload,
@@ -58,15 +62,27 @@ class Api:
         self.client, self.yahoo, self.clock = client, yahoo, clock
 
 
-@pytest.fixture
-def api(tmp_path: Path) -> Iterator[Api]:
+@contextmanager
+def _serve(data_dir: Path) -> Iterator[Api]:
+    """서버 하나를 띄운다: 캐시는 data_dir, Yahoo는 가짜, 시계는 고정, 오늘은 TODAY.
+
+    나갈 때 httpx 클라이언트를 닫는다. api(테스트마다)와 9-8 응답 fixture(모듈에 하나)가 같이 쓴다."""
     yahoo, clock = FakeYahoo(), Clock()
     client = httpx.AsyncClient(transport=httpx.MockTransport(yahoo))
-    market = Market(tmp_path, client, clock=clock)
-    server = create_app(Settings(data_dir=tmp_path), market=market, today=lambda: TODAY)
-    with TestClient(server) as test_client:
-        yield Api(test_client, yahoo, clock)
-    asyncio.run(client.aclose())
+    market = Market(data_dir, client, clock=clock)
+    server = create_app(Settings(data_dir=data_dir), market=market, today=lambda: TODAY)
+    try:
+        with TestClient(server) as test_client:
+            yield Api(test_client, yahoo, clock)
+    finally:
+        asyncio.run(client.aclose())
+
+
+@pytest.fixture
+def api(tmp_path: Path) -> Iterator[Api]:
+    """테스트마다 새 서버. 서버 상태(Yahoo 호출 수, 캐시, 시계)를 보거나 9-8 응답만으로는 안 되는 테스트가 쓴다."""
+    with _serve(tmp_path) as server:
+        yield server
 
 
 def _post(client: TestClient, **changes: Any) -> httpx.Response:
@@ -514,32 +530,55 @@ def _called(yahoo: FakeYahoo) -> Counter[str]:
     return Counter(path.rsplit("/", 1)[-1] for path in yahoo.calls)
 
 
+@pytest.fixture(scope="module")
+def v2_strategy_raw(tmp_path_factory: pytest.TempPathFactory) -> bytes:
+    """9-8 요청(STRATEGY_EXAMPLE)의 /api/strategy 응답 본문. 모듈에서 서버 하나로 한 번만 받는다 (이슈 #63).
+
+    고칠 수 없는 bytes로 들고 있다. 서버 상태(Yahoo 호출 수, 캐시, 시계)를 보는 테스트는 api를 쓴다."""
+    with _serve(tmp_path_factory.mktemp("v2-strategy")) as server:
+        response = server.client.post("/api/strategy", json=STRATEGY_EXAMPLE)
+    assert response.status_code == 200, response.text
+    content: bytes = response.content
+    return content
+
+
+@pytest.fixture
+def v2_strategy(v2_strategy_raw: bytes) -> dict[str, Any]:
+    """9-8 /api/strategy 응답을 테스트마다 새 dict로 준다. 한 테스트가 고쳐도 다른 테스트에 번지지 않는다."""
+    body: dict[str, Any] = json.loads(v2_strategy_raw)
+    return body
+
+
 # 기준값과 응답 모양
 
 
 @pytest.mark.parametrize("rule", list(V2["strategies"]), ids=list(V2["strategies"]))
-def test_strategy_reference_case_matches_v2_strategies(api: Api, rule: str) -> None:
+def test_strategy_reference_case_matches_v2_strategies(
+    v2_strategy: dict[str, Any], rule: str
+) -> None:
     """9-8 전략 표. 시작일로 자르지 않은 데이터를 넘겨야 맞는다: ma_dip·ma_hot 이평선은 2021-11-25 이전
     200거래일 종가를 쓴다 (9-6)."""
-    body = _strategy(api.client)
+    body = v2_strategy
     assert body["errors"] == []
     got = body["result"]["strategies"][rule]
     _assert_strategy(got, V2["strategies"][rule])
     assert got["invested"] == pytest.approx(V2_INVESTED, abs=1)
 
 
-def test_strategy_reference_case_keys_follow_v2_strategies_and_engine_rules(api: Api) -> None:
+def test_strategy_reference_case_keys_follow_v2_strategies_and_engine_rules(
+    v2_strategy: dict[str, Any],
+) -> None:
     """strategies 키와 순서는 expected.json v2.strategies와 engine.RULES와 같다. 안쪽 7개 이름 + invested."""
-    strategies = _strategy(api.client)["result"]["strategies"]
+    strategies = v2_strategy["result"]["strategies"]
     assert list(strategies) == list(V2["strategies"])
     assert list(strategies) == list(engine.RULES)
     for rule, values in strategies.items():
         assert {*V2["strategies"][rule], "invested"} <= set(values), rule
 
 
-def test_strategy_reference_case_result_describes_symbol(api: Api) -> None:
+def test_strategy_reference_case_result_describes_symbol(v2_strategy: dict[str, Any]) -> None:
     """종목 정보는 /api/backtest와 같다: 분할 안내(1절), 평가일 2026-11-23(7절), 저장본 아님, 상장일 앞섬."""
-    result = _strategy(api.client)["result"]
+    result = v2_strategy["result"]
     assert result["symbol"] == "QLD"
     assert result["name"] == "ProShares Ultra QQQ"
     assert result["currency"] == "USD"
@@ -576,10 +615,10 @@ def test_strategy_request_allowed_ma_days_is_kept(ma_days: int) -> None:
 # 거래소 판정 (결정 d29)
 
 
-def test_strategy_same_timezone_reference_uses_same_day_basis(api: Api) -> None:
+def test_strategy_same_timezone_reference_uses_same_day_basis(v2_strategy: dict[str, Any]) -> None:
     """9-8: QLD와 QQQ는 둘 다 America/New_York이라 매수일 종가를 본다. 기준 종목의 기준일(data_through)은
     끝날짜 2026-11-24 당일 또는 그 이전 마지막 거래일 2026-11-23이다 (계산 규칙 7절, 이슈 #59)."""
-    switch_ref = _strategy(api.client)["result"]["switch_ref"]
+    switch_ref = v2_strategy["result"]["switch_ref"]
     assert switch_ref == {
         "symbol": "QQQ",
         "basis": "same_day",
@@ -853,11 +892,14 @@ SPEED_SYMBOLS = list(DAILY_CASE["results"])  # QQQ, QLD, TQQQ, SOXL
 SPEED_LIMIT_S = 2.0  # 기능 명세 비기능 요구 "속도", 결정 d30
 
 
-def _assert_anchor_sweep_matches_v2(got: dict[str, Any]) -> None:
-    """9-8 매수일 바꿔 보기: 키 "1"~"28", "31" 순서가 같고 평단가는 ±0.01 안."""
+def _assert_anchor_sweep_matches_v2(got: dict[str, Any], null: tuple[str, ...] = ()) -> None:
+    """9-8 매수일 바꿔 보기: 키 "1"~"28", "31" 순서가 같고 평단가는 ±0.01 안. null에 든 기준일만 null이다."""
     assert list(got) == list(V2["anchor_sweep"])
     for anchor, avg in V2["anchor_sweep"].items():
-        assert got[anchor] == pytest.approx(avg, abs=0.01), anchor
+        if anchor in null:
+            assert got[anchor] is None, anchor
+        else:
+            assert got[anchor] == pytest.approx(avg, abs=0.01), anchor
 
 
 def _assert_start_sweep_matches_v2(got: dict[str, Any]) -> None:
@@ -870,19 +912,19 @@ def _assert_start_sweep_matches_v2(got: dict[str, Any]) -> None:
 # 기준값과 응답 모양
 
 
-def test_strategy_reference_case_anchor_sweep_matches_v2(api: Api) -> None:
+def test_strategy_reference_case_anchor_sweep_matches_v2(v2_strategy: dict[str, Any]) -> None:
     """9-8 조건(매월 1일 요청)의 anchor_sweep. 예: 24일 37.5742, 15일 38.2687."""
-    _assert_anchor_sweep_matches_v2(_strategy(api.client)["result"]["anchor_sweep"])
+    _assert_anchor_sweep_matches_v2(v2_strategy["result"]["anchor_sweep"])
 
 
-def test_strategy_reference_case_start_sweep_matches_v2(api: Api) -> None:
+def test_strategy_reference_case_start_sweep_matches_v2(v2_strategy: dict[str, Any]) -> None:
     """9-8 조건의 start_sweep: 2021-12 ~ 2026-05. 예: 2025-03 +0.82, 2025-04 −0.71."""
-    _assert_start_sweep_matches_v2(_strategy(api.client)["result"]["start_sweep"])
+    _assert_start_sweep_matches_v2(v2_strategy["result"]["start_sweep"])
 
 
-def test_strategy_reference_case_chart_covers_trading_days(api: Api) -> None:
+def test_strategy_reference_case_chart_covers_trading_days(v2_strategy: dict[str, Any]) -> None:
     """날짜축은 첫 매수일부터 data_through까지의 거래일(9-8 1,250일)이고, 1,000점 이하로 줄여 보낸다."""
-    result = _strategy(api.client)["result"]
+    result = v2_strategy["result"]
     chart = result["chart"]
     assert chart["total_days"] == V2["metrics"]["trading_days"]
     assert len(chart["dates"]) <= MAX_CHART_POINTS
@@ -895,10 +937,12 @@ def test_strategy_reference_case_chart_covers_trading_days(api: Api) -> None:
 
 
 @pytest.mark.parametrize("rule", list(V2["strategies"]), ids=list(V2["strategies"]))
-def test_strategy_reference_case_chart_end_and_worst_match_strategies(api: Api, rule: str) -> None:
+def test_strategy_reference_case_chart_end_and_worst_match_strategies(
+    v2_strategy: dict[str, Any], rule: str
+) -> None:
     """그래프 끝값은 요약 평가금(±1원), 최저 수익률은 요약 worst_return_pct(±0.01%p)와 같다.
     줄여도 최저 수익률 날짜가 남는다는 확인이다."""
-    result = _strategy(api.client)["result"]
+    result = v2_strategy["result"]
     series, summary = result["chart"]["series"][rule], result["strategies"][rule]
     assert series["value"][-1] == pytest.approx(summary["value"], abs=1)
     assert min(series["return_pct"]) == pytest.approx(summary["worst_return_pct"], abs=0.01)
@@ -970,13 +1014,30 @@ def test_strategy_unknown_reference_chart_drops_switch_and_keeps_sweeps(api: Api
     _assert_start_sweep_matches_v2(result["start_sweep"])
 
 
-def test_strategy_sweep_engine_error_returns_null_result(api: Api) -> None:
-    """바꿔 보기 한 점이라도 계산할 수 없으면 result는 null이고 종목 오류다 (상세 설계 4절).
+def test_strategy_anchor_buying_before_fx_data_is_null_and_keeps_result(api: Api) -> None:
+    """결정 d56: 매수일 바꿔 보기의 한 기준일만 계산할 수 없으면 그 키만 null이고, 전략·시작 시점은 그대로다.
 
-    환율이 2021-11-29부터 있으면 요청(매월 1일, 첫 매수 12-01)과 시작 시점은 계산되지만, 매수일 바꿔 보기의
-    25일은 2021-11-26에 사서 그날 환율이 없다."""
-    api.yahoo.extra["USDKRW=X"] = payload_from("USDKRW=X", date(2021, 11, 29))
+    PR #30 재현 조건: 환율이 2021-11-29부터 있으면 요청(매월 1일, 첫 매수 12-01)과 시작 시점은 계산되고, 매수일
+    바꿔 보기의 25일(11-25 미국 휴장이라 11-26)과 26일은 2021-11-26에 사서 그날 환율이 없다."""
+    api.yahoo.extra["USDKRW=X"] = payload_from("USDKRW=X", LATE_FX_FIRST_DAY)
     body = _strategy(api.client)
+    assert body["errors"] == []
+    result = body["result"]
+    assert result is not None
+    assert list(result["strategies"]) == list(V2["strategies"])
+    for rule, want in V2["strategies"].items():
+        _assert_strategy(result["strategies"][rule], want)
+    _assert_anchor_sweep_matches_v2(result["anchor_sweep"], null=LATE_FX_NULL_ANCHORS)
+    _assert_start_sweep_matches_v2(result["start_sweep"])
+
+
+def test_strategy_request_buying_before_fx_data_returns_null_result_with_fx_message(
+    api: Api,
+) -> None:
+    """요청 자체(전략 9-6)가 환율 없는 날에 사면 지금처럼 result는 null이고 종목 오류다. 위와 같은 환율로
+    매월 26일 요청이면 첫 매수가 2021-11-26이라 전략 5개를 계산할 수 없다."""
+    api.yahoo.extra["USDKRW=X"] = payload_from("USDKRW=X", LATE_FX_FIRST_DAY)
+    body = _strategy(api.client, anchor=26)
     assert body["result"] is None
     assert [e["symbol"] for e in body["errors"]] == ["QLD"]
     assert "USDKRW=X 환율이 2021-11-26 이전에는 없습니다" in body["errors"][0]["message"]
@@ -1076,14 +1137,35 @@ def _backtest(client: TestClient, **changes: Any) -> dict[str, Any]:
     return body
 
 
+@pytest.fixture(scope="module")
+def v2_backtest_raw(tmp_path_factory: pytest.TempPathFactory) -> bytes:
+    """9-8 요청(V2_BACKTEST, 양도세 켬)의 /api/backtest 응답 본문. 모듈에서 서버 하나로 한 번만 받는다 (이슈 #63).
+
+    고칠 수 없는 bytes로 들고 있다. 서버 상태(Yahoo 호출 수, 캐시, 시계)를 보는 테스트는 api를 쓴다."""
+    with _serve(tmp_path_factory.mktemp("v2-backtest")) as server:
+        response = server.client.post("/api/backtest", json=V2_BACKTEST)
+    assert response.status_code == 200, response.text
+    content: bytes = response.content
+    return content
+
+
+@pytest.fixture
+def v2_backtest(v2_backtest_raw: bytes) -> dict[str, Any]:
+    """9-8 /api/backtest 응답을 테스트마다 새 dict로 준다. 한 테스트가 고쳐도 다른 테스트에 번지지 않는다."""
+    body: dict[str, Any] = json.loads(v2_backtest_raw)
+    return body
+
+
 # 응답 모양과 9-8 기준값
 
 
-def test_backtest_v2_reference_case_adds_v2_fields_named_like_v2_metrics(api: Api) -> None:
+def test_backtest_v2_reference_case_adds_v2_fields_named_like_v2_metrics(
+    v2_backtest: dict[str, Any],
+) -> None:
     """summary에 v2 필드 11개, 결과에 analysis 4개, 그래프에 drawdown을 더한다. 이름은 v2.metrics와 같다."""
     assert set(V2_SUMMARY_FIELDS) <= set(METRICS)
     assert set(V2_ANALYSIS_FIELDS) <= set(METRICS)
-    body = _backtest(api.client)
+    body = v2_backtest
     assert body["errors"] == []
     assert body["params"]["tax"] is True
     qld = _result(body, "QLD")
@@ -1093,11 +1175,11 @@ def test_backtest_v2_reference_case_adds_v2_fields_named_like_v2_metrics(api: Ap
 
 
 def test_backtest_v2_reference_case_summary_drawdown_and_underwater_match_v2_metrics(
-    api: Api,
+    v2_backtest: dict[str, Any],
 ) -> None:
     """9-1, 9-8: 최대 낙폭 −42.2% (2026-11-20), 원금 아래 331일 / 1,250 거래일 (26.48%),
     가장 길게 253 거래일 (2022-03-30 ~ 2023-04-03 회복), 마지막으로 원금 아래 2023-05-04."""
-    summary = _result(_backtest(api.client), "QLD")["summary"]
+    summary = _result(v2_backtest, "QLD")["summary"]
     want = METRICS["max_drawdown"]
     assert summary["max_drawdown"] == {
         "date": want["date"],
@@ -1111,20 +1193,22 @@ def test_backtest_v2_reference_case_summary_drawdown_and_underwater_match_v2_met
 
 
 def test_backtest_v2_reference_case_summary_profit_split_and_tax_match_v2_metrics(
-    api: Api,
+    v2_backtest: dict[str, Any],
 ) -> None:
     """9-4·9-5, 9-8: 주가 효과 +106,570,957원, 환율 효과 −746,367원, 평균 매수 환율 1,352.57원,
     양도세 22,731,410원, 세후 손익 83,093,180원 (금액 ±1원)."""
-    summary = _result(_backtest(api.client), "QLD")["summary"]
+    summary = _result(v2_backtest, "QLD")["summary"]
     for field in ("price_effect", "fx_effect", "tax", "profit_after_tax"):
         assert summary[field] == pytest.approx(METRICS[field], abs=1), field
     assert summary["avg_buy_fx"] == pytest.approx(METRICS["avg_buy_fx"], abs=0.01)
     assert summary["profit"] == pytest.approx(METRICS["profit"], abs=1)
 
 
-def test_backtest_v2_reference_case_analysis_years_match_v2_metrics(api: Api) -> None:
+def test_backtest_v2_reference_case_analysis_years_match_v2_metrics(
+    v2_backtest: dict[str, Any],
+) -> None:
     """9-2, 9-8: 연도별 6개가 "YYYY" 오름차순이고 값이 v2.metrics.years와 같다 (2022: −35.72 / −60.64)."""
-    years = _result(_backtest(api.client), "QLD")["analysis"]["years"]
+    years = _result(v2_backtest, "QLD")["analysis"]["years"]
     assert list(years) == list(METRICS["years"])
     for year, want in METRICS["years"].items():
         assert years[year]["return_pct"] == pytest.approx(want["return_pct"], abs=0.01), year
@@ -1135,10 +1219,12 @@ def test_backtest_v2_reference_case_analysis_years_match_v2_metrics(api: Api) ->
             assert years[year]["price_change_pct"] == change, year
 
 
-def test_backtest_v2_reference_case_analysis_months_match_v2_metrics(api: Api) -> None:
+def test_backtest_v2_reference_case_analysis_months_match_v2_metrics(
+    v2_backtest: dict[str, Any],
+) -> None:
     """9-3, 9-8: 월 수익률(%)이 "YYYY-MM" 오름차순으로 59개, 오른 달 36개, 최고 2026-04 +30.35,
     최저 2022-12 −22.33. v2.metrics.months는 요약이라 응답에서 요약을 만들어 비교한다."""
-    months = _result(_backtest(api.client), "QLD")["analysis"]["months"]
+    months = _result(v2_backtest, "QLD")["analysis"]["months"]
     want = METRICS["months"]
     assert list(months) == sorted(months)
     assert len(months) == want["count"]
@@ -1149,10 +1235,12 @@ def test_backtest_v2_reference_case_analysis_months_match_v2_metrics(api: Api) -
     assert months[worst] == pytest.approx(want["worst"]["return_pct"], abs=0.01)
 
 
-def test_backtest_v2_reference_case_analysis_buy_counts_match_v2_metrics(api: Api) -> None:
+def test_backtest_v2_reference_case_analysis_buy_counts_match_v2_metrics(
+    v2_backtest: dict[str, Any],
+) -> None:
     """9-1, 9-8: 매수 60번 중 지금 가격보다 싸게 산 51번, 평단가보다 싸게 산 24번.
     매수 가격 목록은 같은 응답의 buys[].price(줄이지 않은 60줄)다."""
-    qld = _result(_backtest(api.client), "QLD")
+    qld = _result(v2_backtest, "QLD")
     assert qld["analysis"]["buys_below_eval_price"] == METRICS["buys_below_eval_price"]
     assert qld["analysis"]["buys_below_avg_cost"] == METRICS["buys_below_avg_cost"]
     assert len(qld["buys"]) == METRICS["buys"]
@@ -1309,11 +1397,11 @@ def test_backtest_non_boolean_tax_returns_422_with_korean_message(api: Api) -> N
 
 
 def test_backtest_v2_reference_case_drawdown_series_bottoms_at_max_drawdown_and_ends_at_from_peak(
-    api: Api,
+    v2_backtest: dict[str, Any],
 ) -> None:
     """chart.series.QLD.drawdown은 그날 평가금 낙폭(%)이다. 1,250일을 1,000점 이하로 줄여도 가장 낮은 점이
     summary.max_drawdown과 같은 날(2026-11-20)·같은 값(−42.2)이고, 마지막 값은 from_peak_pct(−34.11)다."""
-    body = _backtest(api.client)
+    body = v2_backtest
     chart, summary = body["chart"], _result(body, "QLD")["summary"]
     assert chart["total_days"] == METRICS["trading_days"]
     assert len(chart["dates"]) <= MAX_CHART_POINTS
@@ -1882,10 +1970,12 @@ def _without_daily(body: dict[str, Any]) -> dict[str, Any]:
 # 매수 내역 두 열 (9-1, 결정 d59)
 
 
-def test_backtest_v2_reference_case_buys_return_and_lot_return_match_v2_buy_rows(api: Api) -> None:
+def test_backtest_v2_reference_case_buys_return_and_lot_return_match_v2_buy_rows(
+    v2_backtest: dict[str, Any],
+) -> None:
     """9-8: buys[0] 2021-12-01 0.00 / 93.09, buys[13] 2023-01-03 −33.54 / 340.54, buys[59] 2026-11-02
     107.23 / −9.19 (±0.01%p). 줄 키는 상세 설계 4절 buys 예와 같고, 두 열은 소수 2자리 %다 (5절 끝)."""
-    buys = _result(_backtest(api.client), "QLD")["buys"]
+    buys = _result(v2_backtest, "QLD")["buys"]
     assert len(buys) == METRICS["buys"]
     assert set(buys[0]) == BUY_KEYS
     assert [buys[k]["date"] for k in BUY_ROW_INDEXES] == list(BUY_ROWS)

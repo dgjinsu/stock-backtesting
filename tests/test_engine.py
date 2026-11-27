@@ -1,6 +1,6 @@
 """계산 엔진(src/engine.py)을 기준값과 계산 규칙으로 확인한다. 네트워크 없이 fixture만 쓴다."""
 
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import date, timedelta
@@ -24,7 +24,14 @@ from src.engine import (
     start_sweep,
     xirr,
 )
-from tests.helpers import CASE_IDS, MONTH_END_CASES, load_expected, load_series
+from tests.helpers import (
+    CASE_IDS,
+    LATE_FX_FIRST_DAY,
+    LATE_FX_NULL_ANCHORS,
+    MONTH_END_CASES,
+    load_expected,
+    load_series,
+)
 
 EXPECTED = load_expected()
 START = date.fromisoformat(EXPECTED["period"][0])
@@ -658,6 +665,48 @@ def test_anchor_sweep_anchor_without_buy_day_is_none() -> None:
     got = anchor_sweep(asset, fx, _v2_params(start=date(2026, 10, 5), end=date(2026, 10, 20)))
     assert got[10] is not None
     assert got[25] is None
+
+
+def test_anchor_sweep_anchor_buying_before_fx_data_is_none_and_others_match_v2() -> None:
+    """9-7, 결정 d56: 그 기준일로 사는 날의 환율이 없으면 그 기준일만 None이고 나머지는 계산한다.
+
+    9-8 조건에서 환율이 2021-11-29부터면 25일(11-25 미국 휴장이라 11-26)과 26일은 2021-11-26에 사서 그날
+    환율이 없다. 나머지 27개 기준일은 그날 환율이 그대로라 v2.anchor_sweep과 ±0.01 안이다.
+    """
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    k = bisect_left(fx.dates, LATE_FX_FIRST_DAY)
+    late_fx = replace(fx, dates=fx.dates[k:], close=fx.close[k:])
+    got = anchor_sweep(asset, late_fx, _v2_params())
+    assert list(got) == [int(a) for a in V2["anchor_sweep"]]
+    rest = {a: avg for a, avg in V2["anchor_sweep"].items() if a not in LATE_FX_NULL_ANCHORS}
+    assert len(rest) == 27
+    for anchor in LATE_FX_NULL_ANCHORS:
+        assert got[int(anchor)] is None, anchor
+    for anchor, avg in rest.items():
+        assert got[int(anchor)] == pytest.approx(avg, abs=0.01), anchor
+
+
+@pytest.mark.parametrize(
+    ("start", "end"),
+    [
+        (date.fromisoformat(V2["period"][0]), date.fromisoformat(V2["period"][0])),
+        (date.fromisoformat(V2["period"][1]), date.fromisoformat(V2["period"][0])),
+    ],
+    ids=["start-equals-end", "start-after-end"],
+)
+def test_anchor_sweep_start_not_before_end_raises_engine_error(start: date, end: date) -> None:
+    """설계 메모 (이슈 #63): 기준일과 상관없는 오류는 None 29개로 숨기지 않고 EngineError로 올린다."""
+    asset, fx = load_series("QLD"), load_series("USDKRW=X")
+    with pytest.raises(EngineError, match="시작일"):
+        anchor_sweep(asset, fx, _v2_params(start=start, end=end))
+
+
+def test_anchor_sweep_missing_fx_for_other_currency_raises_value_error() -> None:
+    """설계 메모 (이슈 #63): 호출 계약 위반(ValueError)은 None으로 바꾸지 않는다. EngineError는 ValueError의
+    하위 클래스라 except ValueError로 잡으면 이 테스트가 깨진다."""
+    with pytest.raises(ValueError, match="환율") as excinfo:
+        anchor_sweep(load_series("QLD"), None, _v2_params())
+    assert not isinstance(excinfo.value, EngineError)
 
 
 # 전략 그래프 (상세 설계 3절, 기능 명세 F-07·F-15)
