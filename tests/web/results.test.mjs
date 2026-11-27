@@ -18,6 +18,10 @@ import {
   staleAlerts,
   underwaterText,
 } from "../../web/results.js";
+import * as resultsModule from "../../web/results.js";
+
+// #65에서 더하는 함수. 아직 없을 때 이 파일의 다른 테스트까지 막지 않게 모듈 이름공간에서 꺼낸다
+const { basisNote, basisText } = resultsModule;
 
 const MINUS = "−"; // U+2212
 
@@ -550,6 +554,67 @@ test("refStaleAlert: 새로 받았거나 레버리지 전환이 아니면(switch
     null,
   );
   assert.equal(refStaleAlert([QLD], { currency: "KRW", tax: false }), null); // switch_ref 없음
+});
+
+// ---------- 기준 종목을 어느 날 종가로 봤나 (basis, 결정 d29, #65) ----------
+
+/** previous_day 글 (이슈 #65, 계산 규칙 9-6 다른 거래소). 종목은 005930.KS, 기준 종목은 QQQ. */
+const PREVIOUS_DAY = (ma) =>
+  "005930.KS는 QQQ와 거래소가 달라 매수일보다 앞선 마지막 거래일의 " +
+  `QQQ 종가·${ma}일선으로 판단했습니다.`;
+
+test("basisText: same_day는 같은 날 종가로 판단", () => {
+  assert.equal(basisText("same_day", ["QLD"], "QQQ", 200), "같은 날 종가로 판단");
+  assert.equal(basisText("same_day", ["QLD"], "QQQ", 20), "같은 날 종가로 판단");
+});
+
+test("basisText: previous_day는 종목·기준 종목·이평선 기간을 넣은 글", () => {
+  assert.equal(basisText("previous_day", ["005930.KS"], "QQQ", 200), PREVIOUS_DAY(200));
+  assert.equal(basisText("previous_day", ["005930.KS"], "QQQ", 20), PREVIOUS_DAY(20));
+});
+
+test("basisText: 모르는 basis면 null", () => {
+  assert.equal(basisText("next_day", ["QLD"], "QQQ", 200), null);
+  assert.equal(basisText(undefined, ["QLD"], "QQQ", 200), null);
+});
+
+/** 레버리지 전환 결과의 switch_ref. basis만 바꾼다 (QQQ·QLD는 same_day, 한국 종목은 previous_day). */
+const refBasis = (basis) => ({ symbol: "QQQ", basis, stale: false, data_through: "2026-11-23" });
+const KS_SWITCH = {
+  ...QQQ,
+  symbol: "005930.KS",
+  currency: "KRW",
+  switch_ref: refBasis("previous_day"),
+};
+const QQQ_SWITCH = { ...QQQ, switch_ref: refBasis("same_day") };
+const QLD_SWITCH = { ...QLD, switch_ref: refBasis("same_day") };
+
+test("basisNote: rule switch에 previous_day 결과가 있으면 고정 안내에 그 글 한 줄", () => {
+  assert.equal(basisNote([QQQ_SWITCH, KS_SWITCH], RULE_PARAMS), PREVIOUS_DAY(200));
+  assert.equal(basisNote([KS_SWITCH], RULE_PARAMS), PREVIOUS_DAY(200));
+});
+
+test("basisNote: 이평선 기간은 params.ma_days", () => {
+  assert.equal(basisNote([KS_SWITCH], { ...RULE_PARAMS, ma_days: 120 }), PREVIOUS_DAY(120));
+});
+
+test("basisNote: 모두 same_day면 null", () => {
+  assert.equal(basisNote([QQQ_SWITCH, QLD_SWITCH], RULE_PARAMS), null);
+});
+
+test("basisNote: 레버리지 전환이 아니면(rule none, switch_ref null) null", () => {
+  const plain = [
+    { ...QQQ, switch_ref: null },
+    { ...KS_SWITCH, switch_ref: null },
+  ];
+  assert.equal(basisNote(plain, { ...RULE_PARAMS, rule: "none" }), null);
+});
+
+test("basisNote: previous_day 종목이 여럿이면 모두 적는다", () => {
+  const hynix = { ...KS_SWITCH, symbol: "000660.KS" };
+  const text = basisNote([QQQ_SWITCH, KS_SWITCH, hynix], RULE_PARAMS);
+  assert.ok(text.includes("005930.KS") && text.includes("000660.KS"), text);
+  assert.ok(text.endsWith("QQQ 종가·200일선으로 판단했습니다."), text);
 });
 
 // ---------- 저장본 노랑 알림: 종목·환율·양도세 환율·기준 종목 (F-10, 이슈 #59) ----------
